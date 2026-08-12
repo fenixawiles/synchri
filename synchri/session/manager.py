@@ -39,6 +39,8 @@ from .gates import Gate, summarize
 from .modes import ModePolicy, ParticipantPlan, policy_for, resolve_role
 from .permissions import Decision, PermissionDenied, PermissionSet
 from .spec import ProductSpec
+from . import extract as extract_module
+from . import verify as verify_module
 from .worktree import Worktree
 
 
@@ -261,7 +263,19 @@ class SessionManager:
             participants=plans,
         )
         self._insert(record)
-        self._log(record, ev.SESSION_CREATED, {"mode": record.mode, "worktree": tree.name})
+        # Propose gates from the spec so the user does not restate their own
+        # acceptance criteria. They land PENDING with no evidence -- a proposal,
+        # not an authority.
+        if spec:
+            proposed = extract_module.extract_gates(spec.canonical_text())
+            if proposed:
+                self.set_gates(session_id, proposed)
+        self._log(
+            record,
+            ev.SESSION_CREATED,
+            {"mode": record.mode, "worktree": tree.name,
+             "gates_detected": len(self.gates(session_id))},
+        )
         return record
 
     # ------------------------------------------------------------------
@@ -635,7 +649,7 @@ class SessionManager:
 
     def expire(self, session_id: str) -> dict:
         """The deadline arrived. End honestly, with a handoff, not a claim."""
-        record = self.get(session_id)
+        record = self.get(session_id, sweep=False)
         if record.is_terminal:
             return self.handoff_report(session_id)
         self._finish(record, SessionStatus.TIMED_OUT, "deadline reached")
@@ -677,6 +691,59 @@ class SessionManager:
         }
 
     # ------------------------------------------------------------------
+    # evidence
+    # ------------------------------------------------------------------
+
+    def run_tests(self, session_id: str, command: str | None = None) -> dict:
+        """Run the project's own tests in the authorized worktree.
+
+        The result is recorded on the session so the dashboard shows measured
+        numbers rather than an agent's summary of them.
+        """
+        record = self.get(session_id)
+        if not record.worktree or not worktree_module.exists(record.worktree):
+            raise StateError("the authorized worktree is missing", code="worktree_missing")
+        result = verify_module.run_tests(
+            record.worktree_path, command or (record.metadata or {}).get("test_command")
+        )
+        metadata = {**record.metadata, "last_test_run": result.to_dict()}
+        with db.transaction(self.conn):
+            self._update(session_id, metadata=json.dumps(metadata))
+        return result.to_dict()
+
+    def last_test_run(self, session_id: str) -> dict | None:
+        return (self.get(session_id).metadata or {}).get("last_test_run")
+
+    def set_test_command(self, session_id: str, command: str) -> None:
+        record = self.get(session_id)
+        metadata = {**record.metadata, "test_command": command}
+        with db.transaction(self.conn):
+            self._update(session_id, metadata=json.dumps(metadata))
+
+    def changes(self, session_id: str) -> dict:
+        """Commits and diff stats the session actually produced."""
+        record = self.get(session_id)
+        if not record.worktree or not worktree_module.exists(record.worktree):
+            return verify_module.ChangeSummary().to_dict()
+        return verify_module.summarize_changes(
+            record.worktree_path, record.base_branch
+        ).to_dict()
+
+    def diff(self, session_id: str) -> str:
+        record = self.get(session_id)
+        if not record.worktree or not worktree_module.exists(record.worktree):
+            return ""
+        return verify_module.diff_text(record.worktree_path, record.base_branch)
+
+    def detected_test_command(self, session_id: str) -> str | None:
+        record = self.get(session_id)
+        if not record.worktree_path:
+            return None
+        return (record.metadata or {}).get("test_command") or verify_module.detect_test_command(
+            record.worktree_path
+        )
+
+    # ------------------------------------------------------------------
     # escalations
     # ------------------------------------------------------------------
 
@@ -710,13 +777,42 @@ class SessionManager:
     # reads
     # ------------------------------------------------------------------
 
-    def get(self, session_id: str) -> SessionRecord:
+    def get(self, session_id: str, *, sweep: bool = True) -> SessionRecord:
+        """Read a session.
+
+        ``sweep`` lets an expired deadline take effect without a daemon: any
+        read of a live session past its deadline ends it as ``timed_out`` first.
+        Internal calls pass ``sweep=False`` to avoid re-entering the transition
+        they are already performing.
+        """
         row = self.conn.execute(
             "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
         ).fetchone()
         if row is None:
             raise NotFoundError(f"no such session: {session_id}")
-        return self._hydrate(row)
+        record = self._hydrate(row)
+        if sweep and self._should_expire(record):
+            self._finish(record, SessionStatus.TIMED_OUT, "deadline reached")
+            return self.get(session_id, sweep=False)
+        return record
+
+    @staticmethod
+    def _should_expire(record: SessionRecord) -> bool:
+        return bool(
+            record.deadline
+            and record.deadline.is_expired()
+            and not record.is_terminal
+            and record.status != SessionStatus.CONFIGURING.value
+        )
+
+    def sweep_expired(self) -> list[str]:
+        """End every live session whose deadline has passed. Returns their ids."""
+        expired = []
+        for record in self.list_sessions(active_only=True):
+            if self._should_expire(record):
+                self._finish(record, SessionStatus.TIMED_OUT, "deadline reached")
+                expired.append(record.session_id)
+        return expired
 
     def list_sessions(self, *, repo_root: str | None = None, active_only: bool = False) -> list[SessionRecord]:
         sql = "SELECT * FROM sessions"
@@ -751,6 +847,11 @@ class SessionManager:
             except Exception:  # pragma: no cover - room may have been removed
                 room_status = None
 
+        changes = (
+            verify_module.summarize_changes(record.worktree_path, record.base_branch).to_dict()
+            if record.worktree and worktree_module.exists(record.worktree)
+            else verify_module.ChangeSummary().to_dict()
+        )
         deadline = record.deadline
         return {
             "session": record.to_dict(),
@@ -762,6 +863,9 @@ class SessionManager:
             "current_actor": (room_status or {}).get("active_speaker"),
             "queue": (room_status or {}).get("queue", []),
             "gates": {"summary": report, "items": [g.to_dict() for g in gates]},
+            "tests": (record.metadata or {}).get("last_test_run"),
+            "test_command": self.detected_test_command(session_id),
+            "changes": changes,
             "open_blockers": report["blockers"],
             "open_escalations": self.open_escalations(session_id),
             "acknowledgments": acknowledgments,

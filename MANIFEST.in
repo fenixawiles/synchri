@@ -1,0 +1,5 @@
+include README.md
+include LICENSE
+recursive-include synchri/storage *.sql
+recursive-include synchri/ui/static *
+recursive-include docs *.md

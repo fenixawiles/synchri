@@ -1,0 +1,610 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synchri</title>
+<style>
+:root{
+  --bg:#fbfbfa; --panel:#fff; --line:#e4e2dd; --ink:#1c1b19; --dim:#6b6862;
+  --accent:#2f6f4f; --accent-soft:#e8f2ec; --warn:#8a5a00; --warn-soft:#fdf3e0;
+  --bad:#a3352a; --bad-soft:#fbeceb; --radius:10px;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#16171a; --panel:#1e2024; --line:#2f3237; --ink:#e9e8e4; --dim:#9b9892;
+  --accent:#6dbd93; --accent-soft:#1d2f26; --warn:#e0aa5a; --warn-soft:#2e2519;
+  --bad:#e0736a; --bad-soft:#2e1d1c;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+h1,h2,h3{margin:0;font-weight:640;letter-spacing:-.01em}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink);padding:.5rem .9rem}
+button:hover{border-color:var(--dim)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.primary:disabled{opacity:.45;cursor:not-allowed}
+button.ghost{background:none;border-color:transparent;color:var(--dim);padding:.35rem .6rem}
+input,textarea,select{font:inherit;width:100%;padding:.55rem .7rem;border-radius:8px;
+  border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+textarea{min-height:14rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13.5px}
+code,pre,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+pre{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:1rem;margin:0}
+a{color:var(--accent)}
+.wrap{max-width:64rem;margin:0 auto;padding:2rem 1.5rem 5rem}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.25rem}
+.muted{color:var(--dim)}
+.small{font-size:13px}
+.row{display:flex;gap:.75rem;align-items:center}
+.between{display:flex;justify-content:space-between;align-items:center;gap:1rem}
+.stack>*+*{margin-top:.85rem}
+.grid{display:grid;gap:.75rem}
+.hide{display:none !important}
+.pill{display:inline-block;padding:.12rem .55rem;border-radius:999px;font-size:12px;font-weight:600;
+  background:var(--accent-soft);color:var(--accent)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.dim{background:var(--line);color:var(--dim)}
+/* header */
+header{border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:10}
+header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;align-items:center}
+.brand{font-weight:700;letter-spacing:-.02em;font-size:17px}
+.brand span{color:var(--accent)}
+/* wizard */
+.steps{display:flex;flex-wrap:wrap;gap:.35rem;margin-bottom:1.5rem}
+.steps button{border:none;background:none;padding:.3rem .6rem;border-radius:6px;color:var(--dim);
+  font-size:13px}
+.steps button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.steps button.done{color:var(--ink)}
+.steps button:disabled{opacity:.4;cursor:not-allowed}
+.choice{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;cursor:pointer;
+  background:var(--panel);text-align:left;width:100%;display:block}
+.choice:hover{border-color:var(--accent)}
+.choice.on{border-color:var(--accent);background:var(--accent-soft)}
+.choice b{display:block;margin-bottom:.15rem}
+.repo-row{display:flex;justify-content:space-between;gap:1rem;align-items:baseline}
+.perm{display:flex;justify-content:space-between;align-items:center;gap:1rem;
+  padding:.45rem 0;border-bottom:1px solid var(--line)}
+.perm:last-child{border-bottom:none}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:none}
+.seg button{border:none;border-radius:0;padding:.3rem .7rem;font-size:12.5px;background:none;
+  color:var(--dim)}
+.seg button.on{background:var(--accent);color:#fff;font-weight:600}
+.seg button.on.risky{background:var(--bad)}
+.note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:.7rem 1rem;
+  border-radius:0 8px 8px 0}
+.note.warn{border-color:var(--warn);background:var(--warn-soft)}
+.note.bad{border-color:var(--bad);background:var(--bad-soft)}
+/* dashboard */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:.75rem}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:.85rem 1rem}
+.tile .k{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
+.tile .v{font-size:20px;font-weight:660;margin-top:.15rem;letter-spacing:-.02em}
+.tabs{display:flex;gap:.15rem;overflow-x:auto;border-bottom:1px solid var(--line);margin:1.5rem 0 1rem}
+.tabs button{border:none;background:none;border-radius:0;border-bottom:2px solid transparent;
+  padding:.55rem .85rem;color:var(--dim);white-space:nowrap}
+.tabs button.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+.msg{border-bottom:1px solid var(--line);padding:.7rem 0}
+.msg:last-child{border-bottom:none}
+.msg .who{font-weight:640}
+.msg .body{white-space:pre-wrap;margin-top:.2rem}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-weight:600}
+.err{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;max-width:38rem;z-index:50}
+</style>
+
+<header><div class="wrap">
+  <div class="brand">synchri<span>.</span></div>
+  <div class="row">
+    <span id="ctx" class="small muted"></span>
+    <button class="ghost" id="nav-home">Sessions</button>
+    <button id="nav-new">New session</button>
+  </div>
+</div></header>
+
+<div class="wrap" id="app"></div>
+<div class="err hide" id="err"></div>
+
+<script>
+const TOKEN = "__SYNCHRI_TOKEN__";
+const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function api(path, body) {
+  const res = await fetch("/api/" + path, {
+    method: body ? "POST" : "GET",
+    headers: { "X-Synchri-Token": TOKEN, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new Error(data.error?.message || res.statusText);
+  return data;
+}
+
+function flash(message) {
+  const box = document.getElementById("err");
+  box.className = "err card"; box.style.borderColor = "var(--bad)";
+  box.innerHTML = `<b>Could not do that</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
+  clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 7000);
+}
+const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
+
+const S = { view: "home", boot: null, draft: null, step: "mode", session: null, tab: "conversation", dash: null, repos: null };
+const app = () => document.getElementById("app");
+
+/* ------------------------------------------------------------------ home */
+async function home() {
+  S.view = "home";
+  S.boot = await api("bootstrap");
+  document.getElementById("ctx").textContent = S.boot.workspace;
+  const list = S.boot.sessions;
+  app().innerHTML = "";
+  if (!list.length) {
+    app().append($(`<div class="card stack" style="text-align:center;padding:3.5rem 2rem">
+      <h2>No sessions yet</h2>
+      <p class="muted">A session gives your agents an isolated workspace, a set of
+        permissions, and one contract they all agree to before any work starts.</p>
+      <div><button class="primary" id="cta">Start a new session</button></div>
+    </div>`));
+    document.getElementById("cta").onclick = () => newSession();
+    return;
+  }
+  app().append($(`<h2 style="margin-bottom:1rem">Sessions</h2>`));
+  for (const s of list) {
+    const done = ["complete","timed_out","stopped","failed"].includes(s.status);
+    const cls = s.status === "active" ? "" : (done ? "dim" : "warn");
+    const row = $(`<div class="card" style="margin-bottom:.65rem;cursor:pointer">
+      <div class="between">
+        <div>
+          <b>${esc(s.name)}</b> <span class="pill ${cls}">${esc(s.status.replace("_"," "))}</span>
+          <div class="small muted" style="margin-top:.2rem">
+            ${esc(s.mode_label)} · ${esc(s.repository.name)} ·
+            ${esc(s.worktree ? s.worktree.name : "no worktree")}
+          </div>
+        </div>
+        <div class="small muted mono">${esc(s.session_id)}</div>
+      </div></div>`);
+    row.onclick = () => openSession(s.session_id);
+    app().append(row);
+  }
+}
+
+/* ---------------------------------------------------------------- wizard */
+async function newSession() {
+  S.view = "wizard"; S.step = "mode";
+  S.draft = await api("draft/reset", { draft: "default" });
+  if (!S.boot) S.boot = await api("bootstrap");
+  renderWizard();
+}
+
+async function patch(body) {
+  S.draft = await api("draft", { draft: "default", ...body });
+  renderWizard();
+}
+
+function renderWizard() {
+  const d = S.draft, steps = d.steps.length ? d.steps : [{key:"mode",label:"Choose how this session runs"}];
+  app().innerHTML = "";
+  const bar = $(`<div class="steps"></div>`);
+  steps.forEach((st, i) => {
+    const b = $(`<button class="${st.key === S.step ? "on" : (i < steps.findIndex(x=>x.key===S.step) ? "done":"")}">${i+1}. ${esc(st.label)}</button>`);
+    b.disabled = !d.draft.mode && st.key !== "mode";
+    b.onclick = () => { S.step = st.key; renderWizard(); };  // free back-navigation
+    bar.append(b);
+  });
+  app().append(bar);
+  ({ mode: stepMode, repository: stepRepo, worktree: stepTree, agents: stepAgents,
+     permissions: stepPerms, spec: stepSpec, deadline: stepDeadline, review: stepReview
+   }[S.step] || stepMode)();
+  const idx = steps.findIndex(s => s.key === S.step);
+  const nav = $(`<div class="between" style="margin-top:1.5rem"></div>`);
+  const back = $(`<button ${idx <= 0 ? "disabled" : ""}>Back</button>`);
+  back.onclick = () => { S.step = steps[idx-1].key; renderWizard(); };
+  const next = $(`<button class="primary">${idx === steps.length-1 ? "" : "Next"}</button>`);
+  if (idx < steps.length - 1) { next.onclick = () => { S.step = steps[idx+1].key; renderWizard(); }; }
+  else next.className = "hide";
+  nav.append(back, next);
+  app().append(nav);
+}
+
+function stepMode() {
+  const box = $(`<div class="stack"><h2>How should this session run?</h2></div>`);
+  for (const m of S.boot.modes) {
+    const b = $(`<button class="choice ${S.draft.draft.mode===m.mode?"on":""}">
+      <b>${esc(m.label)}</b><span class="muted small">${esc(m.summary)}</span></button>`);
+    b.onclick = guard(async () => { await patch({ mode: m.mode }); S.step = "repository"; renderWizard(); });
+    box.append(b);
+  }
+  app().append(box);
+}
+
+async function stepRepo() {
+  const box = $(`<div class="stack"><h2>Which repository?</h2>
+    <div class="muted small">Synchri never changes your primary working copy — it makes an
+    isolated one for the agents.</div></div>`);
+  app().append(box);
+  const cur = S.draft.repo_status;
+  if (cur) {
+    box.append($(`<div class="note"><b>${esc(cur.name)}</b> · branch <code>${esc(cur.branch)}</code>
+      <div class="small mono muted">${esc(cur.root)}</div>
+      ${cur.is_dirty ? `<div class="small" style="margin-top:.4rem">
+        ${cur.dirty_files.length} uncommitted change(s) — left exactly as they are.</div>` : ""}</div>`));
+  }
+  const manual = $(`<div class="row"><input id="rp" placeholder="/path/to/repository"
+    value="${esc(S.draft.draft.repo_path||"")}"><button id="use">Use</button></div>`);
+  box.append(manual);
+  manual.querySelector("#use").onclick = guard(async () => {
+    await patch({ repo_path: document.getElementById("rp").value });
+  });
+  const loading = $(`<div class="muted small">Looking for repositories…</div>`);
+  box.append(loading);
+  S.repos = S.repos || await api("repositories");
+  loading.remove();
+  if (S.repos.local.length) {
+    box.append($(`<h3 class="small muted" style="margin-top:.5rem">ON THIS MACHINE</h3>`));
+    for (const r of S.repos.local.slice(0, 12)) {
+      const b = $(`<button class="choice ${S.draft.draft.repo_path===r.path?"on":""}">
+        <div class="repo-row"><b>${esc(r.name)}</b>
+        <span class="small muted">${esc(r.branch||"")}${r.dirty?" · uncommitted changes":""}</span></div>
+        <span class="small muted mono">${esc(r.path)}</span></button>`);
+      b.onclick = guard(() => patch({ repo_path: r.path }));
+      box.append(b);
+    }
+  }
+  if (S.repos.github_available && S.repos.github.length) {
+    box.append($(`<h3 class="small muted" style="margin-top:.5rem">GITHUB</h3>`));
+    for (const r of S.repos.github.slice(0, 12)) {
+      const usable = !!r.local_path;
+      const b = $(`<button class="choice" ${usable?"":"disabled style=opacity:.5"}>
+        <div class="repo-row"><b>${esc(r.full_name)}</b>
+        <span class="small muted">${usable ? "cloned locally" : "not cloned — clone it first"}</span></div>
+        ${r.description?`<span class="small muted">${esc(r.description)}</span>`:""}</button>`);
+      if (usable) b.onclick = guard(() => patch({ repo_path: r.local_path }));
+      box.append(b);
+    }
+  } else if (!S.repos.github_available) {
+    box.append($(`<div class="small muted">GitHub listing needs the <code>gh</code> CLI signed in.
+      Local repositories work without it.</div>`));
+  }
+}
+
+function stepTree() {
+  const st = S.draft.repo_status;
+  app().append($(`<div class="stack">
+    <h2>Create an isolated workspace</h2>
+    <div class="note">Synchri creates a separate Git worktree so the agents never touch your
+      primary working directory. It is made when you start the session, and named for you.</div>
+    <div class="card stack">
+      <div><span class="muted small">Repository</span><div><b>${esc(st?.name||"—")}</b></div></div>
+      <div><span class="muted small">Base branch</span><div class="mono">${esc(S.draft.draft.base_branch||"—")}</div></div>
+      <div><span class="muted small">Synchri worktree</span>
+        <div class="mono">${esc(S.draft.draft.worktree_name || "synchri-…-…-####  (generated)")}</div></div>
+    </div>
+    <details><summary class="small muted">Advanced: branch and name</summary>
+      <div class="grid" style="margin-top:.6rem">
+        <select id="bb">${(st?.branches||[]).map(b=>
+          `<option ${b===S.draft.draft.base_branch?"selected":""}>${esc(b)}</option>`).join("")}</select>
+        <input id="wn" placeholder="synchri-my-name-1234" value="${esc(S.draft.draft.worktree_name||"")}">
+        <button id="apply">Apply</button>
+      </div></details></div>`));
+  const apply = document.getElementById("apply");
+  if (apply) apply.onclick = guard(() => patch({
+    base_branch: document.getElementById("bb").value,
+    worktree_name: document.getElementById("wn").value,
+  }));
+}
+
+function stepAgents() {
+  const agents = S.draft.draft.agents.length ? [...S.draft.draft.agents]
+    : [{name:"claude",runtime:"claude_code",role:"primary_builder"},
+       {name:"codex",runtime:"codex",role:"adversarial_reviewer"}];
+  const box = $(`<div class="stack"><h2>Which agents, doing what?</h2></div>`);
+  app().append(box);
+  const list = $(`<div class="stack"></div>`); box.append(list);
+  const draw = () => {
+    list.innerHTML = "";
+    agents.forEach((a, i) => {
+      const card = $(`<div class="card grid" style="grid-template-columns:1fr 1fr 1fr auto;align-items:center">
+        <input value="${esc(a.name)}" placeholder="name">
+        <select>${S.boot.runtimes.map(r=>`<option value="${r.key}" ${r.key===a.runtime?"selected":""}>${esc(r.label)}</option>`).join("")}</select>
+        <select>${S.boot.roles.map(r=>`<option value="${r.key}" ${r.key===a.role?"selected":""}>${esc(r.label)}</option>`).join("")}</select>
+        <button class="ghost">Remove</button></div>`);
+      const [nameEl, rtEl, roleEl] = card.querySelectorAll("input,select");
+      nameEl.oninput = e => a.name = e.target.value;
+      rtEl.onchange = e => a.runtime = e.target.value;
+      roleEl.onchange = e => a.role = e.target.value;
+      card.querySelector("button").onclick = () => { agents.splice(i,1); draw(); };
+      list.append(card);
+    });
+  };
+  draw();
+  const add = $(`<button>Add another agent</button>`);
+  add.onclick = () => { agents.push({name:"",runtime:"generic",role:"participant"}); draw(); };
+  const save = $(`<button class="primary">Save agents</button>`);
+  save.onclick = guard(() => patch({ agents: agents.filter(a => a.name.trim()) }));
+  box.append($(`<div class="row"></div>`)).lastChild.append(add, save);
+}
+
+function stepPerms() {
+  const box = $(`<div class="stack"><h2>What may the agents do?</h2>
+    <div class="muted small">Defaults are deliberately cautious. Anything that leaves your machine
+      or cannot be undone starts off.</div></div>`);
+  app().append(box);
+  const groups = S.boot.permissions;
+  const current = S.draft.draft.permissions;
+  for (const g of groups) {
+    const card = $(`<div class="card"><h3 class="small muted" style="margin-bottom:.5rem">${esc(g.group.toUpperCase())}</h3></div>`);
+    for (const c of g.capabilities) {
+      const val = current[c.key] || c.default;
+      const risky = c.risk === "high" || c.risk === "destructive";
+      const row = $(`<div class="perm"><div>
+        <div>${esc(c.label)} ${risky?`<span class="pill ${c.risk==="destructive"?"bad":"warn"}">${esc(c.risk)}</span>`:""}</div>
+        <div class="small muted">${esc(c.description)}</div></div>
+        <div class="seg">
+          <button data-v="allow" class="${val==="allow"?"on":""}">Yes</button>
+          <button data-v="ask" class="${val==="ask"?"on":""}">Ask</button>
+          <button data-v="deny" class="${val==="deny"?"on ":""}">No</button>
+        </div></div>`);
+      row.querySelectorAll(".seg button").forEach(b => {
+        b.onclick = guard(() => patch({ permissions: { [c.key]: b.dataset.v } }));
+      });
+      card.append(row);
+    }
+    box.append(card);
+  }
+}
+
+function stepSpec() {
+  const req = S.draft.steps.find(s => s.key === "spec")?.label || "";
+  const box = $(`<div class="stack"><h2>What should the agents build?</h2>
+    <div class="muted small">Paste Markdown. This is stored unchanged and becomes the
+      contract's source of truth for what "done" means — agents may not rewrite it.</div>
+    <textarea id="spec" placeholder="# Product\n\n## Acceptance\n- AUTH-01 users can log in\n- API-01 tasks support CRUD">${esc(S.draft.draft.spec||"")}</textarea>
+    <div class="row"><button class="primary" id="save">Save specification</button>
+      <span class="small muted" id="gn">${esc(S.draft.gate_note||"")}</span></div></div>`);
+  app().append(box);
+  document.getElementById("save").onclick = guard(async () => {
+    await patch({ spec: document.getElementById("spec").value });
+  });
+  if (S.draft.detected_gates?.length) {
+    const t = $(`<div class="card"><h3 class="small muted">DETECTED ACCEPTANCE GATES</h3>
+      <table><tbody>${S.draft.detected_gates.map(g =>
+        `<tr><td class="mono">${esc(g.gate_id)}</td><td>${esc(g.description)}</td></tr>`).join("")}
+      </tbody></table>
+      <div class="small muted" style="margin-top:.5rem">These start unproven. Completion needs
+        evidence for each one.</div></div>`);
+    box.append(t);
+  }
+}
+
+function stepDeadline() {
+  const d = S.draft.draft.deadline;
+  const box = $(`<div class="stack"><h2>When does this need to be done?</h2>
+    <div class="muted small">A real boundary: agents shift to stabilising as it nears, and if it
+      passes they hand back an honest incomplete report rather than claiming success.</div>
+    <div class="row">${["4 hours","8 hours","10 hours","24 hours"].map(x=>
+      `<button data-d="${x}">${x}</button>`).join("")}</div>
+    <div class="row"><input id="dl" placeholder="e.g. 10 hours, or 2h30m"><button id="setdl">Set</button></div>
+    ${d?`<div class="note"><b>${esc(d.description)}</b></div>`:""}</div>`);
+  app().append(box);
+  box.querySelectorAll("[data-d]").forEach(b =>
+    b.onclick = guard(() => patch({ deadline: b.dataset.d })));
+  document.getElementById("setdl").onclick = guard(() =>
+    patch({ deadline: document.getElementById("dl").value }));
+}
+
+function stepReview() {
+  const s = S.draft.summary;
+  if (!s) { app().append($(`<div class="card">Choose a mode first.</div>`)); return; }
+  const yes = (v) => v === "allow" ? `<span class="pill">YES</span>`
+    : v === "ask" ? `<span class="pill warn">ASK</span>` : `<span class="pill dim">NO</span>`;
+  const box = $(`<div class="stack"><h2>Review this session</h2>
+    <div class="card stack">
+      <div class="between"><span class="muted small">MODE</span><b>${esc(s.mode)}</b></div>
+      <div class="between"><span class="muted small">REPOSITORY</span><b>${esc(s.repository.name||"—")}</b></div>
+      <div class="between"><span class="muted small">BASE BRANCH</span><span class="mono">${esc(s.repository.branch||"—")}</span></div>
+      <div class="between"><span class="muted small">WORKTREE</span><span class="mono">${esc(s.worktree.name)}</span></div>
+      <div class="between"><span class="muted small">PRODUCT SPEC</span><span>${esc(s.spec)}</span></div>
+      <div class="between"><span class="muted small">DEADLINE</span><span>${esc(s.deadline)}</span></div>
+    </div>
+    <div class="card"><h3 class="small muted">AGENTS</h3><table><tbody>
+      ${s.agents.map(a=>`<tr><td><b>${esc(a.name)}</b></td><td>${esc(a.role_label)}</td>
+        <td class="muted small">${esc(a.runtime)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="card"><h3 class="small muted">PERMISSIONS</h3><table><tbody>
+      ${s.permissions.flatMap(g=>g.capabilities).map(c=>
+        `<tr><td>${esc(c.label)}</td><td style="text-align:right">${yes(c.decision)}</td></tr>`).join("")}
+      </tbody></table></div>
+    <div class="card"><h3 class="small muted">ESCALATE ONLY ON</h3>
+      <ul class="small" style="margin:.4rem 0 0;padding-left:1.1rem">
+      ${s.escalation.slice(0,7).map(r=>`<li>${esc(r)}</li>`).join("")}</ul></div>
+    ${s.warnings.map(w=>`<div class="note warn">${esc(w)}</div>`).join("")}
+    ${s.problems.map(p=>`<div class="note bad">${esc(p)}</div>`).join("")}
+  </div>`);
+  app().append(box);
+  const actions = $(`<div class="row" style="margin-top:1rem">
+    <input id="pn" placeholder="Save as preset (optional)" style="max-width:16rem">
+    <button id="savep">Save preset</button>
+    <button class="primary" id="go" ${s.ready?"":"disabled"}>Start session</button></div>`);
+  box.append(actions);
+  actions.querySelector("#savep").onclick = guard(async () => {
+    const name = document.getElementById("pn").value.trim();
+    if (!name) return flash("Give the preset a name first.");
+    await api("preset", { draft: "default", name });
+    flash(`Saved preset “${name}”.`);
+  });
+  actions.querySelector("#go").onclick = guard(async () => {
+    const r = await api("start", { draft: "default",
+      save_preset: document.getElementById("pn").value.trim() || undefined });
+    openSession(r.session.session_id);
+  });
+}
+
+/* ------------------------------------------------------------- dashboard */
+async function openSession(id) {
+  S.view = "session"; S.session = id;
+  S.dash = await api("dashboard?session=" + encodeURIComponent(id));
+  if (S.dash.session.status === "awaiting_ack") S.tab = "contract";
+  renderSession();
+  clearInterval(openSession.t);
+  openSession.t = setInterval(async () => {
+    if (S.view !== "session") return clearInterval(openSession.t);
+    try { S.dash = await api("dashboard?session=" + encodeURIComponent(S.session)); renderSession(); }
+    catch (e) { /* transient */ }
+  }, 4000);
+}
+
+const TABS = ["conversation","gates","tests","changes","commits","worktree","memory","raw","contract"];
+
+function renderSession() {
+  const d = S.dash, s = d.session, g = d.gates.summary;
+  app().innerHTML = "";
+  app().append($(`<div class="between" style="margin-bottom:1rem">
+    <div><h2>${esc(s.name)}</h2>
+      <div class="small muted">${esc(s.mode_label)} · ${esc(s.repository.name)} ·
+        <span class="mono">${esc(s.worktree?s.worktree.branch:"—")}</span></div></div>
+    <div class="row">
+      <button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>
+      <button id="c-stop">Stop</button>
+    </div></div>`));
+  document.getElementById("c-pause").onclick = guard(async () => {
+    S.dash = await api("control", { session: S.session,
+      action: s.status === "active" ? "pause" : "resume" }); renderSession(); });
+  document.getElementById("c-stop").onclick = guard(async () => {
+    if (!confirm("Stop this session? Agents stop immediately. The worktree and all work stay.")) return;
+    S.dash = await api("control", { session: S.session, action: "stop" }); renderSession(); });
+
+  const tiles = $(`<div class="tiles"></div>`);
+  const tile = (k, v) => tiles.append($(`<div class="tile"><div class="k">${esc(k)}</div>
+    <div class="v">${esc(v)}</div></div>`));
+  tile("Status", s.status.replace("_"," ").toUpperCase());
+  if (d.time_remaining) tile("Time remaining", d.time_remaining);
+  tile("Current actor", d.current_actor || "—");
+  tile("Spec gates", `${g.satisfied} / ${g.required}`);
+  tile("Tests", d.tests ? `${d.tests.passed} / ${d.tests.passed + d.tests.failed}` : "not run");
+  tile("Commits", d.changes.commits);
+  tile("Blockers", d.open_blockers.length);
+  tile("You", d.user_intervention_required ? "NEEDED" : "not needed");
+  app().append(tiles);
+
+  if (d.acknowledgments && !d.acknowledgments.all_accepted) {
+    const a = d.acknowledgments;
+    app().append($(`<div class="note ${a.conflicts.length?"bad":"warn"}" style="margin-top:1rem">
+      <b>Not started yet — the contract needs everyone's agreement.</b>
+      ${a.conflicts.map(c=>`<div class="small">CONFLICT · <b>${esc(c.participant)}</b>: ${esc(c.reason)}</div>`).join("")}
+      ${a.waiting.length?`<div class="small">Waiting on ${esc(a.waiting.join(", "))}</div>`:""}</div>`));
+  }
+  for (const b of d.open_blockers.slice(0,4))
+    app().append($(`<div class="note bad small" style="margin-top:.5rem">${esc(b)}</div>`));
+
+  const bar = $(`<div class="tabs"></div>`);
+  TABS.forEach(t => { const b = $(`<button class="${t===S.tab?"on":""}">${t[0].toUpperCase()+t.slice(1)}</button>`);
+    b.onclick = () => { S.tab = t; renderSession(); }; bar.append(b); });
+  app().append(bar);
+  const panel = $(`<div id="panel" class="card"><span class="muted small">Loading…</span></div>`);
+  app().append(panel);
+  paint(S.tab, panel).catch(e => panel.innerHTML = `<span class="muted">${esc(e.message)}</span>`);
+}
+
+async function paint(tab, el) {
+  const q = "?session=" + encodeURIComponent(S.session);
+  const d = S.dash;
+  if (tab === "conversation") {
+    const r = await api("conversation" + q);
+    el.innerHTML = r.messages.length ? r.messages.map(m => `<div class="msg">
+      <div class="who">${esc(m.sender)}${m.target?` <span class="muted">→ ${esc(m.target)}</span>`:""}
+        <span class="small muted">${esc(m.timestamp.slice(11,19))} ${esc(m.message_type)}</span></div>
+      <div class="body">${esc(m.content)}</div></div>`).join("")
+      : `<span class="muted">Nothing said yet.</span>`;
+    const send = $(`<div class="row" style="margin-top:1rem">
+      <input id="mm" placeholder="Say something to the agents — you always outrank the queue">
+      <button class="primary" id="ms">Send</button></div>`);
+    el.append(send);
+    send.querySelector("#ms").onclick = guard(async () => {
+      const v = document.getElementById("mm").value.trim(); if (!v) return;
+      await api("message", { session: S.session, content: v, interrupt: true });
+      paint("conversation", el);
+    });
+  } else if (tab === "gates") {
+    const r = await api("gates" + q);
+    el.innerHTML = r.gates.length ? `<table><thead><tr><th>Gate</th><th>Status</th><th>Description</th>
+      <th>Evidence</th></tr></thead><tbody>${r.gates.map(x=>`<tr>
+      <td class="mono">${esc(x.gate_id)}</td>
+      <td><span class="pill ${x.satisfied?"":(x.status==="fail"?"bad":"dim")}">${esc(x.status)}</span></td>
+      <td>${esc(x.description)}</td>
+      <td class="small muted">${esc([...x.evidence,...x.tests,...x.commits].join(", ")||"none")}</td>
+      </tr>`).join("")}</tbody></table>
+      <div class="small muted" style="margin-top:.7rem">A gate passes only with evidence and both
+      sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>`
+      : `<span class="muted">No gates defined. Add acceptance criteria to the spec.</span>`;
+  } else if (tab === "tests") {
+    const t = d.tests;
+    el.innerHTML = `<div class="between"><div>
+      ${t ? `<div class="v" style="font-size:22px">${t.passed} passed${t.failed?`, ${t.failed} failed`:""}</div>
+             <div class="small muted mono">${esc(t.command)} · exit ${t.exit_code}</div>`
+          : `<span class="muted">Not run yet.</span>`}
+      </div><button class="primary" id="rt">Run tests</button></div>
+      ${t && t.output_tail ? `<pre style="margin-top:1rem;max-height:22rem;overflow:auto">${esc(t.output_tail)}</pre>` : ""}
+      ${!d.test_command ? `<div class="note warn small" style="margin-top:1rem">No test command
+        detected. Set one to collect evidence.</div>` : ""}`;
+    el.querySelector("#rt").onclick = guard(async () => {
+      el.innerHTML = `<span class="muted">Running…</span>`;
+      await api("tests/run", { session: S.session });
+      S.dash = await api("dashboard" + q); renderSession();
+    });
+  } else if (tab === "changes") {
+    const r = await api("diff" + q);
+    el.innerHTML = `<div class="small muted">${d.changes.files_changed} file(s),
+      +${d.changes.insertions} −${d.changes.deletions}</div>
+      <pre style="margin-top:.8rem;max-height:30rem;overflow:auto">${esc(r.diff||"No changes yet.")}</pre>`;
+  } else if (tab === "commits") {
+    const c = d.changes;
+    el.innerHTML = c.recent.length ? `<table><thead><tr><th>Commit</th><th>Subject</th><th>Author</th>
+      </tr></thead><tbody>${c.recent.map(x=>`<tr><td class="mono">${esc(x.sha)}</td>
+      <td>${esc(x.subject)}</td><td class="small muted">${esc(x.author)}</td></tr>`).join("")}
+      </tbody></table>` : `<span class="muted">No commits on this branch yet.</span>`;
+  } else if (tab === "worktree") {
+    const w = d.session.worktree;
+    el.innerHTML = w ? `<table><tbody>
+      <tr><th>Name</th><td class="mono">${esc(w.name)}</td></tr>
+      <tr><th>Branch</th><td class="mono">${esc(w.branch)}</td></tr>
+      <tr><th>Base</th><td class="mono">${esc(w.base_branch)}</td></tr>
+      <tr><th>Path</th><td class="mono">${esc(w.path)}</td></tr>
+      <tr><th>Primary repo</th><td class="mono">${esc(w.repo_root)}</td></tr>
+      <tr><th>Present</th><td>${d.worktree_present?"yes":"<b>MISSING</b>"}</td></tr></tbody></table>
+      <div class="note small" style="margin-top:1rem">Every change the agents make happens here.
+      Your primary working copy is never the target.</div>` : `<span class="muted">No worktree.</span>`;
+  } else if (tab === "memory") {
+    const r = await api("memory" + q);
+    el.innerHTML = `<pre style="max-height:30rem;overflow:auto">${esc(r.markdown||"(empty)")}</pre>`;
+  } else if (tab === "raw") {
+    const r = await api("events" + q);
+    el.innerHTML = `<pre style="max-height:30rem;overflow:auto">${esc(r.events.map(e =>
+      `[${e.seq}] ${e.created_at} ${e.event_type} ${e.actor_name||"-"} ${JSON.stringify(e.payload)}`
+      ).join("\n") || "(no events)")}</pre>`;
+  } else if (tab === "contract") {
+    const r = await api("contract" + q);
+    const a = r.acknowledgments;
+    el.innerHTML = `<div class="between"><div><b>Revision ${r.revision}</b>
+      <span class="small muted mono"> ${esc(r.short_digest)}</span></div></div>
+      <table style="margin-top:.8rem"><tbody>${a.expected.map(p => {
+        const c = a.conflicts.find(x=>x.participant===p);
+        const ok = a.accepted.includes(p);
+        return `<tr><td><b>${esc(p)}</b></td><td>${ok?`<span class="pill">UNDERSTOOD</span>`
+          : c?`<span class="pill bad">CONFLICT</span> <span class="small">${esc(c.reason)}</span>`
+          : `<span class="pill dim">waiting</span>`}</td></tr>`;}).join("")}</tbody></table>
+      ${a.all_accepted && d.session.status==="awaiting_ack"
+        ? `<button class="primary" id="act" style="margin-top:1rem">Activate session</button>` : ""}
+      <pre style="margin-top:1rem;max-height:26rem;overflow:auto">${esc(r.core_text)}</pre>`;
+    const act = el.querySelector("#act");
+    if (act) act.onclick = guard(async () => {
+      await api("activate", { session: S.session });
+      S.dash = await api("dashboard" + q); renderSession();
+    });
+  }
+}
+
+document.getElementById("nav-home").onclick = guard(home);
+document.getElementById("nav-new").onclick = guard(newSession);
+guard(home)();
+</script>

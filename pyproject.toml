@@ -5,18 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "synchri"
 version = "0.1.0"
-description = "Local interoperability layer that lets coding agents talk to each other through a shared, user-controlled room."
+description = "Run two coding agents on one task, in one room, with an isolated worktree and a contract they both agree to."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Synchri contributors" }]
-keywords = ["agents", "orchestration", "cli", "local-first", "coding-agents"]
+keywords = ["agents", "orchestration", "cli", "local-first", "coding-agents",
+            "claude-code", "codex", "git-worktree", "ai-pair-programming"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Version Control :: Git",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 # Zero runtime dependencies: stdlib only, on purpose. A broker that agents are
 # expected to install into arbitrary environments should not drag in a tree.
@@ -29,14 +37,23 @@ dev = ["pytest>=7.0"]
 synchri = "synchri.cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/fenixawiles/synchri"
+Homepage = "https://synchri.com"
+Source = "https://github.com/fenixawiles/synchri"
+Issues = "https://github.com/fenixawiles/synchri/issues"
+Documentation = "https://github.com/fenixawiles/synchri/tree/main/docs"
 
 [tool.setuptools.packages.find]
 include = ["synchri*"]
 
 [tool.setuptools.package-data]
-synchri = ["storage/*.sql"]
+synchri = ["storage/*.sql", "ui/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # ThreadingHTTPServer's per-connection sockets are collected after the test
+    # returns; the warning is cleanup noise, not a leak in Synchri.
+    "ignore::ResourceWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]

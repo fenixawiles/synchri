@@ -84,6 +84,17 @@ def build_parser() -> argparse.ArgumentParser:
     def command(name: str, help_text: str, **kwargs) -> argparse.ArgumentParser:
         return sub.add_parser(name, help=help_text, description=help_text, **kwargs)
 
+    # -- the app ----------------------------------------------------------
+    ui = command("ui", "Open Synchri in your browser (local, loopback-only).")
+    ui.add_argument("--port", type=int, default=8765, help="0 picks a free port")
+    ui.add_argument("--host", default="127.0.0.1", help="loopback unless --allow-remote")
+    ui.add_argument("--no-open", action="store_true", help="do not open a browser")
+    ui.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="bind a non-loopback address (exposes session control to your network)",
+    )
+
     # -- session startup ------------------------------------------------
     session_cli.add_parsers(sub, command)
 
@@ -346,6 +357,7 @@ def _add_room_reader(parser: argparse.ArgumentParser) -> None:
 
 EPILOG = """\
 typical flow
+  synchri ui                          open the app in your browser
   synchri start                       the session wizard: mode, repo, worktree,
                                       agents, permissions, spec, deadline, contract
   synchri session dashboard           mission control for a running session
@@ -994,7 +1006,21 @@ def cmd_config(args: argparse.Namespace, broker: Broker) -> int:
     return _out(args, status, render.room_status(status))
 
 
+def cmd_ui(args: argparse.Namespace, broker: Broker) -> int:
+    from ..ui.server import serve
+
+    serve(
+        broker,
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_open,
+        allow_remote=args.allow_remote,
+    )
+    return 0
+
+
 HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
+    "ui": cmd_ui,
     "start": session_cli.cmd_start,
     "session": session_cli.cmd_session,
     "preset": session_cli.cmd_preset,

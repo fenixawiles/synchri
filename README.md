@@ -40,6 +40,14 @@ You watch the whole exchange with `synchri watch`, and interrupt with `synchri i
 
 A participant is any *process* that can run the CLI. The room is a SQLite file: there is no tty affinity anywhere in the design, so "one terminal per agent" is a way to watch them, never a constraint. See [`docs/single-terminal.md`](docs/single-terminal.md).
 
+## The app
+
+`synchri ui` starts a local server on `127.0.0.1`, opens your browser, and gives you the
+wizard and a mission-control dashboard: gates, tests, diff, commits, worktree, memory, raw
+event log, and the contract with each agent's acknowledgment. It is the **only** part of
+Synchri that opens a socket — loopback-only, token-gated per launch, and opt-in. See
+[`docs/ui.md`](docs/ui.md).
+
 ## Sessions
 
 `synchri start` walks you through one short wizard — mode, repository, isolated

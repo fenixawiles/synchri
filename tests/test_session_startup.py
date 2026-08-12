@@ -662,9 +662,12 @@ def test_a_session_cannot_activate_after_its_deadline(manager, repo, agents):
              "source": "fixed"}
         ),
     )
+    # Reading the session sweeps it: a live session past its deadline ends as
+    # timed_out before anything can activate it.
     with pytest.raises(StateError) as exc:
         manager.activate(record.session_id)
-    assert exc.value.code == "deadline_passed"
+    assert exc.value.code == "session_finished"
+    assert manager.get(record.session_id).status == SessionStatus.TIMED_OUT.value
 
 
 # ----------------------------------------------------------------------
@@ -713,7 +716,9 @@ def test_unverified_is_not_a_pass(manager, repo, agents):
 
 
 def test_a_session_with_no_gates_cannot_complete(manager, repo, agents):
-    record = make_session(manager, repo, agents)
+    # A spec with no detectable criteria yields no gates to extract.
+    record = make_session(manager, repo, agents, spec=ProductSpec(text="Make it nicer."))
+    assert manager.gates(record.session_id) == []
     with pytest.raises(StateError) as exc:
         manager.complete(record.session_id)
     assert exc.value.code == "no_gates"
@@ -1076,3 +1081,191 @@ def test_cli_saves_and_reuses_a_preset(workspace, repo, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert code == 0
     assert [p["name"] for p in payload["session"]["participants"]] == ["claude", "codex"]
+
+
+# ----------------------------------------------------------------------
+# gate extraction from the specification
+# ----------------------------------------------------------------------
+
+
+def test_gates_are_extracted_from_explicit_ids(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    gates = manager.gates(record.session_id)
+    assert [g.gate_id for g in gates] == ["API-01", "AUTH-01"]
+    assert all(g.status == "pending" and not g.has_evidence for g in gates), (
+        "extraction proposes gates; it never claims they pass"
+    )
+
+
+def test_gates_are_extracted_from_an_acceptance_section():
+    from synchri.session.extract import extract_gates
+
+    gates = extract_gates(
+        "# Thing\n\nSome prose.\n\n## Acceptance Criteria\n"
+        "- users can sign in\n- [ ] sessions expire\n\n## Non-goals\n- billing\n"
+    )
+    assert [g.gate_id for g in gates] == ["GATE-01", "GATE-02"]
+    assert gates[0].description == "users can sign in"
+    assert "billing" not in " ".join(g.description for g in gates), "a later section ends it"
+
+
+def test_explicit_ids_win_over_bullets():
+    from synchri.session.extract import extract_gates
+
+    gates = extract_gates("## Acceptance\n- AUTH-01 log in\n- AUTH-02 log out\n")
+    assert [g.gate_id for g in gates] == ["AUTH-01", "AUTH-02"]
+
+
+def test_extraction_reports_when_it_finds_nothing():
+    from synchri.session.extract import describe, extract_gates
+
+    assert extract_gates("just build something good") == []
+    assert "No acceptance criteria detected" in describe([])
+
+
+def test_extracted_gates_can_be_replaced_by_the_user(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [Gate("CUSTOM-1", "my own criterion")])
+    assert [g.gate_id for g in manager.gates(record.session_id)] == ["CUSTOM-1"]
+
+
+# ----------------------------------------------------------------------
+# measured evidence
+# ----------------------------------------------------------------------
+
+
+def test_tests_are_run_in_the_worktree_and_counted(manager, repo, agents):
+    tree = None
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+    (tree / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tree / "test_sample.py").write_text(
+        "def test_ok():\n    assert True\n\ndef test_also_ok():\n    assert 1 == 1\n",
+        encoding="utf-8",
+    )
+    result = manager.run_tests(record.session_id)
+    assert result["ran"] and result["green"]
+    assert result["passed"] == 2 and result["failed"] == 0
+    assert manager.last_test_run(record.session_id)["passed"] == 2
+
+
+def test_a_failing_suite_is_not_green(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+    (tree / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tree / "test_bad.py").write_text(
+        "def test_ok():\n    assert True\n\ndef test_bad():\n    assert False\n",
+        encoding="utf-8",
+    )
+    result = manager.run_tests(record.session_id)
+    assert result["passed"] == 1 and result["failed"] == 1
+    assert result["green"] is False
+
+
+def test_an_undetectable_test_command_is_admitted_not_faked(tmp_path):
+    from synchri.session.verify import run_tests
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    result = run_tests(plain)
+    assert result.ran is False and result.green is False
+    assert "could not detect" in result.detail
+
+
+def test_changes_count_real_commits(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+    for index in range(3):
+        (tree / f"file{index}.py").write_text(f"x = {index}\n", encoding="utf-8")
+        worktree_module.git(tree, "add", "-A")
+        worktree_module.git(
+            tree, "-c", "user.email=a@e.com", "-c", "user.name=a", "commit", "-qm", f"c{index}"
+        )
+    changes = manager.changes(record.session_id)
+    assert changes["commits"] == 3
+    assert changes["files_changed"] == 3 and changes["insertions"] == 3
+    assert [c["subject"] for c in changes["recent"]] == ["c2", "c1", "c0"]
+    assert manager.diff(record.session_id).startswith("diff --git")
+
+
+# ----------------------------------------------------------------------
+# deadline sweeping without a daemon
+# ----------------------------------------------------------------------
+
+
+def _backdate(manager, session_id):
+    manager._update(
+        session_id,
+        deadline=json.dumps(
+            {"ends_at": "2000-01-01T00:00:00.000Z",
+             "started_at": "1999-01-01T00:00:00.000Z", "source": "fixed"}
+        ),
+    )
+
+
+def test_reading_a_session_past_its_deadline_ends_it(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.issue_contract(record.session_id)
+    accept_all(manager, record)
+    manager.activate(record.session_id)
+
+    _backdate(manager, record.session_id)
+    reloaded = manager.get(record.session_id)
+    assert reloaded.status == SessionStatus.TIMED_OUT.value
+    assert reloaded.ended_reason == "deadline reached"
+    assert manager.handoff_report(record.session_id)["complete"] is False
+
+
+def test_a_configuring_session_is_not_swept(manager, repo, agents):
+    """Still in the wizard: an expired draft deadline is the user's to fix."""
+    record = make_session(manager, repo, agents)
+    _backdate(manager, record.session_id)
+    assert manager.get(record.session_id).status == SessionStatus.CONFIGURING.value
+
+
+def test_sweep_expired_ends_every_live_session(manager, repo, agents):
+    first = make_session(manager, repo, agents)
+    second = make_session(manager, repo, [ParticipantPlan(a.name, a.runtime, a.role) for a in agents])
+    for record in (first, second):
+        manager.issue_contract(record.session_id)
+        accept_all(manager, record)
+        manager.activate(record.session_id)
+        _backdate(manager, record.session_id)
+
+    expired = manager.sweep_expired()
+    assert sorted(expired) == sorted([first.session_id, second.session_id])
+    assert manager.sweep_expired() == [], "already-ended sessions are not swept twice"
+
+
+# ----------------------------------------------------------------------
+# repository discovery
+# ----------------------------------------------------------------------
+
+
+def test_local_discovery_finds_a_repository(repo, monkeypatch):
+    from synchri.session import discovery
+
+    monkeypatch.chdir(repo)
+    found = discovery.local_repositories(roots=[str(repo.parent)])
+    paths = [r["path"] for r in found]
+    assert str(repo.resolve()) in paths
+    entry = next(r for r in found if r["path"] == str(repo.resolve()))
+    assert entry["name"] == "marnie" and entry["branch"] == "main"
+
+
+def test_discovery_skips_synchri_worktrees(repo, monkeypatch):
+    from synchri.session import discovery
+
+    worktree_module.create(repo, "main", mode="long_horizon")
+    monkeypatch.chdir(repo)
+    found = discovery.local_repositories(roots=[str(repo.parent)])
+    assert not any(Path(r["path"]).name.startswith("synchri-") for r in found)
+
+
+def test_github_listing_degrades_when_gh_is_absent(monkeypatch):
+    from synchri.session import discovery
+
+    monkeypatch.setattr(discovery, "github_available", lambda: False)
+    payload = discovery.repositories()
+    assert payload["github"] == [] and payload["github_available"] is False
+    assert "local" in payload, "local repositories remain fully supported"

@@ -15,8 +15,9 @@ import urllib.request
 
 import pytest
 
-from synchri.broker import Broker
+from synchri.broker import Broker, Credential
 from synchri.errors import SynchriError
+from synchri.models.envelope import MessageDraft
 from synchri.session.manager import SessionManager
 from synchri.session.modes import ParticipantPlan
 from synchri.ui.server import create_server
@@ -267,6 +268,7 @@ def test_quick_start_returns_paste_ready_agent_setup_and_live_arrival_state(ui, 
     assert "synchri join " in launch["agents"][0]["setup_prompt"]
     assert f"synchri session contract --session {session_id}" in launch["agents"][0]["setup_prompt"]
     assert "synchri activity --as" in launch["agents"][0]["setup_prompt"]
+    assert "--watch-messages" in launch["agents"][0]["setup_prompt"]
     assert "Do not repeatedly say that you are waiting." in launch["agents"][0]["setup_prompt"]
 
     for agent in launch["agents"]:
@@ -343,17 +345,24 @@ def _ready_draft(ui, repo, mode="long_horizon"):
                                 {"name": "codex", "runtime": "codex", "role": "adversarial_reviewer"}]})
 
 
-def _active(ui, repo):
+def _active_with_credentials(ui, repo):
     _ready_draft(ui, repo)
-    session_id = call(ui, "/api/start", {"draft": "d"})["session"]["session_id"]
+    started = call(ui, "/api/start", {"draft": "d"})
+    session_id = started["session"]["session_id"]
     launch = call(ui, f"/api/launch?session={session_id}")["launch"]
+    credentials = {}
     for agent in launch["agents"]:
         token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]
-        ui["broker"].join(token, agent["name"])
+        joined = ui["broker"].join(token, agent["name"])
+        credentials[agent["name"]] = Credential(agent["name"], secret=joined["secret"])
     for agent in ("claude", "codex"):
         call(ui, "/api/ack", {"session": session_id, "participant": agent, "reply": "UNDERSTOOD"})
     call(ui, "/api/activate", {"session": session_id})
-    return session_id
+    return session_id, credentials
+
+
+def _active(ui, repo):
+    return _active_with_credentials(ui, repo)[0]
 
 
 def test_the_dashboard_carries_every_panel(ui, repo):
@@ -375,6 +384,30 @@ def test_the_human_can_speak_from_the_ui(ui, repo):
     conversation = call(ui, f"/api/conversation?session={session_id}")
     assert conversation["messages"][-1]["content"] == "focus on auth first"
     assert conversation["messages"][-1]["sender"] == "human"
+
+
+def test_human_reply_returns_to_the_agent_waiting_on_permission(ui, repo):
+    session_id, credentials = _active_with_credentials(ui, repo)
+    session = call(ui, f"/api/session?session={session_id}")
+
+    # Claude finishes its active turn by requesting a human decision. That
+    # leaves a targeted human turn active, so the UI must not fall back to the
+    # primary-builder default when the human answers.
+    ui["broker"].send(
+        session["room_id"],
+        credential=credentials["claude"],
+        draft=MessageDraft(
+            content="I need approval before I can continue.",
+            message_type="response",
+            response_status="blocked",
+            target="human",
+        ),
+    )
+
+    result = call(ui, "/api/message", {"session": session_id, "content": "Approved."})
+    assert result["routed_to"] == "claude"
+    assert result["message"]["target"] == "claude"
+    assert result["next_speaker"] == "claude"
 
 
 def test_tests_and_changes_tabs_read_real_state(ui, repo):

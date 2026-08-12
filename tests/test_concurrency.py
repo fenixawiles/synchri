@@ -285,6 +285,45 @@ def test_wait_times_out_with_a_distinct_exit_code(workspace):
     assert json.loads(result.stdout)["timed_out"] is True
 
 
+def test_wait_watch_messages_wakes_an_agent_for_room_context(workspace):
+    """A parked agent sees a teammate's reply without treating it as its turn."""
+    created = _create_room(workspace, "Watch test")
+    room_id = created["room_id"]
+    _join_all(workspace, created)
+
+    env = {**os.environ, "SYNCHRI_HOME": str(workspace.home), "PYTHONPATH": REPO_ROOT}
+    waiter = subprocess.Popen(
+        [
+            sys.executable, "-m", "synchri", "--json", "wait",
+            "--room", room_id, "--as", "codex", "--watch-messages",
+            "--timeout", "30", "--poll", "0.1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        # Let the waiter establish its message cursor before Claude speaks.
+        threading.Event().wait(0.3)
+        _run_cli(
+            workspace, "--json", "send", "--room", room_id, "--from", "claude",
+            "--type", "response", "--status", "complete", "-m", "the review is complete",
+        )
+        stdout, stderr = waiter.communicate(timeout=45)
+    except subprocess.TimeoutExpired:  # pragma: no cover - failure path
+        waiter.kill()
+        pytest.fail("a watched wait did not wake for a room message")
+
+    assert waiter.returncode == 14, stderr
+    payload = json.loads(stdout)
+    assert payload["state"] != "your_turn"
+    assert payload["wake_reason"] == "room_message"
+    assert [message["content"] for message in payload["new_messages"]] == [
+        "the review is complete"
+    ]
+
+
 def test_hard_stop_from_another_process_ends_a_wait(workspace):
     created = _create_room(workspace, "Stop test", "codex")
     room_id = created["room_id"]

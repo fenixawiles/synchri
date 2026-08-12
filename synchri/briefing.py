@@ -134,8 +134,19 @@ class Briefing:
                     lines.append(f"    artifact: {artifact}")
         else:
             lines.append(
-                f"It is not your turn yet. Park with:  synchri wait --as {self.participant}"
+                f"It is not your turn yet. Park with:  synchri wait --as {self.participant} --watch-messages"
             )
+        lines.extend(
+            [
+                "",
+                "ROOM LOOP",
+                "  Keep this agent session in Synchri until the room stops. After every completed",
+                "  response, handoff, or permission request, run `synchri wait --watch-messages` again instead of",
+                "  ending the session or returning to the provider's normal chat.",
+                "  If you need a human decision, send a response to `human` with status `blocked`,",
+                "  then park in `synchri wait --watch-messages`; the next UI reply is routed back to you.",
+            ]
+        )
         lines.extend(["", "PERSISTENCE", *(f"  {line}" for line in self.memory_note.splitlines())])
         return "\n".join(lines)
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -21,11 +22,13 @@ from ..errors import ValidationError
 DEFAULT_TIMEOUT_SECONDS = 900.0
 
 #: (marker file, command). First match wins; a project may override entirely.
+_PYTEST_COMMAND = f"{shlex.quote(sys.executable)} -m pytest -q"
+
 DETECTORS: tuple[tuple[str, str], ...] = (
-    ("pytest.ini", "pytest -q"),
-    ("tox.ini", "pytest -q"),
-    ("pyproject.toml", "pytest -q"),
-    ("setup.cfg", "pytest -q"),
+    ("pytest.ini", _PYTEST_COMMAND),
+    ("tox.ini", _PYTEST_COMMAND),
+    ("pyproject.toml", _PYTEST_COMMAND),
+    ("setup.cfg", _PYTEST_COMMAND),
     ("Cargo.toml", "cargo test"),
     ("go.mod", "go test ./..."),
     ("Gemfile", "bundle exec rspec"),

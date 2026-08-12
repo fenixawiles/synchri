@@ -43,6 +43,7 @@ WAIT_EXIT_CODES = {
     TurnState.REMOVED.value: 13,
 }
 WAIT_TIMEOUT_EXIT = 10
+WAIT_MESSAGE_EXIT = 14
 
 #: ``run`` exit codes: why the conductor handed control back to you.
 RUN_EXIT_CODES = {
@@ -232,6 +233,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_room_actor(wait)
     wait.add_argument("--timeout", type=float, default=300.0)
     wait.add_argument("--poll", type=float, default=0.5)
+    wait.add_argument(
+        "--watch-messages",
+        action="store_true",
+        help="also return when the room receives a message (it is not permission to speak)",
+    )
 
     passer = command("pass", "Decline the turn: nothing material to add.")
     _add_room_actor(passer)
@@ -790,7 +796,11 @@ def cmd_wait(args: argparse.Namespace, broker: Broker) -> int:
     room_id = _room(args, broker)
     credential = _credential(args, broker, room_id)
     status = broker.wait_for_turn(
-        room_id, credential=credential, timeout=args.timeout, poll_interval=args.poll
+        room_id,
+        credential=credential,
+        timeout=args.timeout,
+        poll_interval=args.poll,
+        wake_on_message=args.watch_messages,
     )
     # `wait` is the standard entry point for an attached coding agent. Start
     # the live, non-addressable trail here so the UI never depends on the agent
@@ -815,6 +825,8 @@ def cmd_wait(args: argparse.Namespace, broker: Broker) -> int:
     _out(args, status, render.turn_status(status))
     if status.get("timed_out"):
         return WAIT_TIMEOUT_EXIT
+    if status.get("wake_reason") == "room_message":
+        return WAIT_MESSAGE_EXIT
     return WAIT_EXIT_CODES.get(status["state"], 0)
 
 

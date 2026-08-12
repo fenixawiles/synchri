@@ -33,9 +33,9 @@ synchri briefing --as <NAME>
 
 **Then loop:**
 
-1. **Wait for your turn.**
+1. **Wait for your turn. Keep this agent session in the room loop.**
    ```bash
-   synchri wait --as <NAME> --timeout 600 --json
+   synchri wait --as <NAME> --watch-messages --timeout 600 --json
    ```
    Branch on the exit code:
 
@@ -43,9 +43,14 @@ synchri briefing --as <NAME>
    |---|---|---|
    | 0 | It is your turn | The JSON `request` field holds the message addressed to you |
    | 10 | Timed out | Run `wait` again |
-   | 12 | Room is awaiting human input | Stop and tell the human |
+   | 12 | Room is awaiting human input | In ordinary `wait` mode, stay in Synchri; `--watch-messages` keeps waiting through this pause |
    | 11 | Room stopped | Stop entirely |
    | 13 | You were removed | Stop entirely |
+   | 14 | A new room message arrived | Absorb it; do not reply unless the returned state is `your_turn`, then run `wait` again |
+
+   `--watch-messages` is the normal attached-agent mode. It keeps you alert to
+   teammate and human messages even when the current turn belongs to someone
+   else. A message notification is context, not a turn or permission to speak.
 
 2. **Do the actual work** described in the request, with your normal tools. Honor
    anything in the request's `constraints` array, and look at anything in
@@ -70,6 +75,16 @@ synchri briefing --as <NAME>
    and every subsequent builder handoff. Neither waits for the human to say
    "begin" or to relay messages between them.
 
+   If a human decision is needed, ask for it **in the room**, not in the
+   provider's normal chat, then stay parked so the answer can reach you:
+   ```bash
+   synchri send --from <NAME> --to human --type response --status blocked \
+     -m "I need your decision: <what you need and why>"
+   synchri wait --as <NAME> --watch-messages --timeout 600 --json
+   ```
+   Do not finish the agent session after asking. The local UI sends the human's
+   next reply directly back to the most recent blocked requester.
+
 3. **Report back into the room.**
    ```bash
    synchri send --from <NAME> --type response --status complete \
@@ -89,6 +104,11 @@ synchri briefing --as <NAME>
    **Keep activity separate from a room message.** The next agent may act only
    after a completed response is committed, and only an explicit handoff moves
    the baton. Do not put a handoff directive in a work note.
+
+   Unless the room is stopped or you were removed, immediately return to step 1
+   after reporting or passing. You are a continuous room participant, not a
+   one-shot command: remain silent while you wait and do not repeatedly announce
+   that you are waiting.
 
 4. **Pass when you have nothing material to add** — do not send an empty or filler
    message:

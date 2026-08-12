@@ -161,6 +161,9 @@ def turn_status(status: dict) -> str:
         lines.append("the room has been stopped")
     elif state == "removed":
         lines.append("you have been removed from this room")
+    if status.get("wake_reason") == "room_message":
+        lines.extend(["", "New room message(s) — read them, then wait again unless it is your turn:"])
+        lines.extend(message_line(message) for message in status.get("new_messages") or [])
     if status.get("queue"):
         lines.extend(["", "Queue:", queue_block(status["queue"])])
     return "\n".join(lines)

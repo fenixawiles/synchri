@@ -317,7 +317,7 @@ class Api:
                 f"synchri session ack {shlex.quote(plan.name)} --reply UNDERSTOOD "
                 f"--session {record.session_id}"
             )
-            wait_command = f"synchri wait --as {shlex.quote(plan.name)}"
+            wait_command = f"synchri wait --as {shlex.quote(plan.name)} --watch-messages"
             activity_command = (
                 f"synchri activity --as {shlex.quote(plan.name)} "
                 "-m \"Inspecting the task and repository.\""
@@ -331,12 +331,14 @@ class Api:
                     f"   {contract_command}",
                     "3. If you agree, acknowledge it:",
                     f"   {acknowledge_command}",
-                    "4. Stay available for your first turn:",
+                    "4. Stay in the room loop for your first turn and every later turn:",
                     f"   {wait_command}",
-                    "While wait is blocking, do nothing and send no status updates. The Primary "
-                    "Builder is started automatically; Synchri will hand you their completed "
-                    "response when it is your turn. Do not repeatedly say that you are waiting.",
-                    "When wait returns, act on the task immediately: read the room briefing, "
+                    "While wait is blocking, do nothing and send no status updates. It also wakes "
+                    "for new room messages so you retain context; read those, do not reply unless "
+                    "you have the turn, then immediately run the same wait command again. The Primary "
+                    "Builder is started automatically; Synchri will hand you their completed response "
+                    "when it is your turn. Do not repeatedly say that you are waiting.",
+                    "When wait says it is your turn, act on the task immediately: read the room briefing, "
                     "then note that wait has already started a visible Live Work trail in the UI. "
                     "At each meaningful shift (understanding, exploring, implementing, testing, "
                     "or reviewing), append a short public semantic update with:",
@@ -344,6 +346,9 @@ class Api:
                     "Those updates are the human-facing live progress stream. They are not a response, "
                     "do not move the queue, and must never contain private reasoning or a handoff. "
                     "Work in the authorized worktree, then send one completed response and hand off. "
+                    "If you need a human decision, send a blocked response to `human`, then return "
+                    "to the same wait command; do not end this agent session or switch to the provider's "
+                    "normal chat. Synchri routes the human's next UI reply back to the blocked requester. "
                     "The session activation task starts the Primary Builder automatically; do not "
                     "wait for the human to say 'begin'.",
                 ]
@@ -425,21 +430,60 @@ class Api:
         return self.broker.read(record.room_id, credential=self._human(record))
 
     def message(self, query: dict, body: dict) -> dict:
-        """The human speaks to the builder first; the reviewer follows its handoff."""
+        """Put a human reply back in front of the agent that needs it.
+
+        The builder is only the sensible default when nobody is actively asking
+        the human for something.  In particular, an agent that posts a blocked
+        response to ``human`` must receive the next UI reply, even though its
+        turn has ended while it waits for that decision.
+        """
         from ..models.envelope import MessageDraft
 
         record = self.manager.get(self._session_id(query, body))
-        primary_builder = next(
-            (plan.name for plan in record.participants if plan.role == "primary_builder"), None
-        )
-        return self.broker.send(
+        target = self._human_reply_target(record, body.get("target"))
+        result = self.broker.send(
             record.room_id,
             credential=self._human(record),
             draft=MessageDraft(
                 content=body.get("content", ""),
                 message_type="interrupt" if body.get("interrupt") else "chat",
-                target=body.get("target") or primary_builder,
+                target=target,
             ),
+        )
+        result["routed_to"] = target
+        return result
+
+    def _human_reply_target(self, record, requested: str | None = None) -> str | None:
+        """Resolve who should receive the next human message from the app.
+
+        A direct recipient chosen by the human wins.  Otherwise, reply to the
+        agent currently on point.  A permission question normally ends that
+        agent's turn and directs a blocked response to ``human``; in that
+        shape, recover the most recent blocked agent before falling back to the
+        primary builder for a new direction.
+        """
+        if requested:
+            return requested
+
+        agent_names = {plan.name for plan in record.participants}
+        room = self.broker.room_status(record.room_id, credential=self._human(record))
+        if room.get("active_speaker") in agent_names:
+            return room["active_speaker"]
+
+        messages = self.broker.read(
+            record.room_id, credential=self._human(record), tail=30
+        )["messages"]
+        for message in reversed(messages):
+            if (
+                message.get("sender") in agent_names
+                and message.get("response_status") == "blocked"
+                and message.get("target") == "human"
+            ):
+                return message["sender"]
+
+        return next(
+            (plan.name for plan in record.participants if plan.role == "primary_builder"),
+            next(iter(agent_names), None),
         )
 
     def gates(self, query: dict, body: dict) -> dict:

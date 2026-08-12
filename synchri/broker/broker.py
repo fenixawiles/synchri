@@ -1135,20 +1135,48 @@ class Broker:
         credential: "Credential",
         timeout: float = 300.0,
         poll_interval: float = 0.5,
+        wake_on_message: bool = False,
     ) -> dict:
-        """Block until this participant may act, or until ``timeout`` elapses.
+        """Block until this participant may act, room activity arrives, or timeout.
 
         Polling rather than push is a deliberate v0.1 decision: it keeps the
         broker daemonless.  See ``docs/architecture.md``.
+
+        ``wake_on_message`` lets an attached agent remain mentally present
+        during another participant's turn.  It is a notification, not a turn:
+        callers must inspect the returned state and only speak on
+        ``your_turn``.  In watch mode, an autonomy pause remains parked until a
+        human message changes the room instead of forcing the process to exit
+        back to its provider chat.
         """
         if poll_interval <= 0:
             raise ValidationError("poll interval must be positive")
         deadline = time.monotonic() + max(0.0, timeout)
+        observed_seq = self._get_room(room_id).seq
         while True:
             status = self.turn_status(room_id, credential=credential)
-            if status["state"] in TERMINAL_WAIT_STATES:
+            terminal = status["state"] in TERMINAL_WAIT_STATES
+            if wake_on_message and status["state"] == TurnState.AWAITING_HUMAN.value:
+                terminal = False
+            if terminal:
                 status["timed_out"] = False
                 return status
+            if wake_on_message:
+                room = self._get_room(room_id)
+                if room.seq > observed_seq:
+                    messages = self.read(
+                        room_id, credential=credential, since_seq=observed_seq
+                    )["messages"]
+                    observed_seq = room.seq
+                    if messages:
+                        status.update(
+                            {
+                                "timed_out": False,
+                                "wake_reason": "room_message",
+                                "new_messages": messages,
+                            }
+                        )
+                        return status
             if time.monotonic() >= deadline:
                 status["timed_out"] = True
                 return status

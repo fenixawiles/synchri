@@ -280,6 +280,16 @@ class Conductor:
                     parts.append(f"[{message['sender']}{target}] {message.get('content') or ''}")
                 parts.append("")
 
+        # The same persistence contract attached agents get on join, so a
+        # conducted agent is told the same thing without the human arranging it.
+        briefing = self.broker.briefing(self.room_id, credential=self.credentials[name])
+        if briefing.repo:
+            parts.extend(["--- repository ---", f"  {briefing.repo.get('description')}"])
+            if briefing.repo_mismatch:
+                parts.append(f"  !! {briefing.repo_mismatch}")
+            parts.append("")
+        parts.extend(["--- persistence ---", briefing.memory_note, ""])
+
         parts.extend(
             [
                 "--- how to reply ---",

@@ -28,6 +28,11 @@ class Room:
     active_turn_id: str | None = None
     owner_participant_id: str | None = None
     stopped_at: str | None = None
+    workspace_root: str | None = None
+    repo_branch: str | None = None
+    repo_head: str | None = None
+    repo_remote: str | None = None
+    memory_note: str | None = None
 
     @property
     def is_active(self) -> bool:
@@ -54,6 +59,11 @@ class Room:
             active_turn_id=data["active_turn_id"],
             owner_participant_id=data["owner_participant_id"],
             stopped_at=data["stopped_at"],
+            workspace_root=data["workspace_root"],
+            repo_branch=data["repo_branch"],
+            repo_head=data["repo_head"],
+            repo_remote=data["repo_remote"],
+            memory_note=data["memory_note"],
         )
 
     def to_dict(self) -> dict:

@@ -36,6 +36,7 @@ from ..errors import (
     TurnError,
     ValidationError,
 )
+from ..briefing import Briefing, memory_note_for
 from ..ids import NAME_PATTERN, is_valid_id, new_id, new_secret, utc_now
 from ..memory.ledger import LedgerStore
 from ..models.entities import Participant, Room, Turn
@@ -56,6 +57,7 @@ from ..models.enums import (
 from ..models.envelope import MessageDraft, MessageEnvelope
 from ..protocol import events as ev
 from ..queue import scheduler
+from .. import repo as repo_module
 from ..security import tokens
 from ..storage import dao, db, transcript
 
@@ -106,6 +108,8 @@ class Broker:
         max_consecutive_agent_turns: int = DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
         agents: Sequence[str] = (),
         invite_ttl_seconds: int = DEFAULT_INVITE_TTL_SECONDS,
+        workspace_root: str | None = None,
+        memory_note: str | None = None,
     ) -> dict:
         """Create a room, its owning human, and an invite per named agent.
 
@@ -118,6 +122,9 @@ class Broker:
         if not isinstance(max_consecutive_agent_turns, int) or max_consecutive_agent_turns < 1:
             raise ValidationError("max-agent-turns must be a positive integer")
         agent_names = _unique_names(agents, human_name)
+        # Bind the room to the working tree it is about, so a later session can
+        # rediscover it from the repo instead of remembering a room id.
+        here = repo_module.detect(workspace_root)
 
         room_id = new_id("room")
         join_secret = new_secret()
@@ -138,6 +145,11 @@ class Broker:
                 consecutive_agent_turns=0,
                 max_consecutive_agent_turns=max_consecutive_agent_turns,
                 awaiting_human=0,
+                workspace_root=here.root,
+                repo_branch=here.branch,
+                repo_head=here.head,
+                repo_remote=here.remote,
+                memory_note=memory_note,
             )
             human = self._insert_participant(room_id, human_name, ParticipantKind.HUMAN)
             dao.update_room(self.conn, room_id, owner_participant_id=human["participant_id"])
@@ -173,6 +185,7 @@ class Broker:
             "observer_token": tokens.compose_join_token(room_id, join_secret),
             "human": human,
             "invites": invites,
+            "repo": here.to_dict(),
             "max_consecutive_agent_turns": max_consecutive_agent_turns,
             "memory_path": str(memory_path),
             "transcript_path": str(self.workspace.transcript_path(room_id)),
@@ -383,7 +396,8 @@ class Broker:
             if existing is not None:
                 # Re-attaching proves you already hold the identity, so it needs
                 # no invite -- the participant secret is the credential.
-                return self._rejoin(room, existing, rejoin_secret, metadata)
+                joined = self._rejoin(room, existing, rejoin_secret, metadata)
+                return self._with_briefing(room_id, joined, returning=True)
 
             if not invite_secret:
                 raise AuthError(
@@ -409,13 +423,30 @@ class Broker:
                 actor_name=name,
                 payload={"kind": invite.kind, "invite_id": invite.invite_id},
             )
-            return {
+            joined = {
                 **participant,
                 "room_id": room_id,
                 "room_name": room.name,
                 "rejoined": False,
                 "memory_path": str(self.workspace.memory_path(room_id)),
             }
+
+        return self._with_briefing(room_id, joined, returning=False)
+
+    def _with_briefing(self, room_id: str, joined: dict, *, returning: bool) -> dict:
+        """Attach the join-time briefing to a join result.
+
+        Every arrival gets oriented automatically: the repo the room is about,
+        the shared memory, what was missed, and where durable state belongs.
+        The human never has to arrange this.
+        """
+        joined.pop("_briefing_pending", None)
+        joined["briefing"] = self.briefing(
+            room_id,
+            credential=Credential(participant=joined["name"], secret=joined["secret"]),
+            returning=returning,
+        ).to_dict()
+        return joined
 
     def _redeem_invite(self, room_id: str, name: str, secret: str):
         """Find and validate the invite this token unlocks.
@@ -504,6 +535,7 @@ class Broker:
             "room_name": room.name,
             "rejoined": True,
             "memory_path": str(self.workspace.memory_path(room.room_id)),
+            "_briefing_pending": True,
         }
 
     def list_participants(self, room_id: str, *, credential: "Credential") -> list[dict]:
@@ -1052,6 +1084,97 @@ class Broker:
                 status["timed_out"] = True
                 return status
             time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic()) or poll_interval))
+
+    # ------------------------------------------------------------------
+    # briefing
+    # ------------------------------------------------------------------
+
+    def briefing(
+        self,
+        room_id: str,
+        *,
+        credential: "Credential",
+        returning: bool | None = None,
+        here: "repo_module.RepoInfo | None" = None,
+        max_missed: int = 30,
+    ) -> Briefing:
+        """Everything a participant needs to orient itself, right now.
+
+        Delivered automatically on join and re-fetchable at any time, which is
+        what makes resuming across sessions work: the room's durable state is
+        reconstituted for the agent instead of living in its lost context.
+        """
+        room = self._get_room(room_id)
+        actor = self._authorize_actor(room, credential, allow_removed=True)
+
+        last_spoke = dao.last_message_seq_by(self.conn, room_id, actor.participant_id)
+        if returning is None:
+            returning = last_spoke > 0
+        missed = dao.list_messages(self.conn, room_id, since_seq=last_spoke)[-max_missed:]
+
+        active_turn = dao.get_active_turn(self.conn, room_id)
+        your_turn = active_turn is not None and active_turn.participant_id == actor.participant_id
+        request = None
+        if your_turn and active_turn.request_message_id:
+            found = dao.get_message(self.conn, room_id, active_turn.request_message_id)
+            request = found.to_dict() if found else None
+
+        here = here or repo_module.detect()
+        repo_payload = None
+        mismatch = None
+        if room.workspace_root:
+            repo_payload = {
+                "root": room.workspace_root,
+                "branch": room.repo_branch,
+                "head": room.repo_head,
+                "remote": room.repo_remote,
+                "description": repo_module.RepoInfo(
+                    root=room.workspace_root,
+                    is_git=bool(room.repo_head),
+                    branch=room.repo_branch,
+                    head=room.repo_head,
+                    remote=room.repo_remote,
+                ).describe(),
+            }
+            if not repo_module.same_tree(room.workspace_root, here):
+                mismatch = (
+                    f"this room is about {room.workspace_root}, but you are running in "
+                    f"{here.root} — check you are in the right working tree before you act"
+                )
+
+        return Briefing(
+            room_id=room_id,
+            room_name=room.name,
+            participant=actor.name,
+            kind=actor.kind,
+            room_status=room.status,
+            participants=[p.name for p in dao.list_participants(self.conn, room_id, False)],
+            repo=repo_payload,
+            repo_mismatch=mismatch,
+            memory=self.ledger.load(room_id, room.name).to_dict(),
+            missed_messages=[m.to_dict() for m in missed],
+            your_turn=your_turn,
+            pending_request=request,
+            autonomy={
+                "consecutive_agent_turns": room.consecutive_agent_turns,
+                "max_consecutive_agent_turns": room.max_consecutive_agent_turns,
+                "awaiting_human": room.awaiting_human,
+            },
+            memory_note=memory_note_for(room.memory_note, actor.name),
+            returning=bool(returning),
+        )
+
+    def rooms_for_workspace(self, path: str | None = None, active_only: bool = True) -> list[dict]:
+        """Rooms bound to the working tree at ``path`` (default: the cwd).
+
+        This is what lets a fresh session pick the conversation back up without
+        anyone remembering a room id.
+        """
+        here = repo_module.detect(path)
+        found = dao.list_rooms_for_workspace(
+            self.conn, here.root, RoomStatus.ACTIVE.value if active_only else None
+        )
+        return [room.to_dict() for room in found]
 
     # ------------------------------------------------------------------
     # transcript

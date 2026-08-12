@@ -37,6 +37,8 @@ aidapter/
   storage/     SQLite connection/schema, row-level DAO, transcript mirror
   memory/      the Markdown ledger: parse, render, mutate
   runner/      single-terminal conductor: invoke agents' own commands on their turn
+  briefing.py  the join-time orientation and the persistence contract
+  repo.py      git detection, repo binding, working-tree comparison
   security/    token generation, hashing, verification
   protocol/    the event-type vocabulary shared with future adapters
   config.py    workspace layout and file permissions
@@ -171,6 +173,48 @@ the provider-adapter work that remains deliberately unstarted. Commands run with
 
 **Cost.** Only works with agents that offer a non-interactive, prompt-in /
 answer-on-stdout invocation. Interactive-only agents stay in attached mode.
+
+### D10. The room owns shared state; agents own their own context
+
+**Decision.** AIDapter persists the room — transcript, ledger, queue, provenance,
+identities — durably and from the first write. It does not persist any agent's
+internal reasoning. Instead, every participant is handed a *persistence contract*
+on joining that tells it to put shared conclusions in the ledger and its own
+resumption notes wherever its platform already keeps them.
+
+**Why.** The alternative is shadowing each provider's session state, which would
+mean a different, worse implementation per provider and a permanent chase after
+their formats. The split also matches what the data actually is: decisions and
+constraints are the room's, a half-finished refactor plan is the agent's.
+
+**Cost.** It is advisory. Nothing forces an agent to save anything, which is the
+same cooperative assumption the queue protocol already makes.
+
+### D11. Rooms are bound to a working tree
+
+**Decision.** `create-room` records the repository root, branch, HEAD, and origin.
+Room resolution falls back to "newest active room bound to the repo you are in"
+before the last-room-created file.
+
+**Why.** Session continuity has to survive the human forgetting the room id, which
+they will. The repo is the thing they *are* standing in. Stopped rooms drop out of
+rediscovery, so a finished room does not shadow the next one.
+
+**Cost.** Two clones of one repo at different paths are different rooms. Matching
+on the origin remote would merge them; that trade is left open deliberately.
+
+**Advisory, not enforced.** A joining agent in a different tree gets a loud warning
+in its briefing rather than a refused join — AIDapter does not control what an agent
+edits, so blocking would be theatre.
+
+### D12. Schema migrations are additive only
+
+**Decision.** `db.initialize` runs the `CREATE TABLE IF NOT EXISTS` script and then
+adds any missing columns listed in `ADDED_COLUMNS`.
+
+**Why.** A workspace created by an earlier version has to keep working — this is a
+user's durable data. Additive-only keeps that a two-line operation with no migration
+framework. Every added column is nullable for the same reason.
 
 ## 3. Data model
 

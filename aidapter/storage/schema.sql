@@ -29,7 +29,15 @@ CREATE TABLE IF NOT EXISTS rooms (
     consecutive_agent_turns     INTEGER NOT NULL DEFAULT 0,
     max_consecutive_agent_turns INTEGER NOT NULL DEFAULT 8,
     awaiting_human              INTEGER NOT NULL DEFAULT 0,
-    owner_participant_id        TEXT
+    owner_participant_id        TEXT,
+    -- Repository this room is about, so a later session can rediscover the
+    -- room from the working tree instead of remembering a room id.
+    workspace_root              TEXT,
+    repo_branch                 TEXT,
+    repo_head                   TEXT,
+    repo_remote                 TEXT,
+    -- What joining agents are told about where durable state belongs.
+    memory_note                 TEXT
 );
 
 CREATE TABLE IF NOT EXISTS participants (

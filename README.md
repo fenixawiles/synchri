@@ -89,6 +89,37 @@ aidapter run \
 
 `aidapter run` watches the room, invokes whichever managed agent holds the floor, feeds it the pending request, and posts its stdout back. The commands are yours — AIDapter still has no built-in knowledge of any provider. Details in [`docs/single-terminal.md`](docs/single-terminal.md); the step-by-step walkthrough with real output, plus the prompt to give an agent driving itself, is in [`docs/two-agent-demo.md`](docs/two-agent-demo.md).
 
+## Session persistence
+
+A room is not a chat that vanishes when the terminal closes. There is no in-memory
+broker, so **everything AIDapter owns is durable from the first write**: transcript,
+shared memory ledger, queue, turns, tasks, identities, and the full audit trail — all
+of it survives the session and any restart.
+
+What AIDapter deliberately does *not* own is an agent's internal reasoning and working
+context. Shadowing that for every provider would be a worse job than the providers do
+themselves. So two things happen automatically at the jump, with nothing for you to set up:
+
+1. **The room is bound to the repository it was created in** — root, branch, HEAD,
+   origin. A later session in that repo finds the room with no room id anywhere:
+
+   ```console
+   $ rm ~/.aidapter/current_room     # forget which room it was
+   $ cd ~/projects/thing/src/deep    # even from a subdirectory
+   $ aidapter status
+   Room     PR 89 review  (room_XHdZVKbuy1ibvSAI)
+   ```
+
+2. **Every arrival gets a briefing** — printed by `join`, re-fetchable any time with
+   `aidapter briefing --as codex`. It carries the bound repo (and warns loudly if the
+   agent is in a different working tree), the whole shared memory ledger, what that
+   participant missed since it last spoke, the request waiting for it, and the
+   persistence contract: *put shared conclusions in the room ledger, put your own
+   resumption notes in whatever memory your platform gives you.*
+
+That last line is overridable per room with `--memory-note`. Full detail, including
+where to put what and what the limits are: [`docs/persistence.md`](docs/persistence.md).
+
 ## Architecture
 
 AIDapter keeps three kinds of state deliberately separate, because collapsing them is how this class of system rots.
@@ -167,7 +198,8 @@ What is **not** claimed: this is not multi-tenant, not multi-user, and not harde
 aidapter start                             initialize the workspace, show its state
 aidapter create-room --name "PR 89" --agents claude,codex
                                            create a room; prints a join command per agent
-aidapter rooms                             list rooms
+aidapter rooms [--here]                    list rooms (--here: bound to this repo)
+aidapter briefing --as codex               re-orient: repo, memory, what you missed
 aidapter join <invite-token> --name codex  redeem an invite and take an identity
 
 aidapter invite --as human --name gemini   mint another single-use invite
@@ -239,6 +271,8 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 - **Conducted agents must be non-interactive.** `run` needs a prompt-in / answer-on-stdout invocation. An agent that only works as an interactive REPL has to be driven in attached mode instead.
 - **Single machine.** No remote rooms, no multi-user rooms, no authentication beyond local secrets.
 - **The ledger is append-oriented.** Agents add entries; nothing summarizes or garbage-collects them except a rolling cap on handoffs.
+- **Room rediscovery is per working tree.** Two clones of the same repo at different paths are different rooms.
+- **Agent-side persistence is advisory.** The briefing tells each agent to save its own context; nothing enforces that it does.
 - **`wait` holds no lock.** Between `wait` returning "your turn" and your `send`, a human can interrupt. That is intentional — the human outranks you — but it means `wait` returning success is not a guarantee your send will land.
 - **No message editing or deletion.** The transcript is append-only.
 

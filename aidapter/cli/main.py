@@ -106,13 +106,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="how long the invites stay valid (0 = until the room is stopped)",
     )
     create.add_argument(
+        "--repo",
+        dest="workspace_root",
+        help="working tree this room is about (default: the repository you are in)",
+    )
+    create.add_argument(
+        "--memory-note",
+        help="override what joining agents are told about where to persist progress",
+    )
+    create.add_argument(
         "--max-agent-turns",
         type=int,
         default=DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
         help="consecutive agent turns allowed before the room waits for you",
     )
 
-    command("rooms", "List rooms in this workspace.")
+    rooms = command("rooms", "List rooms in this workspace.")
+    rooms.add_argument(
+        "--here", action="store_true", help="only rooms bound to the repository you are in"
+    )
 
     join = command("join", "Redeem an invite and join a room.")
     join.add_argument("reference", help="the invite token (or a bare room id when --rejoin-ing)")
@@ -170,6 +182,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_room_actor(interrupt)
     interrupt.add_argument("--message", "-m", dest="content", required=True)
     interrupt.add_argument("--to", dest="target", help="redirect the room to this participant")
+
+    brief = command(
+        "briefing",
+        "Print the orientation briefing: repo, shared memory, what you missed, "
+        "and where durable progress belongs.",
+    )
+    _add_room_actor(brief)
+    brief.add_argument(
+        "--full", action="store_true", help="include the whole conversation, not just what you missed"
+    )
 
     read = command("read", "Show the room transcript.")
     _add_room_reader(read)
@@ -396,7 +418,7 @@ def _credential(args: argparse.Namespace, broker: Broker, room_id: str) -> Crede
 
 
 def _room(args: argparse.Namespace, broker: Broker) -> str:
-    return session.resolve_room(broker.workspace, getattr(args, "room", None))
+    return session.resolve_room(broker.workspace, getattr(args, "room", None), broker)
 
 
 def _metadata(raw: str | None) -> dict:
@@ -450,6 +472,8 @@ def cmd_create_room(args: argparse.Namespace, broker: Broker) -> int:
         max_consecutive_agent_turns=args.max_agent_turns,
         agents=args.agents,
         invite_ttl_seconds=args.invite_ttl,
+        workspace_root=args.workspace_root,
+        memory_note=args.memory_note,
     )
     record = session.SessionRecord(
         room_id=result["room_id"],
@@ -466,11 +490,17 @@ def cmd_create_room(args: argparse.Namespace, broker: Broker) -> int:
 
 
 def _room_created_summary(result: dict) -> str:
+    repo = result.get("repo") or {}
     lines = [
         f"Room created: {result['name']}",
         f"  room id : {result['room_id']}",
         f"  you     : {result['human']['name']} ({result['human']['kind']})",
+        f"  repo    : {repo.get('root', '(unknown)')}"
+        + (f" [{repo.get('branch')}]" if repo.get("branch") else " (not a git repository)"),
         f"  memory  : {result['memory_path']}",
+        "",
+        "This room is bound to that working tree: running aidapter there again finds",
+        "it without a room id.",
         "",
     ]
     if result["invites"]:
@@ -550,7 +580,9 @@ def cmd_revoke_invite(args: argparse.Namespace, broker: Broker) -> int:
 
 
 def cmd_rooms(args: argparse.Namespace, broker: Broker) -> int:
-    rooms = broker.list_rooms()
+    rooms = (
+        broker.rooms_for_workspace(active_only=False) if args.here else broker.list_rooms()
+    )
     return _out(args, {"rooms": rooms}, render.rooms_table(rooms))
 
 
@@ -576,12 +608,13 @@ def cmd_join(args: argparse.Namespace, broker: Broker) -> int:
         f"{verb} room {result['room_id']} as {result['name']} ({result['kind']})\n"
         f"  participant id : {result['participant_id']}\n"
         f"  secret         : {result['secret']}\n"
-        f"  session file   : {result['session_file']}\n"
-        f"  memory         : {result['memory_path']}\n\n"
+        f"  session file   : {result['session_file']}\n\n"
         "Subsequent commands find this secret automatically, e.g.\n"
-        f"  aidapter wait --room {result['room_id']} --as {result['name']}"
+        f"  aidapter wait --as {result['name']}\n"
+        "\n" + "=" * 72 + "\n"
     )
-    return _out(args, result, text)
+    briefing = result.get("briefing") or {}
+    return _out(args, result, text + (briefing.get("text") or ""))
 
 
 def cmd_send(args: argparse.Namespace, broker: Broker) -> int:
@@ -643,6 +676,16 @@ def cmd_interrupt(args: argparse.Namespace, broker: Broker) -> int:
     )
     result = broker.send(room_id, credential=_credential(args, broker, room_id), draft=draft)
     return _out(args, result, _send_summary(result))
+
+
+def cmd_briefing(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    briefing = broker.briefing(
+        room_id,
+        credential=_credential(args, broker, room_id),
+        max_missed=10_000 if args.full else 30,
+    )
+    return _out(args, briefing.to_dict(), briefing.render())
 
 
 def cmd_read(args: argparse.Namespace, broker: Broker) -> int:
@@ -953,6 +996,7 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
     "revoke-invite": cmd_revoke_invite,
     "send": cmd_send,
     "interrupt": cmd_interrupt,
+    "briefing": cmd_briefing,
     "read": cmd_read,
     "watch": cmd_watch,
     "turn": cmd_turn,

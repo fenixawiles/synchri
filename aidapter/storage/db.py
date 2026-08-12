@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 #: How long a writer waits for a competing writer before giving up.
@@ -56,11 +56,36 @@ def initialize(conn: sqlite3.Connection) -> None:
     """
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     with transaction(conn):
+        _apply_additive_migrations(conn)
         conn.execute(
             "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (SCHEMA_VERSION,),
         )
+
+
+#: Columns added after the first release.  The schema is only ever extended
+#: additively, so a workspace created by an older version keeps working: every
+#: new column is nullable and ``initialize`` adds whatever is missing.
+ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "rooms": {
+        "workspace_root": "TEXT",
+        "repo_branch": "TEXT",
+        "repo_head": "TEXT",
+        "repo_remote": "TEXT",
+        "memory_note": "TEXT",
+    },
+}
+
+
+def _apply_additive_migrations(conn: sqlite3.Connection) -> None:
+    for table, columns in ADDED_COLUMNS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, declaration in columns.items():
+            if column not in existing:
+                # Table and column names come from the constant above, never
+                # from user input.
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
 
 @contextmanager

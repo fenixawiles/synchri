@@ -64,6 +64,28 @@ def list_rooms(conn: sqlite3.Connection) -> list[Room]:
     return [Room.from_row(r) for r in rows]
 
 
+def list_rooms_for_workspace(
+    conn: sqlite3.Connection, workspace_root: str, status: str | None = None
+) -> list[Room]:
+    """Rooms bound to a working tree, newest first."""
+    sql = "SELECT * FROM rooms WHERE workspace_root = ?"
+    params: list[object] = [workspace_root]
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY created_at DESC"
+    return [Room.from_row(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def last_message_seq_by(conn: sqlite3.Connection, room_id: str, participant_id: str) -> int:
+    """Seq of this participant's most recent message, or 0 if it never spoke."""
+    row = conn.execute(
+        "SELECT MAX(seq) AS seq FROM messages WHERE room_id = ? AND sender_participant_id = ?",
+        (room_id, participant_id),
+    ).fetchone()
+    return int(row["seq"] or 0)
+
+
 def update_room(conn: sqlite3.Connection, room_id: str, **fields) -> None:
     if not fields:
         return

@@ -8,6 +8,7 @@ the browser honest with each other.
 
 from __future__ import annotations
 
+import shlex
 from typing import Callable
 
 from ..broker import Broker, Credential
@@ -28,9 +29,16 @@ Route = Callable[[dict, dict], dict]
 class Api:
     """Routing table for the local UI."""
 
-    def __init__(self, broker: Broker, manager: SessionManager) -> None:
+    def __init__(
+        self, broker: Broker, manager: SessionManager, *, default_repo: str | None = None
+    ) -> None:
         self.broker = broker
         self.manager = manager
+        # ``synchri ui`` is normally launched from the repository being worked
+        # on.  Keeping that small piece of context makes the default path a
+        # room launch, not a repository-discovery exercise.  The draft still
+        # validates it before anything is created.
+        self.default_repo = self._valid_repository(default_repo)
         #: Wizard drafts are persisted, so closing the app does not lose an
         #: unfinished wizard and two tabs on one draft stay in step. They hold
         #: no authority: nothing is created until "Start session".
@@ -41,6 +49,8 @@ class Api:
             ("GET", "draft"): self.get_draft,
             ("POST", "draft/reset"): self.reset_draft,
             ("POST", "start"): self.start,
+            ("POST", "quick-start"): self.quick_start,
+            ("GET", "launch"): self.launch,
             ("GET", "sessions"): self.sessions,
             ("GET", "session"): self.session,
             ("GET", "dashboard"): self.dashboard,
@@ -79,11 +89,23 @@ class Api:
             "presets": presets_module.list_presets(self.broker.workspace),
             "sessions": [s.to_dict() for s in self.manager.list_sessions()],
             "workspace": str(self.broker.workspace.home),
+            "default_repo": self.default_repo,
+            "desktop_clone_root": str(discovery.desktop_clone_root()),
             "open_drafts": drafts_module.versions(self.broker.conn),
         }
 
     def repositories(self, query: dict, body: dict) -> dict:
         return discovery.repositories(include_github=query.get("github") != "0")
+
+    @staticmethod
+    def _valid_repository(path: str | None) -> str | None:
+        """Never turn the terminal's incidental CWD into a broken default."""
+        if not path:
+            return None
+        from ..session import worktree as worktree_module
+
+        status = worktree_module.inspect_repository(path)
+        return status.root if status.is_valid else None
 
     def _draft(self, key: str) -> SessionDraft:
         stored = drafts_module.load(self.broker.conn, key or "default")
@@ -197,9 +219,141 @@ class Api:
         if body.get("save_preset"):
             presets_module.save(self.broker.workspace, body["save_preset"], draft.to_preset())
         drafts_module.delete(self.broker.conn, key)
+        return self._launch_payload(self.manager.get(record.session_id), document=document)
+
+    def quick_start(self, query: dict, body: dict) -> dict:
+        """Create the safe, collaborative default without walking eight screens.
+
+        The detailed draft remains available for a long-running autonomous job,
+        a non-default branch, or unusual permissions.  Most people just need a
+        worktree, a room, and paste-ready arrivals for the agents they already
+        have open.
+        """
+        repo_path = (body.get("repo_path") or self.default_repo or "").strip()
+        goal = (body.get("goal") or "").strip()
+        if not repo_path:
+            raise ValidationError("choose the repository for this room")
+        if not goal:
+            raise ValidationError("describe what you want the agents to do")
+
+        cloned = None
+        if discovery.github_reference(repo_path):
+            cloned = discovery.clone_github_repository(repo_path)
+            repo_path = cloned["path"]
+
+        draft = SessionDraft()
+        draft.set_mode("interactive")
+        draft.set_repository(repo_path)
+        draft.set_agents(self._plans(body.get("agents")))
+        # Interactive mode permits an empty spec, but a quick room should
+        # always carry the user's stated goal into the ledger and contract.
+        draft.set_spec(goal)
+        if body.get("name"):
+            draft.name = body["name"]
+
+        record = self.manager.create(
+            name=draft.name or "Synchri collaboration",
+            mode=draft.mode,
+            repo_root=draft.repo_path,
+            base_branch=draft.base_branch,
+            participants=draft.participants,
+            permissions=draft.permissions,
+            spec=draft.spec,
+            deadline=draft.deadline,
+            escalation=draft.escalation,
+        )
+        document = self.manager.issue_contract(record.session_id, reason="quick start")
+        payload = self._launch_payload(self.manager.get(record.session_id), document=document)
+        if cloned:
+            payload["clone"] = cloned
+        return payload
+
+    def launch(self, query: dict, body: dict) -> dict:
+        """Return the only setup handoff a room owner needs to make."""
+        return self._launch_payload(self.manager.get(self._session_id(query)))
+
+    def _plans(self, values: list[dict] | None) -> list[ParticipantPlan]:
+        if not isinstance(values, list):
+            raise ValidationError("add at least one agent")
+        return [
+            ParticipantPlan(
+                name=agent.get("name", "").strip(),
+                runtime=agent.get("runtime", "generic"),
+                role=agent.get("role", "participant"),
+                command=agent.get("command"),
+            )
+            for agent in values
+            if isinstance(agent, dict) and agent.get("name", "").strip()
+        ]
+
+    def _launch_payload(self, record, *, document=None) -> dict:
+        """A room's setup state, including paste-ready instruction per agent."""
+        if document is None:
+            document = self.manager.current_contract(record.session_id)
+        invites = {
+            invite["participant_name"]: invite
+            for invite in (record.metadata or {}).get("invites", [])
+        }
+        room = self.broker.room_status(record.room_id, credential=self._human(record))
+        present = {
+            participant["name"]
+            for participant in room.get("participants", [])
+            if participant.get("status") != "removed"
+        }
+        acknowledgments = self.manager.acknowledgment_state(record.session_id)
+        worktree = record.worktree
+        agents = []
+        for plan in record.participants:
+            invite = invites.get(plan.name)
+            if invite is None:  # Defensive: a persisted session must still be viewable.
+                continue
+            plan_view = plan.to_dict()
+            join_command = f"cd {shlex.quote(worktree.path)} && {invite['command']}"
+            contract_command = f"synchri session contract --session {record.session_id}"
+            acknowledge_command = (
+                f"synchri session ack {shlex.quote(plan.name)} --reply UNDERSTOOD "
+                f"--session {record.session_id}"
+            )
+            wait_command = f"synchri wait --as {shlex.quote(plan.name)}"
+            setup_prompt = "\n".join(
+                [
+                    f"Join the Synchri collaboration as {plan.name} ({plan_view['role_label']}).",
+                    "Use a terminal in this order:",
+                    f"1. {join_command}",
+                    "2. Read the shared agreement:",
+                    f"   {contract_command}",
+                    "3. If you agree, acknowledge it:",
+                    f"   {acknowledge_command}",
+                    "4. Stay available for your first turn:",
+                    f"   {wait_command}",
+                    "Do not start changing code until the room is activated and you receive a task.",
+                ]
+            )
+            agents.append(
+                {
+                    "name": plan.name,
+                    "runtime": plan.runtime,
+                    "role": plan.role,
+                    "role_label": plan_view["role_label"],
+                    "joined": plan.name in present,
+                    "acknowledged": plan.name in acknowledgments["accepted"],
+                    "join_command": join_command,
+                    "setup_prompt": setup_prompt,
+                }
+            )
         return {
-            "session": self.manager.get(record.session_id).to_dict(),
+            "session": record.to_dict(),
             "contract": document.to_dict(),
+            "launch": {
+                "room_id": record.room_id,
+                "worktree_path": worktree.path if worktree else None,
+                "agents": agents,
+                "joined_count": sum(agent["joined"] for agent in agents),
+                "acknowledgments": acknowledgments,
+                "ready_to_activate": bool(agents)
+                and all(agent["joined"] for agent in agents)
+                and acknowledgments["all_accepted"],
+            },
         }
 
     # -- sessions ------------------------------------------------------

@@ -1269,3 +1269,40 @@ def test_github_listing_degrades_when_gh_is_absent(monkeypatch):
     payload = discovery.repositories()
     assert payload["github"] == [] and payload["github_available"] is False
     assert "local" in payload, "local repositories remain fully supported"
+
+
+def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path, monkeypatch):
+    from synchri.session import discovery
+
+    observed = []
+
+    def fake_clone(source, target):
+        observed.append((source, target))
+        subprocess.run(["git", "clone", str(repo), str(target)], check=True, capture_output=True)
+
+    monkeypatch.setattr(discovery, "_clone", fake_clone)
+    desktop = tmp_path / "Desktop" / "Synchri"
+    result = discovery.clone_github_repository(
+        "fenixawiles/synchri", destination_root=desktop
+    )
+
+    expected = desktop / "fenixawiles-synchri"
+    assert observed == [("https://github.com/fenixawiles/synchri.git", expected)]
+    assert result["path"] == str(expected.resolve()) and result["cloned"] is True
+    with pytest.raises(ValidationError, match="already exists"):
+        discovery.clone_github_repository("fenixawiles/synchri", destination_root=desktop)
+
+
+@pytest.mark.parametrize("reference", [
+    "fenixawiles/synchri",
+    "github.com/fenixawiles/synchri",
+    "https://github.com/fenixawiles/synchri",
+    "https://www.github.com/fenixawiles/synchri.git",
+    "git@github.com:fenixawiles/synchri.git",
+])
+def test_github_reference_accepts_the_forms_people_actually_paste(reference):
+    from synchri.session import discovery
+
+    assert discovery.github_reference(reference) == (
+        "fenixawiles", "synchri", "https://github.com/fenixawiles/synchri.git"
+    )

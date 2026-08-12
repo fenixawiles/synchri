@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Callable
@@ -88,6 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
     ui = command("ui", "Open Synchri in your browser (local, loopback-only).")
     ui.add_argument("--port", type=int, default=8765, help="0 picks a free port")
     ui.add_argument("--host", default="127.0.0.1", help="loopback unless --allow-remote")
+    ui.add_argument(
+        "--repo",
+        help="repository to preselect (default: the directory where you run synchri ui)",
+    )
     ui.add_argument("--no-open", action="store_true", help="do not open a browser")
     ui.add_argument(
         "--allow-remote",
@@ -1015,6 +1020,7 @@ def cmd_ui(args: argparse.Namespace, broker: Broker) -> int:
         port=args.port,
         open_browser=not args.no_open,
         allow_remote=args.allow_remote,
+        default_repo=args.repo or os.getcwd(),
     )
     return 0
 

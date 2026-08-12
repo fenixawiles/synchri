@@ -166,6 +166,17 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     assert boot["sessions"] == [] and "workspace" in boot
 
 
+def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
+    from synchri.ui.api import Api
+
+    broker = Broker(workspace)
+    try:
+        api = Api(broker, SessionManager(broker), default_repo=str(tmp_path))
+        assert api.bootstrap({}, {})["default_repo"] is None
+    finally:
+        broker.close()
+
+
 def test_the_draft_reports_problems_until_it_is_ready(ui, repo):
     call(ui, "/api/draft/reset", {"draft": "d"})
     state = call(ui, "/api/draft", {"draft": "d", "mode": "long_horizon"})
@@ -195,6 +206,53 @@ def test_starting_from_the_ui_creates_a_worktree_and_a_contract(ui, repo):
     assert session["worktree"]["path"] != session["repository"]["root"]
     assert result["contract"]["revision"] == 1
     assert "SYNCHRI SESSION CONTRACT" in result["contract"]["core_text"]
+
+
+def test_quick_start_returns_paste_ready_agent_setup_and_live_arrival_state(ui, repo):
+    result = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Review the current change together.",
+        "agents": [
+            {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+            {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+        ],
+    })
+
+    session_id = result["session"]["session_id"]
+    launch = result["launch"]
+    assert result["session"]["mode"] == "interactive"
+    assert launch["joined_count"] == 0
+    assert launch["agents"][0]["join_command"].startswith("cd ")
+    assert "synchri join " in launch["agents"][0]["setup_prompt"]
+    assert f"synchri session contract --session {session_id}" in launch["agents"][0]["setup_prompt"]
+
+    for agent in launch["agents"]:
+        token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]
+        ui["broker"].join(token, agent["name"])
+
+    refreshed = call(ui, f"/api/launch?session={session_id}")["launch"]
+    assert refreshed["joined_count"] == 2
+    assert all(agent["joined"] for agent in refreshed["agents"])
+    assert not refreshed["ready_to_activate"]
+
+    for name in ("codex", "copilot"):
+        call(ui, "/api/ack", {"session": session_id, "participant": name, "reply": "UNDERSTOOD"})
+    assert call(ui, f"/api/launch?session={session_id}")["launch"]["ready_to_activate"] is True
+
+
+def test_quick_start_clones_a_github_reference_before_making_the_room(ui, repo, monkeypatch):
+    from synchri.session import discovery
+
+    cloned = {"path": str(repo), "name": "proj", "source": "fenixawiles/synchri", "cloned": True}
+    monkeypatch.setattr(discovery, "clone_github_repository", lambda reference: cloned)
+    result = call(ui, "/api/quick-start", {
+        "repo_path": "fenixawiles/synchri",
+        "goal": "Review the current change together.",
+        "agents": [{"name": "codex", "runtime": "codex", "role": "primary_builder"}],
+    })
+
+    assert result["clone"] == cloned
+    assert result["session"]["repository"]["root"] == str(repo.resolve())
 
 
 def test_the_ui_cannot_activate_before_acknowledgment(ui, repo):

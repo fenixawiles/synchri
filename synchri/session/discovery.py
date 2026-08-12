@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
+
+from ..errors import StateError, ValidationError
 
 GH_TIMEOUT_SECONDS = 15.0
 SCAN_TIMEOUT_SECONDS = 5.0
@@ -26,6 +29,92 @@ SCAN_TIMEOUT_SECONDS = 5.0
 DEFAULT_SEARCH_ROOTS = ("~/code", "~/src", "~/projects", "~/dev", "~/repos", "~/work", "~/git")
 MAX_DEPTH = 3
 MAX_RESULTS = 60
+
+# We intentionally accept only GitHub references here.  The quick-start UI is
+# not a generic "run git against this string" surface: it is the friendly path
+# for cloning a project the user selected into their own Desktop folder.
+_GITHUB_REFERENCE = re.compile(
+    r"^(?:(?:https?://)?(?:www\.)?github\.com/|(?:git@github\.com:))?"
+    r"(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?)/"
+    r"(?P<repo>[A-Za-z0-9._-]+?)(?:\.git)?/?$"
+)
+
+
+def desktop_clone_root() -> Path:
+    """The visible, user-owned home for repositories Synchri fetches."""
+    # Keep user projects distinct from a source checkout of Synchri itself.
+    return Path.home() / "Desktop" / "Synchri Projects"
+
+
+def github_reference(value: str) -> tuple[str, str, str] | None:
+    """Parse an ``owner/repo`` or GitHub URL without accepting a shell-ish path."""
+    matched = _GITHUB_REFERENCE.fullmatch((value or "").strip())
+    if not matched:
+        return None
+    owner, repo = matched.group("owner"), matched.group("repo")
+    return owner, repo, f"https://github.com/{owner}/{repo}.git"
+
+
+def clone_github_repository(
+    reference: str, *, destination_root: str | Path | None = None
+) -> dict:
+    """Clone a selected GitHub repository into a predictable Desktop folder.
+
+    Existing directories are never replaced.  A failed clone is left intact so
+    the user can inspect it; Synchri never attempts a hidden cleanup of files it
+    just put on the desktop.
+    """
+    parsed = github_reference(reference)
+    if parsed is None:
+        raise ValidationError("enter a GitHub URL or owner/repository, e.g. fenixawiles/synchri")
+    owner, repo, source = parsed
+    parent = Path(destination_root).expanduser() if destination_root else desktop_clone_root()
+    target = parent / f"{owner}-{repo}"
+
+    if target.exists():
+        raise ValidationError(
+            f"{target} already exists; choose that local repository instead rather than overwriting it"
+        )
+
+    try:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise StateError(f"could not create {parent}: {exc}", code="clone_failed") from exc
+    _clone(source, target)
+
+    from . import worktree as worktree_module
+
+    status = worktree_module.inspect_repository(target)
+    if not status.is_valid:
+        raise StateError(
+            f"cloned {owner}/{repo}, but the result is not usable: {'; '.join(status.problems)}",
+            code="clone_failed",
+        )
+    return {
+        "path": status.root,
+        "name": status.name,
+        "source": f"{owner}/{repo}",
+        "destination": str(target),
+        "cloned": True,
+    }
+
+
+def _clone(source: str, target: Path) -> None:
+    """Run one bounded, argument-safe clone invocation."""
+    try:
+        completed = subprocess.run(
+            ["git", "clone", "--", source, str(target)],
+            capture_output=True,
+            text=True,
+            timeout=60.0,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StateError("cloning the repository timed out", code="clone_failed") from exc
+    except OSError as exc:
+        raise StateError(f"could not run git clone: {exc}", code="clone_failed") from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "git clone failed").strip()
+        raise StateError(f"could not clone the repository: {detail}", code="clone_failed")
 
 
 def local_repositories(

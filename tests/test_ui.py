@@ -229,6 +229,21 @@ def test_quick_start_returns_paste_ready_agent_setup_and_live_arrival_state(ui, 
     assert call(ui, f"/api/launch?session={session_id}")["launch"]["ready_to_activate"] is True
 
 
+def test_quick_start_clones_a_github_reference_before_making_the_room(ui, repo, monkeypatch):
+    from synchri.session import discovery
+
+    cloned = {"path": str(repo), "name": "proj", "source": "fenixawiles/synchri", "cloned": True}
+    monkeypatch.setattr(discovery, "clone_github_repository", lambda reference: cloned)
+    result = call(ui, "/api/quick-start", {
+        "repo_path": "fenixawiles/synchri",
+        "goal": "Review the current change together.",
+        "agents": [{"name": "codex", "runtime": "codex", "role": "primary_builder"}],
+    })
+
+    assert result["clone"] == cloned
+    assert result["session"]["repository"]["root"] == str(repo.resolve())
+
+
 def test_the_ui_cannot_activate_before_acknowledgment(ui, repo):
     _ready_draft(ui, repo)
     session_id = call(ui, "/api/start", {"draft": "d"})["session"]["session_id"]

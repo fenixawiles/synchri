@@ -90,6 +90,7 @@ class Api:
             "sessions": [s.to_dict() for s in self.manager.list_sessions()],
             "workspace": str(self.broker.workspace.home),
             "default_repo": self.default_repo,
+            "desktop_clone_root": str(discovery.desktop_clone_root()),
             "open_drafts": drafts_module.versions(self.broker.conn),
         }
 
@@ -225,6 +226,11 @@ class Api:
         if not goal:
             raise ValidationError("describe what you want the agents to do")
 
+        cloned = None
+        if discovery.github_reference(repo_path):
+            cloned = discovery.clone_github_repository(repo_path)
+            repo_path = cloned["path"]
+
         draft = SessionDraft()
         draft.set_mode("interactive")
         draft.set_repository(repo_path)
@@ -247,7 +253,10 @@ class Api:
             escalation=draft.escalation,
         )
         document = self.manager.issue_contract(record.session_id, reason="quick start")
-        return self._launch_payload(self.manager.get(record.session_id), document=document)
+        payload = self._launch_payload(self.manager.get(record.session_id), document=document)
+        if cloned:
+            payload["clone"] = cloned
+        return payload
 
     def launch(self, query: dict, body: dict) -> dict:
         """Return the only setup handoff a room owner needs to make."""

@@ -21,6 +21,13 @@ from ..errors import AidapterError, ValidationError
 from ..memory.ledger import SECTIONS
 from ..models.enums import MessageType, ResponseStatus, TurnState
 from ..models.envelope import MessageDraft
+from ..runner import AgentCommand, Conductor
+from ..runner.conductor import (
+    STOP_AWAITING_HUMAN,
+    STOP_ROOM_PAUSED,
+    STOP_ROOM_STOPPED,
+    STOP_UNMANAGED_SPEAKER,
+)
 from . import render, session
 
 #: ``wait`` exit codes, so a shell loop can branch without parsing output.
@@ -31,6 +38,23 @@ WAIT_EXIT_CODES = {
     TurnState.REMOVED.value: 13,
 }
 WAIT_TIMEOUT_EXIT = 10
+
+#: ``run`` exit codes: why the conductor handed control back to you.
+RUN_EXIT_CODES = {
+    STOP_ROOM_STOPPED: 11,
+    STOP_AWAITING_HUMAN: 12,
+    STOP_ROOM_PAUSED: 14,
+    STOP_UNMANAGED_SPEAKER: 15,
+}
+
+RUN_REASON_HELP = {
+    STOP_AWAITING_HUMAN: "the room hit its autonomy limit and wants your input",
+    STOP_ROOM_STOPPED: "the room was stopped",
+    STOP_ROOM_PAUSED: "the room is paused",
+    STOP_UNMANAGED_SPEAKER: "the floor belongs to someone this terminal does not drive",
+    "turn_limit": "reached the --turns limit",
+    "idle": "nobody is queued to speak",
+}
 
 
 # ----------------------------------------------------------------------
@@ -139,6 +163,42 @@ def build_parser() -> argparse.ArgumentParser:
     floor = command("request-floor", "Ask for a turn without being addressed.")
     _add_room_actor(floor)
     floor.add_argument("--priority", choices=["queued", "optional"], default="queued")
+
+    # -- single-terminal driver ------------------------------------------
+    run = command(
+        "run",
+        "Drive several agents' turns from this one terminal.",
+        epilog=(
+            "  aidapter run --agent 'claude=claude -p {prompt}' \\\n"
+            "               --agent 'codex=codex exec {prompt}' \\\n"
+            "               --start claude --turns 6\n\n"
+            "Each --agent is a command YOU supply; AIDapter has no built-in knowledge\n"
+            "of any provider. The prompt is substituted for {prompt}, or piped to the\n"
+            "command's stdin when the placeholder is absent. Commands run without a\n"
+            "shell, so prompt text is never interpreted as shell syntax.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    run.add_argument("--room", help="room id (default: $AIDAPTER_ROOM or the last room created)")
+    run.add_argument("--token", dest="room_token", help="room join token, for observer reads")
+    run.add_argument(
+        "--agent",
+        action="append",
+        default=[],
+        metavar="NAME=COMMAND",
+        help="a managed participant and the command that speaks for it (repeatable)",
+    )
+    run.add_argument("--start", help="give the first turn to this participant if the room is idle")
+    run.add_argument("--turns", type=int, help="stop after this many agent turns")
+    run.add_argument(
+        "--agent-timeout", type=float, default=900.0, help="seconds allowed per agent invocation"
+    )
+    run.add_argument("--cwd", help="working directory for agent commands")
+    run.add_argument(
+        "--context-messages", type=int, default=12, help="recent messages included in the prompt"
+    )
+    run.add_argument("--no-memory", action="store_true", help="omit the memory ledger from prompts")
+    run.add_argument("--quiet", action="store_true", help="only print the final summary")
 
     # -- inspection -----------------------------------------------------
     status = command("status", "Show room state, participants, and the queue.")
@@ -577,6 +637,86 @@ def cmd_request_floor(args: argparse.Namespace, broker: Broker) -> int:
     )
 
 
+def cmd_run(args: argparse.Namespace, broker: Broker) -> int:
+    """Run a room's agent turns from this terminal."""
+    room_id = _room(args, broker)
+    agents = {}
+    for spec in args.agent:
+        agent = AgentCommand.parse(spec, timeout=args.agent_timeout, cwd=args.cwd)
+        agents[agent.name] = agent
+    if not agents:
+        raise ValidationError(
+            "give at least one --agent, e.g. --agent 'codex=codex exec {prompt}'"
+        )
+
+    credentials = {
+        name: session.resolve_credential(broker.workspace, room_id, name) for name in agents
+    }
+    observer = session.resolve_credential(
+        broker.workspace, room_id, None, room_token=args.room_token
+    )
+    if not (observer.room_token or observer.participant):
+        # Fall back to reading as one of the managed agents.
+        observer = next(iter(credentials.values()))
+
+    if args.start:
+        _start_turn(broker, room_id, args.start, credentials)
+
+    def report_event(event: str, payload: dict) -> None:
+        if args.quiet or args.json:
+            return
+        if event == "agent.invoking":
+            print(f"→ {payload['participant']} thinking…", flush=True)
+        elif event == "agent.returned" and payload.get("timed_out"):
+            print(f"  {payload['participant']} timed out", flush=True)
+
+    conductor = Conductor(
+        broker,
+        room_id,
+        agents,
+        credentials,
+        observer,
+        context_messages=args.context_messages,
+        include_memory=not args.no_memory,
+        on_event=report_event,
+    )
+    report = conductor.run(max_turns=args.turns)
+
+    if not args.json and not args.quiet:
+        print()
+        result = broker.read(room_id, credential=observer, tail=max(1, report.turn_count * 2))
+        print(render.transcript(result["messages"]))
+        print()
+    _out(args, report.to_dict(), _run_summary(report))
+    return RUN_EXIT_CODES.get(report.reason, 0)
+
+
+def _start_turn(broker: Broker, room_id: str, name: str, credentials: dict) -> None:
+    """Hand the opening turn to a participant, if nobody already holds it."""
+    credential = credentials.get(name) or session.resolve_credential(
+        broker.workspace, room_id, name
+    )
+    status = broker.turn_status(room_id, credential=credential)
+    if status["state"] in (TurnState.YOUR_TURN.value, TurnState.WAITING.value):
+        return
+    broker.request_floor(room_id, credential=credential)
+
+
+def _run_summary(report) -> str:
+    lines = [
+        f"ran {report.turn_count} agent turn(s); stopped: {report.reason}",
+        RUN_REASON_HELP.get(report.reason, ""),
+    ]
+    for turn in report.turns:
+        detail = turn.get("status") or f"skipped ({turn.get('skipped')})"
+        arrow = f" → {turn['target']}" if turn.get("target") else ""
+        arrow = arrow or (f" ⇢ {turn['handoff_target']}" if turn.get("handoff_target") else "")
+        lines.append(f"  {turn['participant']}: {detail}{arrow}")
+    for warning in report.warnings:
+        lines.append(f"  warning: {warning}")
+    return "\n".join(line for line in lines if line)
+
+
 def cmd_status(args: argparse.Namespace, broker: Broker) -> int:
     room_id = _room(args, broker)
     status = broker.room_status(room_id, credential=_credential(args, broker, room_id))
@@ -706,6 +846,7 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
     "wait": cmd_wait,
     "pass": cmd_pass,
     "request-floor": cmd_request_floor,
+    "run": cmd_run,
     "status": cmd_status,
     "participants": cmd_participants,
     "events": cmd_events,

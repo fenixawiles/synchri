@@ -36,15 +36,18 @@ aidapter/
   queue/       deterministic scheduler (priority buckets, turns, budget)
   storage/     SQLite connection/schema, row-level DAO, transcript mirror
   memory/      the Markdown ledger: parse, render, mutate
+  runner/      single-terminal conductor: invoke agents' own commands on their turn
   security/    token generation, hashing, verification
   protocol/    the event-type vocabulary shared with future adapters
   config.py    workspace layout and file permissions
   errors.py    error taxonomy with stable codes and exit codes
 ```
 
-Dependency direction is one-way: `cli → broker → {queue, storage, memory, security} → models`.
+Dependency direction is one-way:
+`cli → {broker, runner} → {queue, storage, memory, security} → models`.
 Nothing below the broker knows the CLI exists, which is what makes an HTTP or MCP
-façade a wrapper rather than a rewrite.
+façade a wrapper rather than a rewrite. `runner` sits *beside* the broker as a
+client of it, not inside it — see D9.
 
 ## 2. Design decisions
 
@@ -146,6 +149,28 @@ interrupted speaker at direct-address priority (a comment).
 they correspond to two things humans actually do — "no, do this instead" versus "keep
 going, but note this". Making the distinction syntactic (`--to` or not) keeps it
 predictable.
+
+### D9. The conductor is a client, with no scheduling authority
+
+**Decision.** `aidapter run` drives several agents from one terminal by invoking a
+user-supplied command per participant. It lives in `runner/`, uses only the public
+`Broker` API, and makes no scheduling decisions of its own: it asks who holds the
+floor and runs that agent.
+
+**Why.** Terminals were never part of the model — a participant is any process that
+can run the CLI — but until `run` existed, single-terminal operation meant a human
+typing each agent's turn. The conductor closes that gap without touching the queue.
+Keeping it outside the broker means every priority, blocking, and loop-limit
+guarantee is still enforced in one tested place, and killing the conductor changes
+no room state.
+
+**Why user-supplied commands.** `--agent 'codex=codex exec {prompt}'` keeps this
+provider-agnostic: AIDapter learns nothing about any specific agent, so this is not
+the provider-adapter work that remains deliberately unstarted. Commands run with
+`shell=False` so a prompt can never be interpreted as shell syntax.
+
+**Cost.** Only works with agents that offer a non-interactive, prompt-in /
+answer-on-stdout invocation. Interactive-only agents stay in attached mode.
 
 ## 3. Data model
 

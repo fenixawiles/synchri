@@ -31,6 +31,15 @@ Claude ◄── aidapter read   (sees the findings; you never touched the clipb
 
 You watch the whole exchange with `aidapter watch`, and interrupt with `aidapter interrupt` whenever you want.
 
+**You never copy or paste a message in either mode.** The agent's own answer goes into the room, because either the agent writes it there itself or the conductor captures it:
+
+| Mode | How the reply reaches the room | Terminals |
+|---|---|---|
+| **Attached** | The agent runs `aidapter send` itself after doing the work | one per agent, by preference — not by requirement |
+| **Conducted** | `aidapter run` invokes each agent's command and posts its stdout | **one, total** |
+
+A participant is any *process* that can run the CLI. The room is a SQLite file: there is no tty affinity anywhere in the design, so "one terminal per agent" is a way to watch them, never a constraint. See [`docs/single-terminal.md`](docs/single-terminal.md).
+
 ## Install
 
 Requires Python 3.10+. No runtime dependencies.
@@ -68,8 +77,16 @@ aidapter interrupt --as human -m "also check the retry path" --to codex
 aidapter stop-room --as human
 ```
 
-A full two-terminal walkthrough, including the exact prompt to give each agent, is in
-[`docs/two-agent-demo.md`](docs/two-agent-demo.md).
+Or drive the whole thing from **one** terminal, with the agents' own commands:
+
+```bash
+aidapter run \
+  --agent 'claude=claude -p {prompt}' \
+  --agent 'codex=codex exec {prompt}' \
+  --start claude --turns 6
+```
+
+`aidapter run` watches the room, invokes whichever managed agent holds the floor, feeds it the pending request, and posts its stdout back. The commands are yours — AIDapter still has no built-in knowledge of any provider. Details in [`docs/single-terminal.md`](docs/single-terminal.md); the step-by-step walkthrough with real output, plus the prompt to give an agent driving itself, is in [`docs/two-agent-demo.md`](docs/two-agent-demo.md).
 
 ## Architecture
 
@@ -157,6 +174,9 @@ aidapter wait --as codex [--timeout 300]   block until it is
 aidapter pass --as codex --reason "..."    nothing material to add
 aidapter request-floor --as gemini         ask for a turn without being addressed
 
+aidapter run --agent 'codex=codex exec {prompt}' [--start claude] [--turns 6]
+                                           drive managed agents from this terminal
+
 aidapter status                            room state, participants, queue
 aidapter participants
 aidapter events                            the state-transition audit log
@@ -188,6 +208,7 @@ Every command takes `--json`. Exit codes are stable so an agent can branch witho
 | 6 | invalid room state (paused, stopped, awaiting human) |
 | 7 | not your turn / blocked by a targeted turn |
 | 10–13 | `wait` outcomes: timeout, room stopped, awaiting human, removed |
+| 11–15 | `run` outcomes: room stopped, awaiting human, paused, unmanaged speaker |
 
 Credentials resolve from `--secret`, then `$AIDAPTER_SECRET`, then the `0600` session file written by `join`. The room defaults to `$AIDAPTER_ROOM`, then the last room created.
 
@@ -205,8 +226,9 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 
 - **Polling, not push.** `wait` polls every 500ms. Fine for two or three agents on one machine; not a design for scale.
 - **No UI.** The data model was built so a group-chat UI can read `status`, `read`, `events`, and `memory` without core changes, but none exists.
-- **No provider integrations.** Agents participate by running shell commands. There is no MCP server, no adapter, no SDK.
-- **Agents must cooperate.** Nothing forces an agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates.
+- **No provider integrations.** Agents participate by running shell commands, or by being invoked as one via `aidapter run --agent 'name=your command'`. There is no MCP server, no provider adapter, no SDK, and no knowledge of any specific agent baked in.
+- **Attached agents must cooperate.** Nothing forces a self-driving agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates. `aidapter run` sidesteps this by driving the turn loop itself.
+- **Conducted agents must be non-interactive.** `run` needs a prompt-in / answer-on-stdout invocation. An agent that only works as an interactive REPL has to be driven in attached mode instead.
 - **Single machine.** No remote rooms, no multi-user rooms, no authentication beyond local secrets.
 - **The ledger is append-oriented.** Agents add entries; nothing summarizes or garbage-collects them except a rolling cap on handoffs.
 - **`wait` holds no lock.** Between `wait` returning "your turn" and your `send`, a human can interrupt. That is intentional — the human outranks you — but it means `wait` returning success is not a guarantee your send will land.

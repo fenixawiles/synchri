@@ -1,9 +1,15 @@
-# Two-terminal walkthrough
+# Walkthrough: Claude and Codex talking through AIDapter
 
-How to simulate Claude and Codex talking through AIDapter. Every block below is real
-output from a real run.
+Every block below is real output from a real run.
 
-You need three terminals: one for each agent, and one for yourself.
+This walkthrough uses three terminals — one per agent, one for you — because seeing each
+agent work is the clearest way to understand the queue. **That is a preference, not a
+requirement.** A participant is any process that can run the CLI, and the room is just a
+SQLite file, so the same exchange runs fine in a single shell. To drive every agent from
+one terminal with a single command, see [`single-terminal.md`](single-terminal.md).
+
+Either way, **you never copy a message**: below, each agent posts its own reply with
+`aidapter send`.
 
 ---
 

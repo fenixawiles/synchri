@@ -1,7 +1,7 @@
 """Identifier generation and validation.
 
 All identifiers are unguessable by construction: a short type prefix plus 128
-bits of ``secrets`` entropy.  Nothing in AIDapter uses a sequential or
+bits of ``secrets`` entropy.  Nothing in Synchri uses a sequential or
 timestamp-derived identifier as a secret.
 """
 

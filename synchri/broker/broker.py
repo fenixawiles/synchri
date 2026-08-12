@@ -1,4 +1,4 @@
-"""The AIDapter broker.
+"""The Synchri broker.
 
 This is the whole orchestration surface.  It is a plain Python class over a
 SQLite file, deliberately *not* a server: every CLI invocation constructs a
@@ -323,7 +323,7 @@ class Broker:
             "kind": kind.value,
             "token": token,
             "expires_at": expires_at,
-            "command": f"aidapter join {token} --name {participant_name}",
+            "command": f"synchri join {token} --name {participant_name}",
             "superseded_invite_id": superseded.invite_id if superseded else None,
         }
 
@@ -402,7 +402,7 @@ class Broker:
             if not invite_secret:
                 raise AuthError(
                     "joining requires an invite token; ask the room owner to run "
-                    f"'aidapter invite --room {room_id} --name {name}'"
+                    f"'synchri invite --room {room_id} --name {name}'"
                 )
             invite = self._redeem_invite(room_id, name, invite_secret)
 
@@ -476,7 +476,7 @@ class Broker:
             if status == InviteStatus.EXPIRED.value:
                 raise AuthError(
                     f"this invite expired at {invite.expires_at}; ask for a new one with "
-                    f"'aidapter invite --room {room_id} --name {invite.participant_name}'",
+                    f"'synchri invite --room {room_id} --name {invite.participant_name}'",
                     code="invite_expired",
                 )
             if invite.participant_name != name:
@@ -1520,7 +1520,7 @@ class Broker:
         if not credential.secret:
             raise AuthError(
                 f"no secret supplied for {credential.participant!r}; pass --secret, set "
-                "AIDAPTER_SECRET, or use the session file written by 'aidapter join'"
+                "SYNCHRI_SECRET, or use the session file written by 'synchri join'"
             )
         participant = self._resolve_participant(room.room_id, credential.participant)
         stored = dao.get_participant_secret(self.conn, room.room_id, participant.participant_id)
@@ -1876,7 +1876,7 @@ def _run_after_commit(actions: Iterable[Callable[[], None]]) -> list[str]:
 
     These are mirrors of committed state (transcript lines, ledger entries).  A
     failure here must not make a successful, durable orchestration operation
-    look like it failed — ``aidapter export`` can regenerate them.
+    look like it failed — ``synchri export`` can regenerate them.
     """
     warnings: list[str] = []
     for action in actions:

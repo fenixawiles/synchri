@@ -1,7 +1,7 @@
 """Workspace layout and filesystem permissions.
 
-Everything AIDapter persists lives under a single workspace directory,
-``~/.aidapter`` by default, overridable with ``AIDAPTER_HOME``.  The directory
+Everything Synchri persists lives under a single workspace directory,
+``~/.synchri`` by default, overridable with ``SYNCHRI_HOME``.  The directory
 and every file inside it are created owner-only (0700 / 0600): the workspace
 holds room join tokens and participant secrets.
 """
@@ -15,7 +15,12 @@ from pathlib import Path
 from .errors import ValidationError
 from .ids import is_valid_id
 
-ENV_HOME = "AIDAPTER_HOME"
+ENV_HOME = "SYNCHRI_HOME"
+LEGACY_ENV_HOME = "AIDAPTER_HOME"
+DEFAULT_HOME = Path.home() / ".synchri"
+LEGACY_DEFAULT_HOME = Path.home() / ".aidapter"
+DB_FILENAME = "synchri.db"
+LEGACY_DB_FILENAME = "aidapter.db"
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
@@ -28,13 +33,21 @@ DEFAULT_INVITE_TTL_SECONDS = 3600
 
 @dataclass(frozen=True)
 class Workspace:
-    """Resolved paths for one AIDapter workspace."""
+    """Resolved paths for one Synchri workspace."""
 
     home: Path
 
     @property
     def db_path(self) -> Path:
-        return self.home / "aidapter.db"
+        """Return the current database, preserving an existing legacy one.
+
+        A rename must not strand the room history, ledger, or credentials a
+        user already has.  New workspaces receive ``synchri.db``; an existing
+        ``aidapter.db`` remains authoritative until a user explicitly moves it.
+        """
+        current = self.home / DB_FILENAME
+        legacy = self.home / LEGACY_DB_FILENAME
+        return legacy if legacy.exists() and not current.exists() else current
 
     @property
     def rooms_dir(self) -> Path:
@@ -90,8 +103,22 @@ def _harden(path: Path) -> None:
 
 
 def resolve_workspace(home: str | os.PathLike | None = None) -> Workspace:
-    """Resolve the workspace from an explicit path, ``AIDAPTER_HOME``, or the default."""
-    raw = home or os.environ.get(ENV_HOME) or (Path.home() / ".aidapter")
+    """Resolve the current workspace without losing pre-Synchri state.
+
+    Explicit paths and ``SYNCHRI_HOME`` win.  ``AIDAPTER_HOME`` and the former
+    default directory are read as compatibility fallbacks only, so upgrading
+    keeps existing rooms available while fresh installs use ``~/.synchri``.
+    """
+    if home is not None:
+        raw = home
+    elif os.environ.get(ENV_HOME):
+        raw = os.environ[ENV_HOME]
+    elif os.environ.get(LEGACY_ENV_HOME):
+        raw = os.environ[LEGACY_ENV_HOME]
+    elif LEGACY_DEFAULT_HOME.exists() and not DEFAULT_HOME.exists():
+        raw = LEGACY_DEFAULT_HOME
+    else:
+        raw = DEFAULT_HOME
     return Workspace(Path(raw).expanduser().resolve())
 
 

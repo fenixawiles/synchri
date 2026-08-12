@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from aidapter.errors import AuthError, StateError
-from aidapter.models.envelope import MessageDraft
+from synchri.errors import AuthError, StateError
+from synchri.models.envelope import MessageDraft
 
 from helpers import make_room
 
@@ -102,7 +102,7 @@ def test_stop_is_idempotent(room):
 
 
 def test_stop_survives_a_restart(workspace):
-    from aidapter.broker import Broker
+    from synchri.broker import Broker
 
     with Broker(workspace) as first:
         harness = make_room(first, "claude")

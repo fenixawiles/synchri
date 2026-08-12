@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from aidapter.config import resolve_workspace
-from aidapter.errors import ValidationError
-from aidapter.ids import is_valid_id, new_id, new_secret
-from aidapter.security import tokens
+from synchri.config import (
+    DEFAULT_HOME,
+    ENV_HOME,
+    LEGACY_DB_FILENAME,
+    LEGACY_DEFAULT_HOME,
+    LEGACY_ENV_HOME,
+    resolve_workspace,
+)
+from synchri.errors import ValidationError
+from synchri.ids import is_valid_id, new_id, new_secret
+from synchri.security import tokens
 
 
 def test_generated_ids_are_prefixed_and_high_entropy():
@@ -81,6 +88,30 @@ def test_room_paths_stay_inside_the_workspace(tmp_path):
     assert workspace.home in path.parents
 
 
+def test_upgrade_uses_a_legacy_workspace_and_database(monkeypatch, tmp_path):
+    legacy_home = tmp_path / ".aidapter"
+    legacy_db = legacy_home / LEGACY_DB_FILENAME
+    legacy_home.mkdir()
+    legacy_db.touch()
+    monkeypatch.setattr("synchri.config.DEFAULT_HOME", tmp_path / ".synchri")
+    monkeypatch.setattr("synchri.config.LEGACY_DEFAULT_HOME", legacy_home)
+    monkeypatch.delenv(ENV_HOME, raising=False)
+    monkeypatch.delenv(LEGACY_ENV_HOME, raising=False)
+
+    workspace = resolve_workspace()
+
+    assert workspace.home == legacy_home.resolve()
+    assert workspace.db_path == legacy_db
+
+
+def test_legacy_home_variable_is_an_upgrade_fallback(monkeypatch, tmp_path):
+    old_home = tmp_path / "previous-workspace"
+    monkeypatch.delenv(ENV_HOME, raising=False)
+    monkeypatch.setenv(LEGACY_ENV_HOME, str(old_home))
+
+    assert resolve_workspace().home == old_home.resolve()
+
+
 @pytest.mark.parametrize("name", ["../evil", "a/b", "with space", "", "x" * 200])
 def test_session_paths_reject_malformed_participant_names(tmp_path, name):
     workspace = resolve_workspace(tmp_path / "home")
@@ -98,7 +129,7 @@ def test_room_name_is_never_used_as_a_path_component(broker, workspace):
 
 
 def test_credential_repr_does_not_leak_the_secret():
-    from aidapter.broker import Credential
+    from synchri.broker import Credential
 
     text = repr(Credential(participant="claude", secret="super-secret-value"))
     assert "super-secret-value" not in text

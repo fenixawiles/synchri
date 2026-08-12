@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-from aidapter.errors import ValidationError
-from aidapter.runner import AgentCommand, Conductor, parse_directives
+from synchri.errors import ValidationError
+from synchri.runner import AgentCommand, Conductor, parse_directives
 
 from helpers import make_room
 
@@ -50,7 +50,7 @@ def conductor_for(room, tmp_path, specs: dict[str, str], **kwargs) -> Conductor:
 
 def test_directives_are_stripped_from_the_reply():
     body, directives = parse_directives(
-        "Found one race in retry.py.\n\nAIDAPTER-HANDOFF: claude\nAIDAPTER-CONFIDENCE: 0.7\n"
+        "Found one race in retry.py.\n\nSYNCHRI-HANDOFF: claude\nSYNCHRI-CONFIDENCE: 0.7\n"
     )
     assert body == "Found one race in retry.py."
     assert directives.handoff == "claude"
@@ -60,27 +60,27 @@ def test_directives_are_stripped_from_the_reply():
 
 def test_only_trailing_directives_count():
     """An agent quoting the convention mid-review must not redirect the room."""
-    text = "The docs say to write AIDAPTER-TO: codex at the end.\nBut I am still explaining."
+    text = "The docs say to write SYNCHRI-TO: codex at the end.\nBut I am still explaining."
     body, directives = parse_directives(text)
     assert directives.to is None
     assert body == text
 
 
 def test_pass_directive():
-    body, directives = parse_directives("AIDAPTER-PASS")
+    body, directives = parse_directives("SYNCHRI-PASS")
     assert directives.passed is True
     assert body == ""
 
 
 def test_target_beats_handoff_when_an_agent_asks_for_both():
-    _, directives = parse_directives("x\nAIDAPTER-TO: codex\nAIDAPTER-HANDOFF: gemini")
+    _, directives = parse_directives("x\nSYNCHRI-TO: codex\nSYNCHRI-HANDOFF: gemini")
     assert directives.to == "codex"
     assert directives.handoff is None
     assert directives.warnings
 
 
 def test_unparseable_confidence_is_ignored_with_a_warning():
-    _, directives = parse_directives("x\nAIDAPTER-CONFIDENCE: very high")
+    _, directives = parse_directives("x\nSYNCHRI-CONFIDENCE: very high")
     assert directives.confidence is None
     assert directives.warnings
 
@@ -158,7 +158,7 @@ def test_conductor_relays_a_targeted_exchange_with_no_human_action(broker, tmp_p
         room,
         tmp_path,
         {
-            "codex": "print('Found a race in retry.py:40')\nprint('AIDAPTER-HANDOFF: claude')\n",
+            "codex": "print('Found a race in retry.py:40')\nprint('SYNCHRI-HANDOFF: claude')\n",
             "claude": "print('Fixed it.')\n",
         },
     )
@@ -235,7 +235,7 @@ def test_empty_agent_output_becomes_a_pass(broker, tmp_path):
 def test_explicit_pass_directive(broker, tmp_path):
     room = make_room(broker, "claude", "codex")
     room.send("claude", "anything?", target="codex", message_type="task")
-    conductor = conductor_for(room, tmp_path, {"codex": "print('AIDAPTER-PASS')\n"})
+    conductor = conductor_for(room, tmp_path, {"codex": "print('SYNCHRI-PASS')\n"})
     report = conductor.run(max_turns=2)
     assert report.turns[0]["status"] == "passed"
 
@@ -266,8 +266,8 @@ def test_conductor_stops_at_the_autonomy_limit_instead_of_looping(broker, tmp_pa
         room,
         tmp_path,
         {
-            "codex": "print('your turn')\nprint('AIDAPTER-TO: claude')\n",
-            "claude": "print('no, your turn')\nprint('AIDAPTER-TO: codex')\n",
+            "codex": "print('your turn')\nprint('SYNCHRI-TO: claude')\n",
+            "claude": "print('no, your turn')\nprint('SYNCHRI-TO: codex')\n",
         },
     )
     report = conductor.run(max_turns=50)
@@ -284,8 +284,8 @@ def test_conductor_respects_its_own_turn_limit(broker, tmp_path):
         room,
         tmp_path,
         {
-            "codex": "print('a')\nprint('AIDAPTER-TO: claude')\n",
-            "claude": "print('b')\nprint('AIDAPTER-TO: codex')\n",
+            "codex": "print('a')\nprint('SYNCHRI-TO: claude')\n",
+            "claude": "print('b')\nprint('SYNCHRI-TO: codex')\n",
         },
     )
     report = conductor.run(max_turns=3)
@@ -348,7 +348,7 @@ def test_conductor_directives_can_open_a_targeted_task(broker, tmp_path):
     conductor = conductor_for(
         room,
         tmp_path,
-        {"claude": "print('codex, please review')\nprint('AIDAPTER-TO: codex')\n"},
+        {"claude": "print('codex, please review')\nprint('SYNCHRI-TO: codex')\n"},
     )
     report = conductor.run(max_turns=1)
 
@@ -363,7 +363,7 @@ def test_conductor_directives_can_open_a_targeted_task(broker, tmp_path):
 
 
 def test_run_command_drives_a_room_from_one_terminal(workspace, tmp_path, capsys):
-    from aidapter.cli.main import main
+    from synchri.cli.main import main
 
     def cli(*args):
         code = main(["--home", str(workspace.home), *args])
@@ -388,7 +388,7 @@ def test_run_command_drives_a_room_from_one_terminal(workspace, tmp_path, capsys
 
 
 def test_run_command_reports_awaiting_human_with_a_distinct_exit_code(workspace, tmp_path, capsys):
-    from aidapter.cli.main import main
+    from synchri.cli.main import main
 
     def cli(*args):
         code = main(["--home", str(workspace.home), *args])
@@ -404,8 +404,8 @@ def test_run_command_reports_awaiting_human_with_a_distinct_exit_code(workspace,
     cli("--json", "send", "--from", "claude", "--to", "codex", "--type", "task", "-m", "go")
 
     specs = [
-        write_agent(tmp_path, "codex", "print('a')\nprint('AIDAPTER-TO: claude')\n"),
-        write_agent(tmp_path, "claude", "print('b')\nprint('AIDAPTER-TO: codex')\n"),
+        write_agent(tmp_path, "codex", "print('a')\nprint('SYNCHRI-TO: claude')\n"),
+        write_agent(tmp_path, "claude", "print('b')\nprint('SYNCHRI-TO: codex')\n"),
     ]
     code, out = cli("--json", "run", "--agent", specs[0], "--agent", specs[1], "--turns", "20")
     assert code == 12
@@ -413,7 +413,7 @@ def test_run_command_reports_awaiting_human_with_a_distinct_exit_code(workspace,
 
 
 def test_run_start_flag_gives_an_idle_room_its_first_turn(workspace, tmp_path, capsys):
-    from aidapter.cli.main import main
+    from synchri.cli.main import main
 
     def cli(*args):
         code = main(["--home", str(workspace.home), *args])
@@ -434,7 +434,7 @@ def test_run_start_flag_gives_an_idle_room_its_first_turn(workspace, tmp_path, c
 
 
 def test_run_rejects_a_malformed_agent_spec(workspace, capsys):
-    from aidapter.cli.main import main
+    from synchri.cli.main import main
 
     code = main(["--home", str(workspace.home), "--json", "create-room", "--name", "x"])
     capsys.readouterr()

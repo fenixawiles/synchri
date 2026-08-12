@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from aidapter.cli.main import main
+from synchri.cli.main import main
 
 
 @pytest.fixture
@@ -293,8 +293,8 @@ def test_duplicate_join_exit_code(cli, cli_room):
 
 
 def test_env_vars_supply_room_and_identity(cli, cli_room, monkeypatch):
-    monkeypatch.setenv("AIDAPTER_ROOM", cli_room["room_id"])
-    monkeypatch.setenv("AIDAPTER_PARTICIPANT", "claude")
+    monkeypatch.setenv("SYNCHRI_ROOM", cli_room["room_id"])
+    monkeypatch.setenv("SYNCHRI_PARTICIPANT", "claude")
     code, out, _ = cli("--json", "send", "-m", "sent with no flags")
     assert code == 0
     assert json.loads(out)["message"]["sender"] == "claude"

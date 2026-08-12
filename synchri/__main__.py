@@ -1,4 +1,4 @@
-"""Allow ``python -m aidapter`` as an alias for the ``aidapter`` script."""
+"""Allow ``python -m synchri`` as an alias for the ``synchri`` script."""
 
 import sys
 

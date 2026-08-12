@@ -14,10 +14,10 @@ import sys
 
 import pytest
 
-from aidapter import repo
-from aidapter.briefing import DEFAULT_MEMORY_NOTE, memory_note_for
-from aidapter.broker import Broker, Credential
-from aidapter.cli.main import main
+from synchri import repo
+from synchri.briefing import DEFAULT_MEMORY_NOTE, memory_note_for
+from synchri.broker import Broker, Credential
+from synchri.cli.main import main
 
 from helpers import make_room
 
@@ -178,9 +178,9 @@ def test_the_briefing_carries_the_persistence_contract(room):
     briefing = room.broker.briefing(room.room_id, credential=room.credential("codex"))
     note = " ".join(briefing.memory_note.split())  # the note is hard-wrapped
 
-    assert "AIDapter durably stores the ROOM" in note
+    assert "Synchri durably stores the ROOM" in note
     assert "does NOT store your own reasoning" in note
-    assert "aidapter memory add decisions" in note
+    assert "synchri memory add decisions" in note
     assert "persistent memory your own platform gives you" in note
     assert "--as codex" in note, "the note is addressed to the participant reading it"
 
@@ -245,7 +245,7 @@ def test_the_briefing_surfaces_a_pending_request(room):
 def test_the_briefing_tells_an_idle_agent_to_wait(room):
     briefing = room.broker.briefing(room.room_id, credential=room.credential("codex"))
     assert briefing.your_turn is False
-    assert "aidapter wait --as codex" in briefing.render()
+    assert "synchri wait --as codex" in briefing.render()
 
 
 def test_the_briefing_warns_when_the_agent_is_in_the_wrong_tree(broker, git_repo, tmp_path, monkeypatch):
@@ -268,7 +268,7 @@ def test_no_warning_when_the_agent_is_in_the_right_tree(broker, git_repo, monkey
 
 
 def test_the_briefing_requires_a_participant_identity(room):
-    from aidapter.errors import AuthError
+    from synchri.errors import AuthError
 
     with pytest.raises(AuthError):
         room.broker.briefing(room.room_id, credential=Credential(room_token=room.observer_token))
@@ -300,7 +300,7 @@ def test_briefing_survives_a_restart_and_still_orients(workspace, git_repo):
         first.send(
             created["room_id"],
             credential=codex,
-            draft=__import__("aidapter").MessageDraft(content="work from session one"),
+            draft=__import__("synchri").MessageDraft(content="work from session one"),
         )
 
     # A brand new process, holding only the credential from the session file.
@@ -332,7 +332,7 @@ def test_join_prints_the_briefing(workspace, capsys, git_repo, monkeypatch):
     code, out = cli("join", created["invites"][0]["token"], "--name", "codex")
 
     assert code == 0
-    assert "AIDAPTER BRIEFING" in out
+    assert "SYNCHRI BRIEFING" in out
     assert "keep the contract" in out
     assert "PERSISTENCE" in out
     assert str(git_repo.resolve()) in out
@@ -351,7 +351,7 @@ def test_briefing_command_can_be_refetched(workspace, capsys, git_repo, monkeypa
 
     code, out = cli("briefing", "--as", "codex")
     assert code == 0
-    assert "AIDAPTER BRIEFING" in out
+    assert "SYNCHRI BRIEFING" in out
 
     code, out = cli("--json", "briefing", "--as", "codex")
     assert json.loads(out)["participant"] == "codex"
@@ -386,7 +386,7 @@ def test_create_room_reports_the_binding(workspace, capsys, git_repo, monkeypatc
 
 def test_conducted_agents_receive_the_persistence_note(broker, tmp_path):
     """A conducted agent is told the same thing an attached one is."""
-    from aidapter.runner import AgentCommand, Conductor
+    from synchri.runner import AgentCommand, Conductor
 
     room = make_room(broker, "codex")
     room.send("human", "codex, go", target="codex")
@@ -403,5 +403,5 @@ def test_conducted_agents_receive_the_persistence_note(broker, tmp_path):
     conductor.run(max_turns=1)
 
     relayed = room.messages()[-1]["content"]
-    assert "aidapter memory add decisions" in relayed
+    assert "synchri memory add decisions" in relayed
     assert "your own platform" in relayed

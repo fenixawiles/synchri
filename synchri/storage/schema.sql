@@ -1,4 +1,4 @@
--- AIDapter orchestration state (layer 1 of 3).
+-- Synchri orchestration state (layer 1 of 3).
 --
 -- This file is authoritative machine state only: rooms, identities, the queue,
 -- turns, tasks, the transcript, and the audit log.  Shared semantic memory

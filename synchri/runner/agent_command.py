@@ -1,7 +1,7 @@
 """How the conductor invokes a participating agent.
 
 An agent is described by a **shell command the user supplies**, not by a
-provider adapter.  AIDapter knows nothing about Claude, Codex, Copilot, or
+provider adapter.  Synchri knows nothing about Claude, Codex, Copilot, or
 Gemini here — it knows how to run a command, hand it a prompt, and read its
 output.  That keeps single-terminal operation provider-agnostic.
 """
@@ -24,7 +24,7 @@ DEFAULT_TIMEOUT_SECONDS = 900.0
 #: Trailing control lines an agent may emit to steer the room.  Documented in
 #: docs/single-terminal.md and included in every generated prompt.
 _DIRECTIVE = re.compile(
-    r"^\s*AIDAPTER[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE)\s*:?\s*(?P<value>.*?)\s*$",
+    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE)\s*:?\s*(?P<value>.*?)\s*$",
     re.IGNORECASE,
 )
 
@@ -129,7 +129,7 @@ class Directives:
 
 
 def parse_directives(text: str) -> tuple[str, Directives]:
-    """Split trailing ``AIDAPTER-*`` control lines off an agent's reply.
+    """Split trailing ``SYNCHRI-*`` control lines off an agent's reply.
 
     Only *trailing* lines count, so an agent quoting the convention in the
     middle of a review does not accidentally redirect the room.

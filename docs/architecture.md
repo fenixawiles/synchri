@@ -1,6 +1,6 @@
 # Architecture
 
-This document records what AIDapter v0.1 is, and — more importantly — *why*, so that
+This document records what Synchri v0.1 is, and — more importantly — *why*, so that
 later changes are made with the original reasoning visible rather than rediscovered.
 
 ## 1. Shape of the system
@@ -8,7 +8,7 @@ later changes are made with the original reasoning visible rather than rediscove
 ```
                  ┌───────────────────────────────────────────────┐
    claude ──────►│                                               │
-   codex  ──────►│   aidapter CLI  (one short-lived process      │
+   codex  ──────►│   synchri CLI  (one short-lived process      │
    gemini ──────►│                  per command)                 │
    human  ──────►│                                               │
                  └───────────────────┬───────────────────────────┘
@@ -20,7 +20,7 @@ later changes are made with the original reasoning visible rather than rediscove
              │    state     │ │   memory    │ │                │
              │              │ │             │ │                │
              │  SQLite WAL  │ │  memory.md  │ │ messages table │
-             │ aidapter.db  │ │  per room   │ │ transcript.jsonl│
+             │ synchri.db  │ │  per room   │ │ transcript.jsonl│
              └──────────────┘ └─────────────┘ └────────────────┘
               authoritative     human-editable   chronological
               machine state     shared meaning   record
@@ -29,7 +29,7 @@ later changes are made with the original reasoning visible rather than rediscove
 Package layout:
 
 ```
-aidapter/
+synchri/
   broker/      Broker: the entire orchestration API surface
   cli/         argparse CLI, rendering, session/credential resolution
   models/      enums, entity read-models, the message envelope
@@ -55,7 +55,7 @@ client of it, not inside it — see D9.
 
 ### D1. The broker is a library over SQLite, not a daemon
 
-**Decision.** `aidapter start` initializes the workspace and reports state. It launches no
+**Decision.** `synchri start` initializes the workspace and reports state. It launches no
 background process and opens no socket. Each CLI invocation constructs a `Broker`,
 runs one `BEGIN IMMEDIATE` transaction, commits, and exits.
 
@@ -67,7 +67,7 @@ a single-threaded broker loop would: "read the queue, decide, write the queue" i
 atomic across processes. And "no listener" is a stronger security posture than "a
 listener bound to localhost".
 
-**Cost.** No server push. Agents poll via `aidapter wait`. This is the main thing a
+**Cost.** No server push. Agents poll via `synchri wait`. This is the main thing a
 future daemon would fix.
 
 **Revisit when.** A UI needs live updates, rooms need to span machines, or polling
@@ -109,7 +109,7 @@ raised.
 
 **Why.** A rolled-back operation must not leave a stray transcript line or ledger
 entry. And conversely, a filesystem hiccup must not make a committed, durable
-orchestration operation report failure. The database is authoritative; `aidapter
+orchestration operation report failure. The database is authoritative; `synchri
 export` regenerates the mirrors.
 
 **Cost.** A crash between commit and append can leave `transcript.jsonl` one line
@@ -154,7 +154,7 @@ predictable.
 
 ### D9. The conductor is a client, with no scheduling authority
 
-**Decision.** `aidapter run` drives several agents from one terminal by invoking a
+**Decision.** `synchri run` drives several agents from one terminal by invoking a
 user-supplied command per participant. It lives in `runner/`, uses only the public
 `Broker` API, and makes no scheduling decisions of its own: it asks who holds the
 floor and runs that agent.
@@ -167,7 +167,7 @@ guarantee is still enforced in one tested place, and killing the conductor chang
 no room state.
 
 **Why user-supplied commands.** `--agent 'codex=codex exec {prompt}'` keeps this
-provider-agnostic: AIDapter learns nothing about any specific agent, so this is not
+provider-agnostic: Synchri learns nothing about any specific agent, so this is not
 the provider-adapter work that remains deliberately unstarted. Commands run with
 `shell=False` so a prompt can never be interpreted as shell syntax.
 
@@ -176,7 +176,7 @@ answer-on-stdout invocation. Interactive-only agents stay in attached mode.
 
 ### D10. The room owns shared state; agents own their own context
 
-**Decision.** AIDapter persists the room — transcript, ledger, queue, provenance,
+**Decision.** Synchri persists the room — transcript, ledger, queue, provenance,
 identities — durably and from the first write. It does not persist any agent's
 internal reasoning. Instead, every participant is handed a *persistence contract*
 on joining that tells it to put shared conclusions in the ledger and its own
@@ -204,7 +204,7 @@ rediscovery, so a finished room does not shadow the next one.
 on the origin remote would merge them; that trade is left open deliberately.
 
 **Advisory, not enforced.** A joining agent in a different tree gets a loud warning
-in its briefing rather than a refused join — AIDapter does not control what an agent
+in its briefing rather than a refused join — Synchri does not control what an agent
 edits, so blocking would be theatre.
 
 ### D12. Schema migrations are additive only
@@ -283,9 +283,9 @@ architectural decision, not a refactor.
 ## 6. Extension points
 
 - **Transport.** Wrap `Broker` in HTTP/WebSocket or MCP. It has no CLI dependency.
-- **Events.** `aidapter/protocol/events.py` is the shared vocabulary; a UI can subscribe
+- **Events.** `synchri/protocol/events.py` is the shared vocabulary; a UI can subscribe
   by polling `events --since <seq>` today and by subscription later.
-- **Scheduling.** `aidapter/queue/scheduler.py` is where priority policy lives; the
+- **Scheduling.** `synchri/queue/scheduler.py` is where priority policy lives; the
   buckets are an enum, not scattered constants.
 - **Memory.** `LedgerStore` is the only writer of `memory.md`; a summarizer or
   garbage collector plugs in there.

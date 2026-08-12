@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from aidapter.broker import Broker, Credential
-from aidapter.models.envelope import MessageDraft
+from synchri.broker import Broker, Credential
+from synchri.models.envelope import MessageDraft
 
 
 @dataclass

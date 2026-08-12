@@ -46,6 +46,7 @@ class Fingerprint:
     sessions: tuple
     room_seq: tuple[int, str]
     activities: tuple
+    activity_entries: tuple
     drafts: tuple
 
     @classmethod
@@ -56,6 +57,7 @@ class Fingerprint:
         )
         room_seq = (0, "")
         activities: tuple = ()
+        activity_entries: tuple = ()
         if session_id:
             try:
                 record = manager.get(session_id, sweep=False)
@@ -71,10 +73,15 @@ class Fingerprint:
                     (item["participant_id"], item["summary"], item["expires_at"])
                     for item in dao.list_live_activities(manager.conn, record.room_id)
                 )
+                activity_entries = tuple(
+                    (item["entry_id"], item["summary"], item["expires_at"])
+                    for item in dao.list_live_activity_entries(manager.conn, record.room_id)
+                )
         return cls(
             sessions=sessions,
             room_seq=room_seq,
             activities=activities,
+            activity_entries=activity_entries,
             drafts=tuple(sorted(drafts_module.versions(manager.conn).items())),
         )
 
@@ -116,6 +123,8 @@ def events(workspace: Workspace, session_id: str | None, *, stop=lambda: False):
                 if current.room_seq != previous.room_seq:
                     changed.append("conversation")
                 if current.activities != previous.activities and "conversation" not in changed:
+                    changed.append("conversation")
+                if current.activity_entries != previous.activity_entries and "conversation" not in changed:
                     changed.append("conversation")
                 if current.drafts != previous.drafts:
                     changed.append("drafts")

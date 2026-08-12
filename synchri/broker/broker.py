@@ -356,6 +356,7 @@ class Broker:
             "active_turn": active_turn.to_dict() if active_turn else None,
             "queue": scheduler.queue_snapshot(self.conn, room_id),
             "activities": dao.list_live_activities(self.conn, room_id),
+            "activity_entries": dao.list_live_activity_entries(self.conn, room_id),
             "participants": [p.to_dict() for p in participants],
             "open_tasks": [
                 t.to_dict() for t in dao.list_tasks(self.conn, room_id, TaskStatus.OPEN.value)

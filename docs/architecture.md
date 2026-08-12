@@ -218,10 +218,11 @@ framework. Every added column is nullable for the same reason.
 
 ### D13. Live work notes are expiring UI state, not a fourth conversation type
 
-**Decision.** A floor-holding agent may publish one short public work note in
-`agent_activity`. It has a TTL, is scoped to the room and participant, and clears
-when that agent replies, passes, is interrupted, is removed, or the room pauses or
-stops.
+**Decision.** Entering an agent turn through `synchri wait` automatically publishes
+the first short public work note. Further `synchri activity` calls append to the
+same transient UI trail while also updating the current `agent_activity` record.
+The trail has a TTL, is scoped to the room and participant, and clears when that
+agent replies, passes, is interrupted, is removed, or the room pauses or stops.
 
 **Why.** A human watching a long-running turn needs an honest indication of what is
 happening. But a provider's private reasoning is neither available nor appropriate

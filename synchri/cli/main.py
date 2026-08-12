@@ -788,12 +788,30 @@ def cmd_turn(args: argparse.Namespace, broker: Broker) -> int:
 
 def cmd_wait(args: argparse.Namespace, broker: Broker) -> int:
     room_id = _room(args, broker)
+    credential = _credential(args, broker, room_id)
     status = broker.wait_for_turn(
-        room_id,
-        credential=_credential(args, broker, room_id),
-        timeout=args.timeout,
-        poll_interval=args.poll,
+        room_id, credential=credential, timeout=args.timeout, poll_interval=args.poll
     )
+    # `wait` is the standard entry point for an attached coding agent. Start
+    # the live, non-addressable trail here so the UI never depends on the agent
+    # remembering a second command before it begins working.
+    if status["state"] == TurnState.YOUR_TURN.value and credential.participant:
+        request = status.get("request") or {}
+        subject = request.get("sender")
+        summary = (
+            f"Reading {subject}'s request and mapping the next step."
+            if subject
+            else "Beginning the assigned turn and inspecting the work."
+        )
+        try:
+            status["activity"] = broker.publish_activity(
+                room_id, credential=credential, summary=summary
+            )["activity"]
+        except SynchriError:
+            # A human is allowed to interrupt between the final wait poll and
+            # the note write. The truthful turn status remains more useful
+            # than turning a successful wait into an error in that race.
+            pass
     _out(args, status, render.turn_status(status))
     if status.get("timed_out"):
         return WAIT_TIMEOUT_EXIT

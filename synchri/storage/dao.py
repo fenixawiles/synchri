@@ -143,7 +143,9 @@ def list_participants(
     if not include_removed:
         sql += " AND status = ?"
         params.append(ParticipantStatus.ACTIVE.value)
-    sql += " ORDER BY joined_at ASC"
+    # Several participants can be created within the same millisecond. rowid
+    # preserves their insertion order as the deterministic tie-breaker.
+    sql += " ORDER BY joined_at ASC, rowid ASC"
     return [Participant.from_row(r) for r in conn.execute(sql, params).fetchall()]
 
 
@@ -186,11 +188,24 @@ def upsert_activity(
         "summary=excluded.summary, updated_at=excluded.updated_at, expires_at=excluded.expires_at",
         (room_id, participant_id, summary, updated_at, expires_at),
     )
+    # Keep a short, transient progression visible in the UI while the turn is
+    # active. This is not a message and is deleted at the response boundary.
+    conn.execute(
+        "DELETE FROM agent_activity_entries WHERE room_id = ? AND expires_at <= ?",
+        (room_id, updated_at),
+    )
+    cursor = conn.execute(
+        "INSERT INTO agent_activity_entries "
+        "(room_id, participant_id, summary, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        (room_id, participant_id, summary, updated_at, expires_at),
+    )
     conn.execute("UPDATE rooms SET updated_at = ? WHERE room_id = ?", (updated_at, room_id))
     return {
+        "entry_id": int(cursor.lastrowid),
         "participant_id": participant_id,
         "summary": summary,
-        "updated_at": updated_at,
+        "created_at": updated_at,
+        "updated_at": updated_at,  # current-note compatibility for callers
         "expires_at": expires_at,
     }
 
@@ -205,6 +220,10 @@ def clear_activity(
         sql += " AND participant_id = ?"
         params.append(participant_id)
     removed = int(conn.execute(sql, params).rowcount)
+    entry_sql = "DELETE FROM agent_activity_entries WHERE room_id = ?"
+    if participant_id is not None:
+        entry_sql += " AND participant_id = ?"
+    removed += int(conn.execute(entry_sql, params).rowcount)
     if removed:
         conn.execute("UPDATE rooms SET updated_at = ? WHERE room_id = ?", (utc_now(), room_id))
     return removed
@@ -217,6 +236,20 @@ def list_live_activities(conn: sqlite3.Connection, room_id: str, *, now: str | N
         "FROM agent_activity a JOIN participants p ON p.participant_id = a.participant_id "
         "WHERE a.room_id = ? AND p.room_id = ? AND p.status = ? AND a.expires_at > ? "
         "ORDER BY a.updated_at ASC, p.name ASC",
+        (room_id, room_id, ParticipantStatus.ACTIVE.value, now or utc_now()),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_live_activity_entries(
+    conn: sqlite3.Connection, room_id: str, *, now: str | None = None
+) -> list[dict]:
+    """The current turn's public progress trail, never the room transcript."""
+    rows = conn.execute(
+        "SELECT e.entry_id, e.participant_id, p.name, e.summary, e.created_at, e.expires_at "
+        "FROM agent_activity_entries e JOIN participants p ON p.participant_id = e.participant_id "
+        "WHERE e.room_id = ? AND p.room_id = ? AND p.status = ? AND e.expires_at > ? "
+        "ORDER BY e.created_at ASC, e.entry_id ASC",
         (room_id, room_id, ParticipantStatus.ACTIVE.value, now or utc_now()),
     ).fetchall()
     return [dict(row) for row in rows]

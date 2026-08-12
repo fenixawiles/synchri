@@ -778,9 +778,9 @@ async function paint(tab, el) {
   const d = S.dash;
   if (tab === "conversation") {
     const r = await api("conversation" + q);
-    const activities = d.activities || [];
-    const liveWork = activities.length ? `<section class="live-work" aria-live="polite">
-      <div class="live-work-label">LIVE WORK</div>${activities.map(note =>
+    const activityTrail = d.activity_entries || d.activities || [];
+    const liveWork = activityTrail.length ? `<section class="live-work" aria-live="polite">
+      <div class="live-work-label">LIVE WORK · THIS TURN</div>${activityTrail.map(note =>
         `<div class="live-note"><span class="dot">●</span><b>${esc(String(note.name).toUpperCase())}</b><div>${rich(note.summary)}</div></div>`
       ).join("")}</section>` : "";
     const messages = r.messages.length ? r.messages.map(m => {

@@ -75,6 +75,21 @@ CREATE TABLE IF NOT EXISTS agent_activity (
 CREATE INDEX IF NOT EXISTS agent_activity_live
     ON agent_activity(room_id, expires_at);
 
+-- The short in-progress trail rendered in the local UI.  It is intentionally
+-- separate from messages: a later agent never receives or acts on it.  Entries
+-- are removed as a unit when the turn reaches a durable response boundary.
+CREATE TABLE IF NOT EXISTS agent_activity_entries (
+    entry_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id        TEXT NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
+    participant_id TEXT NOT NULL REFERENCES participants(participant_id) ON DELETE CASCADE,
+    summary        TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    expires_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS agent_activity_entries_live
+    ON agent_activity_entries(room_id, expires_at, entry_id);
+
 -- Invites are the only way to become a participant.  Each one is bound to a
 -- single participant name, is single-use, and expires -- so a token left in
 -- terminal scrollback stops being useful.  The room's observer token can read

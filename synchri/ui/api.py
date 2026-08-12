@@ -337,10 +337,12 @@ class Api:
                     "Builder is started automatically; Synchri will hand you their completed "
                     "response when it is your turn. Do not repeatedly say that you are waiting.",
                     "When wait returns, act on the task immediately: read the room briefing, "
-                    "then publish one short public work note for the live UI:",
+                    "then note that wait has already started a visible Live Work trail in the UI. "
+                    "At each meaningful shift (understanding, exploring, implementing, testing, "
+                    "or reviewing), append a short public semantic update with:",
                     f"   {activity_command}",
-                    "Update that note only at meaningful milestones. It is not a response, does "
-                    "not move the queue, and must never contain private reasoning or a handoff. "
+                    "Those updates are the human-facing live progress stream. They are not a response, "
+                    "do not move the queue, and must never contain private reasoning or a handoff. "
                     "Work in the authorized worktree, then send one completed response and hand off. "
                     "The session activation task starts the Primary Builder automatically; do not "
                     "wait for the human to say 'begin'.",

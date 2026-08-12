@@ -51,14 +51,16 @@ synchri briefing --as <NAME>
    anything in the request's `constraints` array, and look at anything in
    `artifact_references`.
 
-   As soon as you have the floor, publish a short public work note for the live
-   interface, then update it only when the work meaningfully changes:
+   `synchri wait` automatically creates the first visible Live Work entry when
+   your turn begins. Append a short public semantic update whenever the work
+   meaningfully changes — understand, explore, implement, test, or review:
    ```bash
    synchri activity --as <NAME> -m "Inspecting the assigned startup path"
    ```
    This is an intentionally high-level status, not private reasoning or raw tool
-   output. It does not enter the transcript, move the queue, or give anyone a
-   turn. Your completed response or pass clears it automatically; use
+   output. Every update appears as a transient chronological Live Work trail in
+   the UI; it does not enter the transcript, move the queue, or give anyone a
+   turn. Your completed response or pass clears the trail automatically; use
    `synchri activity --as <NAME> --clear` only to remove it early.
 
    In a Long Horizon Development session, activation supplies the first request

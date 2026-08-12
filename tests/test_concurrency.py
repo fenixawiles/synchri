@@ -271,6 +271,7 @@ def test_wait_in_one_process_unblocks_when_another_process_addresses_it(workspac
     assert payload["state"] == "your_turn"
     assert payload["timed_out"] is False
     assert payload["request"]["content"] == "your turn"
+    assert payload["activity"]["summary"] == "Reading claude's request and mapping the next step."
 
 
 def test_wait_times_out_with_a_distinct_exit_code(workspace):

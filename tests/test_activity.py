@@ -47,6 +47,30 @@ def test_only_the_agent_with_the_floor_can_publish_live_work(room):
     assert exc.value.code == "not_your_turn"
 
 
+def test_live_work_updates_form_a_transient_chronological_trail(room):
+    room.send("claude", "Trace then test this path.", target="codex", message_type="task")
+    room.broker.publish_activity(
+        room.room_id,
+        credential=room.credential("codex"),
+        summary="Tracing the startup path.",
+    )
+    room.broker.publish_activity(
+        room.room_id,
+        credential=room.credential("codex"),
+        summary="Writing a focused regression test.",
+    )
+
+    status = room.status()
+    assert [entry["summary"] for entry in status["activity_entries"]] == [
+        "Tracing the startup path.",
+        "Writing a focused regression test.",
+    ]
+    assert [message["content"] for message in room.messages()] == ["Trace then test this path."]
+
+    room.pass_turn("codex", "done")
+    assert room.status()["activity_entries"] == []
+
+
 def test_human_redirect_clears_an_interrupted_agent_work_note(room):
     room.send("claude", "Start the implementation.", hold_floor=True)
     room.broker.publish_activity(

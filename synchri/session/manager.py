@@ -904,6 +904,7 @@ class SessionManager:
             "current_actor": (room_status or {}).get("active_speaker"),
             "queue": (room_status or {}).get("queue", []),
             "activities": (room_status or {}).get("activities", []),
+            "activity_entries": (room_status or {}).get("activity_entries", []),
             "gates": {"summary": report, "items": [g.to_dict() for g in gates]},
             "tests": (record.metadata or {}).get("last_test_run"),
             "test_command": self.detected_test_command(session_id),

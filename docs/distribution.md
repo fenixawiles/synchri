@@ -62,8 +62,9 @@ Linux, CI, and for contributors; it is not the onboarding story on the site.
 ## Release checklist
 
 - Tag a tested version as `vX.Y.Z`.
-- The release workflow builds a wheel and separate Intel and Apple Silicon
-  applications, plus SHA-256 checksums.
+- The release workflow builds the Apple Silicon application and a wheel, plus
+  SHA-256 checksums. Intel builds are intentionally released independently so
+  limited legacy runner capacity cannot delay a signed public download.
 - Configure these repository secrets before calling the Mac download supported:
   `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`,
   `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and

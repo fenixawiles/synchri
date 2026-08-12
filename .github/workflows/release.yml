@@ -36,15 +36,10 @@ jobs:
           path: dist/
 
   mac-app:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-13
-            arch: x86_64
-          - runner: macos-14
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
+    # Apple Silicon is the supported first-download path. Intel builds are
+    # intentionally produced separately so a scarce legacy runner can never
+    # hold a signed release hostage.
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,7 +66,7 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN"
       - run: scripts/build_macos_app.sh
         env:
-          SYNCHRI_ARCH: ${{ matrix.arch }}
+          SYNCHRI_ARCH: arm64
           CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
       - name: Notarize and staple the signed app
         env:
@@ -79,7 +74,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          SYNCHRI_ARCH: ${{ matrix.arch }}
+          SYNCHRI_ARCH: arm64
         if: ${{ env.APPLE_ID != '' && env.APPLE_PASSWORD != '' && env.APPLE_TEAM_ID != '' && env.CODESIGN_IDENTITY != '' }}
         run: |
           ARCHIVE="release/macos/Synchri-macos-$SYNCHRI_ARCH.zip"
@@ -91,10 +86,10 @@ jobs:
           shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}
+          name: macos-arm64
           path: |
-            release/macos/Synchri-macos-${{ matrix.arch }}.zip
-            release/macos/Synchri-macos-${{ matrix.arch }}.zip.sha256
+            release/macos/Synchri-macos-arm64.zip
+            release/macos/Synchri-macos-arm64.zip.sha256
 
   github-release:
     needs: [python-package, mac-app]

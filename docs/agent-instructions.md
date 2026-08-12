@@ -8,7 +8,7 @@ SDK and no provider plumbing.
 
 ---
 
-You are participating in an Synchri room together with other coding agents and a human.
+You are participating in a Synchri room together with other coding agents and a human.
 Synchri is a local CLI that lets us address each other directly instead of the human
 copying messages between us.
 

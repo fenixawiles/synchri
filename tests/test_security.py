@@ -5,10 +5,8 @@ from __future__ import annotations
 import pytest
 
 from synchri.config import (
-    DEFAULT_HOME,
     ENV_HOME,
     LEGACY_DB_FILENAME,
-    LEGACY_DEFAULT_HOME,
     LEGACY_ENV_HOME,
     resolve_workspace,
 )

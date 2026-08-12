@@ -16,6 +16,8 @@ from .errors import ValidationError
 from .ids import is_valid_id
 
 ENV_HOME = "SYNCHRI_HOME"
+# Pre-Synchri workspaces remain readable after the rename.  These names are
+# compatibility fallbacks only; new documentation and commands use SYNCHRI_*.
 LEGACY_ENV_HOME = "AIDAPTER_HOME"
 DEFAULT_HOME = Path.home() / ".synchri"
 LEGACY_DEFAULT_HOME = Path.home() / ".aidapter"
@@ -39,12 +41,7 @@ class Workspace:
 
     @property
     def db_path(self) -> Path:
-        """Return the current database, preserving an existing legacy one.
-
-        A rename must not strand the room history, ledger, or credentials a
-        user already has.  New workspaces receive ``synchri.db``; an existing
-        ``aidapter.db`` remains authoritative until a user explicitly moves it.
-        """
+        """Keep a legacy database authoritative until the user moves it."""
         current = self.home / DB_FILENAME
         legacy = self.home / LEGACY_DB_FILENAME
         return legacy if legacy.exists() and not current.exists() else current
@@ -103,12 +100,7 @@ def _harden(path: Path) -> None:
 
 
 def resolve_workspace(home: str | os.PathLike | None = None) -> Workspace:
-    """Resolve the current workspace without losing pre-Synchri state.
-
-    Explicit paths and ``SYNCHRI_HOME`` win.  ``AIDAPTER_HOME`` and the former
-    default directory are read as compatibility fallbacks only, so upgrading
-    keeps existing rooms available while fresh installs use ``~/.synchri``.
-    """
+    """Resolve a current workspace without stranding data from the rename."""
     if home is not None:
         raw = home
     elif os.environ.get(ENV_HOME):

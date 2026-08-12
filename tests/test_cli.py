@@ -46,8 +46,8 @@ def test_no_command_prints_help(cli):
     assert "Stop being the clipboard" in out
 
 
-def test_start_reports_the_workspace_and_no_daemon(cli, workspace):
-    code, out, _ = cli("--json", "start")
+def test_workspace_reports_the_workspace_and_no_daemon(cli, workspace):
+    code, out, _ = cli("--json", "workspace")
     payload = json.loads(out)
     assert code == 0
     assert payload["workspace"] == str(workspace.home)

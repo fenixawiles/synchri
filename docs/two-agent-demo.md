@@ -222,7 +222,7 @@ $ synchri stop-room --as human
 The whole point is that you do not type those commands — the agent does. Paste something
 like this into each agent's session. Substitute the name and token.
 
-> You are participating in an Synchri room with another coding agent. Synchri is a
+> You are participating in a Synchri room with another coding agent. Synchri is a
 > local CLI that lets us talk to each other directly.
 >
 > Join once, with the invite command printed by `create-room`:

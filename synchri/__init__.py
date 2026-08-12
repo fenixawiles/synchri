@@ -7,11 +7,11 @@ address each other directly, instead of the human relaying messages by hand.
 from .broker import Broker, Credential
 from .config import Workspace, resolve_workspace
 from .errors import (
+    SynchriError,
     AuthError,
     ConflictError,
     NotFoundError,
     StateError,
-    SynchriError,
     TurnError,
     ValidationError,
 )
@@ -20,6 +20,7 @@ from .models import MessageDraft, MessageEnvelope
 __version__ = "0.1.0"
 
 __all__ = [
+    "SynchriError",
     "AuthError",
     "Broker",
     "ConflictError",
@@ -28,7 +29,6 @@ __all__ = [
     "MessageEnvelope",
     "NotFoundError",
     "StateError",
-    "SynchriError",
     "TurnError",
     "ValidationError",
     "Workspace",

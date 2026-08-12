@@ -40,12 +40,37 @@ You watch the whole exchange with `synchri watch`, and interrupt with `synchri i
 
 A participant is any *process* that can run the CLI. The room is a SQLite file: there is no tty affinity anywhere in the design, so "one terminal per agent" is a way to watch them, never a constraint. See [`docs/single-terminal.md`](docs/single-terminal.md).
 
+## The app
+
+`synchri ui` starts a local server on `127.0.0.1`, opens your browser, and gives you the
+wizard and a mission-control dashboard: gates, tests, diff, commits, worktree, memory, raw
+event log, and the contract with each agent's acknowledgment. It is the **only** part of
+Synchri that opens a socket — loopback-only, token-gated per launch, and opt-in. See
+[`docs/ui.md`](docs/ui.md).
+
+## Sessions
+
+`synchri start` walks you through one short wizard — mode, repository, isolated
+worktree, agents and roles, permissions, spec, deadline — then generates a single
+**session contract** that every agent must acknowledge with `UNDERSTOOD` before any
+work begins.
+
+```bash
+synchri start
+```
+
+Agents work in a dedicated git worktree (`synchri-lh-amber-fox-4821`), never in your
+primary tree. Permissions are explicit toggles with conservative defaults, and Synchri's
+grant is a ceiling that never overrides your provider, OS, or repo host. Completion
+requires evidence, not agreement. A deadline produces an honest handoff, never a false
+"done". Full detail: [`docs/sessions.md`](docs/sessions.md).
+
 ## Install
 
 Requires Python 3.10+. No runtime dependencies.
 
 ```bash
-git clone https://github.com/fenixawiles/Synchri
+git clone https://github.com/fenixawiles/synchri
 cd Synchri
 pip install -e .
 ```
@@ -270,6 +295,7 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 - **Attached agents must cooperate.** Nothing forces a self-driving agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates. `synchri run` sidesteps this by driving the turn loop itself.
 - **Conducted agents must be non-interactive.** `run` needs a prompt-in / answer-on-stdout invocation. An agent that only works as an interactive REPL has to be driven in attached mode instead.
 - **Single machine.** No remote rooms, no multi-user rooms, no authentication beyond local secrets.
+- **The dashboard stream is per-tab.** Each open tab holds a thread and a SQLite connection — fine locally, not a fan-out design.
 - **The ledger is append-oriented.** Agents add entries; nothing summarizes or garbage-collects them except a rolling cap on handoffs.
 - **Room rediscovery is per working tree.** Two clones of the same repo at different paths are different rooms.
 - **Agent-side persistence is advisory.** The briefing tells each agent to save its own context; nothing enforces that it does.

@@ -166,6 +166,17 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     assert boot["sessions"] == [] and "workspace" in boot
 
 
+def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
+    from synchri.ui.api import Api
+
+    broker = Broker(workspace)
+    try:
+        api = Api(broker, SessionManager(broker), default_repo=str(tmp_path))
+        assert api.bootstrap({}, {})["default_repo"] is None
+    finally:
+        broker.close()
+
+
 def test_the_draft_reports_problems_until_it_is_ready(ui, repo):
     call(ui, "/api/draft/reset", {"draft": "d"})
     state = call(ui, "/api/draft", {"draft": "d", "mode": "long_horizon"})

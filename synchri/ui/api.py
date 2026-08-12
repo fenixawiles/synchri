@@ -38,7 +38,7 @@ class Api:
         # on.  Keeping that small piece of context makes the default path a
         # room launch, not a repository-discovery exercise.  The draft still
         # validates it before anything is created.
-        self.default_repo = default_repo
+        self.default_repo = self._valid_repository(default_repo)
         #: Wizard drafts are persisted, so closing the app does not lose an
         #: unfinished wizard and two tabs on one draft stay in step. They hold
         #: no authority: nothing is created until "Start session".
@@ -96,6 +96,16 @@ class Api:
 
     def repositories(self, query: dict, body: dict) -> dict:
         return discovery.repositories(include_github=query.get("github") != "0")
+
+    @staticmethod
+    def _valid_repository(path: str | None) -> str | None:
+        """Never turn the terminal's incidental CWD into a broken default."""
+        if not path:
+            return None
+        from ..session import worktree as worktree_module
+
+        status = worktree_module.inspect_repository(path)
+        return status.root if status.is_valid else None
 
     def _draft(self, key: str) -> SessionDraft:
         stored = drafts_module.load(self.broker.conn, key or "default")

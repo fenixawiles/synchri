@@ -34,7 +34,7 @@ MAX_RESULTS = 60
 # not a generic "run git against this string" surface: it is the friendly path
 # for cloning a project the user selected into their own Desktop folder.
 _GITHUB_REFERENCE = re.compile(
-    r"^(?:(?:https?://github\.com/)|(?:git@github\.com:))?"
+    r"^(?:(?:https?://)?(?:www\.)?github\.com/|(?:git@github\.com:))?"
     r"(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?)/"
     r"(?P<repo>[A-Za-z0-9._-]+?)(?:\.git)?/?$"
 )

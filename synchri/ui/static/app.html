@@ -202,10 +202,11 @@ function renderQuick() {
   app().append($(`<div class="quick stack" style="max-width:48rem">
     <div><h2>Start a collaboration room</h2>
       <p class="muted">Synchri uses a separate worktree, so your primary checkout stays untouched.</p></div>
-    <label><b>Repository or GitHub project</b><input id="quick-repo" value="${esc(q.repo_path)}"
-      placeholder="/path/to/repository or owner/repository"></label>
-    <div class="small muted">Paste <code>owner/repository</code> or a GitHub URL and Synchri
-      clones it into <code>${esc(S.boot.desktop_clone_root)}</code> first. Existing local folders work too.</div>
+    <label><b>Project</b><input id="quick-repo" value="${esc(q.repo_path)}"
+      placeholder="Paste a GitHub link, owner/repository, or local folder"></label>
+    <div class="small muted">No local project folder? Paste <code>owner/repository</code> or a
+      GitHub URL. Synchri downloads it into <code>${esc(S.boot.desktop_clone_root)}</code> first.
+      Existing local folders work too.</div>
     <label><b>What do you want the team to do?</b>
       <textarea id="quick-goal" placeholder="Review the current changes, then fix the most important issue.">${esc(q.goal)}</textarea></label>
     <div class="card stack"><div><b>Your agents</b>

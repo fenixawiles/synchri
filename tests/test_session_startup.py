@@ -1291,3 +1291,18 @@ def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path,
     assert result["path"] == str(expected.resolve()) and result["cloned"] is True
     with pytest.raises(ValidationError, match="already exists"):
         discovery.clone_github_repository("fenixawiles/synchri", destination_root=desktop)
+
+
+@pytest.mark.parametrize("reference", [
+    "fenixawiles/synchri",
+    "github.com/fenixawiles/synchri",
+    "https://github.com/fenixawiles/synchri",
+    "https://www.github.com/fenixawiles/synchri.git",
+    "git@github.com:fenixawiles/synchri.git",
+])
+def test_github_reference_accepts_the_forms_people_actually_paste(reference):
+    from synchri.session import discovery
+
+    assert discovery.github_reference(reference) == (
+        "fenixawiles", "synchri", "https://github.com/fenixawiles/synchri.git"
+    )

@@ -64,3 +64,8 @@ class TurnError(StateError):
 
     code = "not_your_turn"
     exit_code = 7
+
+
+# Kept for library consumers upgrading their import paths.  New code should
+# catch SynchriError, which is the public name shown in the documentation.
+AidapterError = SynchriError

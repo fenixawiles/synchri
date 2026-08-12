@@ -59,6 +59,22 @@ CREATE TABLE IF NOT EXISTS participants (
 CREATE UNIQUE INDEX IF NOT EXISTS participants_room_name
     ON participants(room_id, name);
 
+-- Short, public work notes shown while an agent has the floor.  They are
+-- deliberately not messages: they never enter the transcript, have no queue
+-- effect, and expire on their own.  This lets the UI be live without pretending
+-- an agent's private/provider reasoning is a room response.
+CREATE TABLE IF NOT EXISTS agent_activity (
+    room_id        TEXT NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
+    participant_id TEXT NOT NULL REFERENCES participants(participant_id) ON DELETE CASCADE,
+    summary        TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    expires_at     TEXT NOT NULL,
+    PRIMARY KEY (room_id, participant_id)
+);
+
+CREATE INDEX IF NOT EXISTS agent_activity_live
+    ON agent_activity(room_id, expires_at);
+
 -- Invites are the only way to become a participant.  Each one is bound to a
 -- single participant name, is single-use, and expires -- so a token left in
 -- terminal scrollback stops being useful.  The room's observer token can read

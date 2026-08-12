@@ -165,6 +165,64 @@ def touch_participant(conn: sqlite3.Connection, room_id: str, participant_id: st
 
 
 # --------------------------------------------------------------------------
+# transient agent activity
+# --------------------------------------------------------------------------
+
+
+def upsert_activity(
+    conn: sqlite3.Connection,
+    room_id: str,
+    participant_id: str,
+    summary: str,
+    *,
+    expires_at: str,
+) -> dict:
+    """Record a short public work note without creating a room message."""
+    updated_at = utc_now()
+    conn.execute(
+        "INSERT INTO agent_activity (room_id, participant_id, summary, updated_at, expires_at) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(room_id, participant_id) DO UPDATE SET "
+        "summary=excluded.summary, updated_at=excluded.updated_at, expires_at=excluded.expires_at",
+        (room_id, participant_id, summary, updated_at, expires_at),
+    )
+    conn.execute("UPDATE rooms SET updated_at = ? WHERE room_id = ?", (updated_at, room_id))
+    return {
+        "participant_id": participant_id,
+        "summary": summary,
+        "updated_at": updated_at,
+        "expires_at": expires_at,
+    }
+
+
+def clear_activity(
+    conn: sqlite3.Connection, room_id: str, participant_id: str | None = None
+) -> int:
+    """Remove one participant's current work note, or all notes in a room."""
+    sql = "DELETE FROM agent_activity WHERE room_id = ?"
+    params: list[object] = [room_id]
+    if participant_id is not None:
+        sql += " AND participant_id = ?"
+        params.append(participant_id)
+    removed = int(conn.execute(sql, params).rowcount)
+    if removed:
+        conn.execute("UPDATE rooms SET updated_at = ? WHERE room_id = ?", (utc_now(), room_id))
+    return removed
+
+
+def list_live_activities(conn: sqlite3.Connection, room_id: str, *, now: str | None = None) -> list[dict]:
+    """Current public work notes, scoped to active participants in this room."""
+    rows = conn.execute(
+        "SELECT a.participant_id, p.name, a.summary, a.updated_at, a.expires_at "
+        "FROM agent_activity a JOIN participants p ON p.participant_id = a.participant_id "
+        "WHERE a.room_id = ? AND p.room_id = ? AND p.status = ? AND a.expires_at > ? "
+        "ORDER BY a.updated_at ASC, p.name ASC",
+        (room_id, room_id, ParticipantStatus.ACTIVE.value, now or utc_now()),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+# --------------------------------------------------------------------------
 # invites
 # --------------------------------------------------------------------------
 

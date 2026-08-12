@@ -65,6 +65,13 @@ from ..storage import dao, db, transcript
 #: Keeps ``wait`` loops from taking the write lock on every single poll.
 HEARTBEAT_INTERVAL_SECONDS = 5.0
 
+# Public work notes are deliberately brief and temporary. They are visible to
+# the room, but are neither transcript messages nor a substitute for a reply.
+DEFAULT_ACTIVITY_TTL_SECONDS = 15 * 60
+MIN_ACTIVITY_TTL_SECONDS = 15
+MAX_ACTIVITY_TTL_SECONDS = 60 * 60
+MAX_ACTIVITY_CHARS = 1_200
+
 #: States that end a ``wait`` loop.
 TERMINAL_WAIT_STATES = {
     TurnState.YOUR_TURN.value,
@@ -348,6 +355,7 @@ class Broker:
             "active_speaker": self._name_of(room_id, room.active_participant_id),
             "active_turn": active_turn.to_dict() if active_turn else None,
             "queue": scheduler.queue_snapshot(self.conn, room_id),
+            "activities": dao.list_live_activities(self.conn, room_id),
             "participants": [p.to_dict() for p in participants],
             "open_tasks": [
                 t.to_dict() for t in dao.list_tasks(self.conn, room_id, TaskStatus.OPEN.value)
@@ -564,6 +572,7 @@ class Broker:
                 status=ParticipantStatus.REMOVED.value,
                 removed_at=utc_now(),
             )
+            dao.clear_activity(self.conn, room_id, target.participant_id)
             active_turn = dao.get_active_turn(self.conn, room_id)
             if active_turn and active_turn.participant_id == target.participant_id:
                 scheduler.end_turn(
@@ -587,6 +596,56 @@ class Broker:
     # ------------------------------------------------------------------
     # messaging
     # ------------------------------------------------------------------
+
+    def publish_activity(
+        self,
+        room_id: str,
+        *,
+        credential: "Credential",
+        summary: str,
+        ttl_seconds: int = DEFAULT_ACTIVITY_TTL_SECONDS,
+    ) -> dict:
+        """Publish a short public work note while holding the floor.
+
+        Activity is deliberately separate from room conversation: it does not
+        append a message, change the queue, or enter the JSONL transcript.
+        """
+        summary = _require_text(summary, "activity", MAX_ACTIVITY_CHARS)
+        if not isinstance(ttl_seconds, int) or not (
+            MIN_ACTIVITY_TTL_SECONDS <= ttl_seconds <= MAX_ACTIVITY_TTL_SECONDS
+        ):
+            raise ValidationError(
+                f"activity TTL must be between {MIN_ACTIVITY_TTL_SECONDS} and "
+                f"{MAX_ACTIVITY_TTL_SECONDS} seconds"
+            )
+        with db.transaction(self.conn):
+            room = self._get_room(room_id)
+            actor = self._authorize_actor(room, credential)
+            self._require_sendable(room, actor)
+            if actor.is_human:
+                raise ValidationError("only an agent may publish a live work note")
+            active_turn = dao.get_active_turn(self.conn, room_id)
+            if active_turn is None or active_turn.participant_id != actor.participant_id:
+                raise TurnError(
+                    f"{actor.name} may publish activity only while holding the floor",
+                    active_speaker=active_turn.participant_name if active_turn else None,
+                )
+            activity = dao.upsert_activity(
+                self.conn,
+                room_id,
+                actor.participant_id,
+                summary,
+                expires_at=_expiry(ttl_seconds),
+            )
+        return {"activity": {**activity, "name": actor.name}}
+
+    def clear_activity(self, room_id: str, *, credential: "Credential") -> dict:
+        """Remove the caller's live work note without changing their turn."""
+        with db.transaction(self.conn):
+            room = self._get_room(room_id)
+            actor = self._authorize_actor(room, credential)
+            removed = dao.clear_activity(self.conn, room_id, actor.participant_id)
+        return {"cleared": bool(removed)}
 
     def send(
         self,
@@ -660,6 +719,7 @@ class Broker:
         interrupted: Turn | None = None
 
         if active_turn is not None:
+            dao.clear_activity(self.conn, room_id, active_turn.participant_id)
             scheduler.end_turn(
                 self.conn,
                 room_id,
@@ -682,6 +742,10 @@ class Broker:
 
         cleared = 0
         if target is not None:
+            # A redirect supersedes any existing live work note, not just the
+            # interrupted speaker's.  No stale "working" state survives a
+            # new human instruction.
+            dao.clear_activity(self.conn, room_id)
             cleared = scheduler.clear_queue(self.conn, room_id)
             if cleared:
                 self._log(
@@ -765,6 +829,9 @@ class Broker:
     ) -> dict:
         room_id = room.room_id
         turn = self._acquire_floor(room, actor)
+        # A committed response is a clean boundary: stop displaying the
+        # transient work note before another participant can act on it.
+        dao.clear_activity(self.conn, room_id, actor.participant_id)
 
         envelope = self._append_message(
             room_id,
@@ -891,6 +958,7 @@ class Broker:
                 response_status=ResponseStatus.DECLINED.value,
                 task_id=active_turn.task_id if holds_floor and active_turn else None,
             ).validate()
+            dao.clear_activity(self.conn, room_id, actor.participant_id)
             envelope = self._append_message(
                 room_id,
                 actor,
@@ -1334,6 +1402,7 @@ class Broker:
             if room.is_stopped:
                 raise StateError("room is stopped")
             dao.update_room(self.conn, room_id, status=RoomStatus.PAUSED.value)
+            dao.clear_activity(self.conn, room_id)
             self._log(
                 room_id,
                 ev.ROOM_PAUSED,
@@ -1375,6 +1444,7 @@ class Broker:
                     queue_status=QueueStatus.CANCELLED,
                 )
             scheduler.clear_queue(self.conn, room_id)
+            dao.clear_activity(self.conn, room_id)
             dao.cancel_open_tasks(self.conn, room_id)
             # Ending the room ends every outstanding grant to enter it.
             revoked = dao.revoke_live_invites(self.conn, room_id, "room_stopped")

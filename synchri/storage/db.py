@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 #: How long a writer waits for a competing writer before giving up.

@@ -7,6 +7,8 @@
   --bg:#fbfbfa; --panel:#fff; --line:#e4e2dd; --ink:#1c1b19; --dim:#6b6862;
   --accent:#2f6f4f; --accent-soft:#e8f2ec; --warn:#8a5a00; --warn-soft:#fdf3e0;
   --bad:#a3352a; --bad-soft:#fbeceb; --radius:10px;
+  --sans:"SF Pro Text","Avenir Next",Inter,ui-sans-serif,system-ui,sans-serif;
+  --mono:"SF Mono",Berkeley Mono,JetBrains Mono,ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#16171a; --panel:#1e2024; --line:#2f3237; --ink:#e9e8e4; --dim:#9b9892;
@@ -15,7 +17,7 @@
 }}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  font:15px/1.6 var(--sans)}
 h1,h2,h3{margin:0;font-weight:640;letter-spacing:-.01em}
 button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);
   background:var(--panel);color:var(--ink);padding:.5rem .9rem}
@@ -25,9 +27,9 @@ button.primary:disabled{opacity:.45;cursor:not-allowed}
 button.ghost{background:none;border-color:transparent;color:var(--dim);padding:.35rem .6rem}
 input,textarea,select{font:inherit;width:100%;padding:.55rem .7rem;border-radius:8px;
   border:1px solid var(--line);background:var(--panel);color:var(--ink)}
-textarea{min-height:14rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+textarea{min-height:14rem;resize:vertical;font-family:var(--mono);
   font-size:13.5px}
-code,pre,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+code,pre,.mono{font-family:var(--mono);font-size:13px}
 pre{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
   border-radius:var(--radius);padding:1rem;margin:0}
 a{color:var(--accent)}
@@ -78,24 +80,20 @@ header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;ali
 .quick textarea{min-height:7rem}
 .agent-card{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--panel)}
 .agent-card pre{margin-top:.75rem;white-space:pre-wrap;word-break:break-word}
-/* focused session view */
-.session-head{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;margin-bottom:1.1rem}
-.session-head h2{font-size:21px}
-.session-meta{display:flex;align-items:center;gap:.65rem;color:var(--dim);font-size:13px;white-space:nowrap}
-.session-layout{display:grid;grid-template-columns:minmax(0,1fr) 17rem;gap:1rem;align-items:start}
-.conversation-shell{min-width:0}.conversation-shell .card{min-height:34rem}
-.conversation-feed{padding:1.1rem 1.25rem}.conversation-feed .msg{padding:.85rem 0}
-.chat-compose{display:flex;gap:.6rem;margin-top:1rem}.chat-compose input{min-width:0}
-.handoff{margin:.15rem 0 .7rem;font-size:11px;font-weight:700;letter-spacing:.07em;color:var(--accent)}
-.response-state{margin-top:.42rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
-.side{position:sticky;top:5.25rem}.side-card{padding:1rem}.side-card>*+*{margin-top:.75rem}
-.side-line{display:flex;justify-content:space-between;gap:.75rem;font-size:13px}.side-line b{font-weight:650}
-.team-line{display:flex;align-items:center;justify-content:space-between;gap:.6rem;font-size:13px}.presence{display:inline-flex;align-items:center;gap:.42rem}.presence i{width:.52rem;height:.52rem;border-radius:50%;background:var(--line);display:inline-block}.presence i.live{background:var(--accent)}
-.detail-summary{cursor:pointer;font-weight:600;font-size:13px}.details-panel{margin-top:.75rem}
-.detail-tabs{display:flex;flex-wrap:wrap;gap:.25rem;margin:.7rem 0}.detail-tabs button{font-size:12px;padding:.3rem .45rem}
-.detail-tabs button.on{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
-.mini-stats{display:grid;grid-template-columns:1fr 1fr;gap:.45rem}.mini-stat{font-size:12px;color:var(--dim)}.mini-stat b{display:block;color:var(--ink);font-size:14px;margin-top:.1rem}
-@media(max-width:760px){.session-layout{grid-template-columns:1fr}.side{position:static}.conversation-shell .card{min-height:24rem}.session-head{align-items:flex-start}.session-meta{flex-wrap:wrap;justify-content:flex-end}}
+/* focused session view: chat first, tools tucked into one quiet left rail */
+.session-layout{display:grid;grid-template-columns:13.5rem minmax(0,1fr);gap:0;min-height:calc(100vh - 8.5rem);border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}
+.session-rail{padding:1.1rem .8rem;border-right:1px solid var(--line);background:#fafaf8;display:flex;flex-direction:column;gap:1.1rem}
+.rail-kicker{font-size:11px;font-weight:700;letter-spacing:.09em;color:var(--dim);text-transform:uppercase}.rail-title{font-size:15px;font-weight:680;line-height:1.3}.rail-status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:.4rem}.rail-status i{width:.45rem;height:.45rem;border-radius:50%;background:var(--line);display:inline-block}.rail-status i.live{background:var(--accent)}
+.rail-clock{font-size:12px;color:var(--dim);margin-top:-.6rem}.rail-nav{display:grid;gap:.15rem}.rail-nav button{text-align:left;border:0;background:transparent;padding:.48rem .55rem;border-radius:6px;color:var(--dim);font-size:13px}.rail-nav button:hover{background:var(--bg);color:var(--ink)}.rail-nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
+.rail-team{border-top:1px solid var(--line);padding-top:.85rem;margin-top:auto}.team-line{display:flex;align-items:center;justify-content:space-between;gap:.45rem;font-size:12px;padding:.16rem 0}.presence{display:inline-flex;align-items:center;gap:.42rem;min-width:0}.presence i{width:.46rem;height:.46rem;border-radius:50%;background:var(--line);display:inline-block;flex:none}.presence i.live{background:var(--accent)}
+.rail-controls{display:flex;gap:.4rem;border-top:1px solid var(--line);padding-top:.85rem}.rail-controls button{font-size:12px;padding:.35rem .5rem}
+.conversation-shell{min-width:0;display:flex;flex-direction:column;background:var(--panel)}.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.1rem 1.3rem .9rem;border-bottom:1px solid var(--line)}.chat-title{font-size:17px;font-weight:680}.chat-subtitle{font-size:12px;color:var(--dim);margin-top:.1rem}.chat-time{font-size:12px;color:var(--dim);white-space:nowrap}
+.conversation-feed{padding:.35rem 1.3rem 1rem;min-height:31rem}.conversation-feed .msg{padding:1rem 0;border-bottom:0;max-width:48rem}.conversation-feed .msg .who{font-size:11px;letter-spacing:.075em;font-weight:750;color:var(--dim)}.conversation-feed .msg .body{white-space:normal;margin-top:.28rem;line-height:1.58}.msg.you .who{color:var(--accent)}.msg.system .body{color:var(--dim);font-size:13px}.handoff{margin:.52rem 0 0;font-size:10px;font-weight:750;letter-spacing:.08em;color:var(--accent)}.response-state{margin-top:.45rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
+.live-work{margin:.7rem 0 .25rem;padding:.75rem .85rem;border:1px solid var(--accent-soft);border-radius:8px;background:#f7fbf8;max-width:48rem}.live-work-label{font-size:10px;font-weight:750;letter-spacing:.09em;color:var(--accent);margin-bottom:.35rem}.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.55rem;align-items:baseline;font-size:13px;padding:.12rem 0}.live-note b{font-size:11px;letter-spacing:.06em}.live-note .dot{color:var(--accent)}
+.rich{max-width:48rem}.rich h3,.rich h4{font-size:14px;margin:.65rem 0 .2rem}.rich h4{font-size:13px}.rich p{margin:.45rem 0}.rich .rich-list{margin:.42rem 0;padding-left:1.1rem}.rich .rich-list div{margin:.16rem 0}.rich code{font-size:.88em;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:.1rem .28rem}.rich .rich-code{margin:.65rem 0;padding:.75rem .85rem;border:1px solid var(--line);background:#f7f7f5;border-radius:7px;overflow:auto;line-height:1.5}.rich .rich-code code{padding:0;border:0;background:transparent}.rich a{color:var(--accent);text-decoration-thickness:1px}.live-note .rich{display:inline}.live-note .rich p{display:inline;margin:0}.live-note .rich .rich-code{display:block}
+.chat-compose{display:flex;gap:.55rem;margin:1.15rem 0 0;padding-top:1rem;border-top:1px solid var(--line);max-width:48rem}.chat-compose input{min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:.55rem .05rem;background:transparent}.chat-compose input:focus{outline:none;border-color:var(--accent)}.chat-compose button{padding:.45rem .8rem}
+.details-panel{margin:0;padding:1rem 1.3rem 1.5rem;border-top:1px solid var(--line);background:#fcfcfb}.detail-heading{font-size:11px;letter-spacing:.08em;color:var(--dim);font-weight:750;margin-bottom:.7rem}
+@media(max-width:760px){.session-layout{grid-template-columns:1fr;border-radius:0;border-left:0;border-right:0}.session-rail{border-right:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:.6rem}.rail-nav{grid-column:1/-1;display:flex;overflow:auto}.rail-nav button{white-space:nowrap}.rail-team,.rail-controls{display:none}.conversation-feed{min-height:24rem;padding-left:1rem;padding-right:1rem}.chat-header{padding-left:1rem;padding-right:1rem}}
 .msg{border-bottom:1px solid var(--line);padding:.7rem 0}
 .msg:last-child{border-bottom:none}
 .msg .who{font-weight:640}
@@ -122,6 +120,31 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)
 const TOKEN = "__SYNCHRI_TOKEN__";
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+/* A deliberately small, safe Markdown renderer. Content is escaped first, so
+   messages can be pleasant to scan without turning room text into executable
+   HTML. It supports the code and structure agents actually use in reviews. */
+function rich(value) {
+  const blocks = [];
+  let text = esc(value);
+  text = text.replace(/```([A-Za-z0-9_+-]*)?\n([\s\S]*?)```/g, (_, lang, code) => {
+    const label = lang ? ` data-language="${esc(lang)}"` : "";
+    blocks.push(`<pre class="rich-code"${label}><code>${code}</code></pre>`);
+    return `@@SYNCHRI_BLOCK_${blocks.length - 1}@@`;
+  });
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, label, url) => `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`);
+  text = text.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  return `<div class="rich">${text.split("\n").map(line => {
+    const block = line.match(/^@@SYNCHRI_BLOCK_(\d+)@@$/);
+    if (block) return blocks[Number(block[1])];
+    if (/^###\s+/.test(line)) return `<h4>${line.replace(/^###\s+/, "")}</h4>`;
+    if (/^##\s+/.test(line)) return `<h3>${line.replace(/^##\s+/, "")}</h3>`;
+    if (/^[-*]\s+/.test(line)) return `<div class="rich-list">${line.replace(/^[-*]\s+/, "• ")}</div>`;
+    return line ? `<p>${line}</p>` : "";
+  }).join("")}</div>`;
+}
 
 async function api(path, body) {
   const res = await fetch("/api/" + path, {
@@ -143,7 +166,7 @@ function flash(message) {
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
-            tab:"gates", dash:null, repos:null, es:null, quick:null, launch:null,
+            tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
             agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null };
 const app = () => document.getElementById("app");
 
@@ -643,7 +666,7 @@ function stepReview() {
 async function openSession(id) {
   S.view = "session"; S.session = id;
   S.dash = await api("dashboard?session=" + encodeURIComponent(id));
-  if (S.dash.session.status === "awaiting_ack") S.tab = "contract";
+  S.tab = S.dash.session.status === "awaiting_ack" ? "contract" : "conversation";
   renderSession();
   listen();
 }
@@ -707,34 +730,28 @@ function renderSession() {
   const d = S.dash, s = d.session, g = d.gates.summary;
   const working = s.status === "active";
   const current = d.current_actor || (working ? "Waiting for the next turn" : s.status.replace("_", " "));
+  const activeNotes = new Set((d.activities || []).map(note => note.name));
   app().innerHTML = "";
-  app().append($(`<div class="session-head"><div><h2>Synchri session</h2>
-    <div class="small muted">${esc(s.name)} · ${esc(s.repository.name)}</div></div>
-    <div class="session-meta"><span id="timebox" class="mono">${esc(timeboxText(s.deadline))}</span></div></div>`));
-
   const team = s.participants.map(p => {
     const active = p.name === d.current_actor;
     return `<div class="team-line"><span class="presence"><i class="${active ? "live" : ""}"></i>${esc(p.name)}</span>
-      <span class="muted small">${active ? "working" : "waiting"}</span></div>`;
+      <span class="muted small">${activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting")}</span></div>`;
   }).join("");
-  const layout = $(`<div class="session-layout"><main class="conversation-shell">
-      <div id="conversation-panel" class="card conversation-feed"><span class="muted small">Loading conversation…</span></div>
-    </main><aside class="side"><div class="card side-card">
-      <div class="side-line"><span>Now</span><b>${esc(current)}</b></div>
-      <div><div class="small muted" style="margin-bottom:.45rem">TEAM</div>${team}</div>
-      <details><summary class="detail-summary">Session details</summary>
-        <div class="mini-stats" style="margin-top:.75rem">
-          <div class="mini-stat">Gates<b>${esc(`${g.satisfied}/${g.required}`)}</b></div>
-          <div class="mini-stat">Tests<b>${esc(d.tests ? `${d.tests.passed} passed` : "—")}</b></div>
-          <div class="mini-stat">Changes<b>${esc(`${d.changes.files_changed} files`)}</b></div>
-          <div class="mini-stat">Commits<b>${esc(d.changes.commits)}</b></div>
-        </div>
-        <div class="row" style="margin-top:.75rem"><button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>
-          <button id="c-stop">Stop</button></div>
-        <div class="detail-tabs">${DETAIL_TABS.map(tab =>
-          `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab[0].toUpperCase()+tab.slice(1)}</button>`
-        ).join("")}</div><div id="detail-panel" class="details-panel hide"></div>
-      </details></div></aside></div>`);
+  const nav = ["conversation", ...DETAIL_TABS];
+  const layout = $(`<div class="session-layout"><aside class="session-rail">
+      <div><div class="rail-kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
+      <div class="rail-status"><i class="${working ? "live" : ""}"></i>${esc(current)}</div>
+      <div id="timebox" class="rail-clock mono">${esc(timeboxText(s.deadline))}</div>
+      <nav class="rail-nav" aria-label="Session tools">${nav.map(tab =>
+        `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
+      ).join("")}</nav>
+      <div class="rail-team"><div class="rail-kicker" style="margin-bottom:.35rem">Team</div>${team}</div>
+      <div class="rail-controls"><button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button><button id="c-stop">Stop</button></div>
+    </aside><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
+      <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.repository.branch || "")}</div></div>
+      <div class="chat-time">${esc(g.satisfied + "/" + g.required)} gates verified</div></div>
+      <div id="conversation-panel" class="conversation-feed"><span class="muted small">Loading conversation…</span></div>
+      <section id="detail-panel" class="details-panel hide"></section></main></div>`);
   app().append(layout);
   document.getElementById("c-pause").onclick = guard(async () => {
     S.dash = await api("control", { session: S.session,
@@ -743,13 +760,16 @@ function renderSession() {
     if (!confirm("Stop this session? Agents stop immediately. The worktree and all work stay.")) return;
     S.dash = await api("control", { session: S.session, action: "stop" }); renderSession(); });
   layout.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => {
-    S.tab = button.dataset.tab; const panel = document.getElementById("detail-panel");
-    panel.classList.remove("hide"); panel.innerHTML = `<span class="muted small">Loading…</span>`;
-    layout.querySelectorAll("[data-tab]").forEach(item => item.classList.toggle("on", item === button));
-    paint(S.tab, panel).catch(error => panel.innerHTML = `<span class="muted">${esc(error.message)}</span>`);
+    S.tab = button.dataset.tab; renderSession();
   });
   paint("conversation", document.getElementById("conversation-panel"))
     .catch(error => document.getElementById("conversation-panel").innerHTML = `<span class="muted">${esc(error.message)}</span>`);
+  if (S.tab !== "conversation") {
+    const panel = document.getElementById("detail-panel");
+    panel.classList.remove("hide");
+    panel.innerHTML = `<div class="detail-heading">${esc(S.tab.toUpperCase())}</div><span class="muted small">Loading…</span>`;
+    paint(S.tab, panel).catch(error => panel.innerHTML = `<span class="muted">${esc(error.message)}</span>`);
+  }
   startClock(s.deadline);
 }
 
@@ -758,17 +778,23 @@ async function paint(tab, el) {
   const d = S.dash;
   if (tab === "conversation") {
     const r = await api("conversation" + q);
-    el.innerHTML = r.messages.length ? r.messages.map(m => {
+    const activities = d.activities || [];
+    const liveWork = activities.length ? `<section class="live-work" aria-live="polite">
+      <div class="live-work-label">LIVE WORK</div>${activities.map(note =>
+        `<div class="live-note"><span class="dot">●</span><b>${esc(String(note.name).toUpperCase())}</b><div>${rich(note.summary)}</div></div>`
+      ).join("")}</section>` : "";
+    const messages = r.messages.length ? r.messages.map(m => {
       const speaker = m.metadata?.source === "session_activation" ? "SYNCHRI"
         : (m.sender === "human" ? "YOU" : String(m.sender).toUpperCase());
       const responseState = m.message_type === "response"
         ? `${String(m.response_status || "complete").toUpperCase()} RESPONSE` : "";
-      return `<div class="msg"><div class="who">${esc(speaker)}</div>
-        <div class="body">${esc(m.content)}</div>
+      const kind = speaker === "SYNCHRI" ? "system" : (speaker === "YOU" ? "you" : "");
+      return `<div class="msg ${kind}"><div class="who">${esc(speaker)}</div>
+        <div class="body">${rich(m.content)}</div>
         ${responseState ? `<div class="response-state">${esc(responseState)}</div>` : ""}
         ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}</div>`;
-    }).join("")
-      : `<span class="muted">Nothing said yet.</span>`;
+    }).join("") : `<span class="muted">Nothing said yet.</span>`;
+    el.innerHTML = liveWork + messages;
     const send = $(`<div class="chat-compose">
       <input id="mm" placeholder="Give the team direction — the builder takes it first">
       <button class="primary" id="ms">Send</button></div>`);

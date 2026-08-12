@@ -318,6 +318,10 @@ class Api:
                 f"--session {record.session_id}"
             )
             wait_command = f"synchri wait --as {shlex.quote(plan.name)}"
+            activity_command = (
+                f"synchri activity --as {shlex.quote(plan.name)} "
+                "-m \"Inspecting the task and repository.\""
+            )
             setup_prompt = "\n".join(
                 [
                     f"Join the Synchri collaboration as {plan.name} ({plan_view['role_label']}).",
@@ -329,8 +333,15 @@ class Api:
                     f"   {acknowledge_command}",
                     "4. Stay available for your first turn:",
                     f"   {wait_command}",
+                    "While wait is blocking, do nothing and send no status updates. The Primary "
+                    "Builder is started automatically; Synchri will hand you their completed "
+                    "response when it is your turn. Do not repeatedly say that you are waiting.",
                     "When wait returns, act on the task immediately: read the room briefing, "
-                    "work in the authorized worktree, report concrete progress, then hand off. "
+                    "then publish one short public work note for the live UI:",
+                    f"   {activity_command}",
+                    "Update that note only at meaningful milestones. It is not a response, does "
+                    "not move the queue, and must never contain private reasoning or a handoff. "
+                    "Work in the authorized worktree, then send one completed response and hand off. "
                     "The session activation task starts the Primary Builder automatically; do not "
                     "wait for the human to say 'begin'.",
                 ]

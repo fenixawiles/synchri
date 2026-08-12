@@ -256,6 +256,8 @@ def test_quick_start_returns_paste_ready_agent_setup_and_live_arrival_state(ui, 
     assert launch["agents"][0]["join_command"].startswith("cd ")
     assert "synchri join " in launch["agents"][0]["setup_prompt"]
     assert f"synchri session contract --session {session_id}" in launch["agents"][0]["setup_prompt"]
+    assert "synchri activity --as" in launch["agents"][0]["setup_prompt"]
+    assert "Do not repeatedly say that you are waiting." in launch["agents"][0]["setup_prompt"]
 
     for agent in launch["agents"]:
         token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]

@@ -44,7 +44,8 @@ class Fingerprint:
     """
 
     sessions: tuple
-    room_seq: int
+    room_seq: tuple[int, str]
+    activities: tuple
     drafts: tuple
 
     @classmethod
@@ -53,7 +54,8 @@ class Fingerprint:
         sessions = tuple(
             (r.session_id, r.status, r.updated_at, r.contract_revision) for r in records
         )
-        room_seq = 0
+        room_seq = (0, "")
+        activities: tuple = ()
         if session_id:
             try:
                 record = manager.get(session_id, sweep=False)
@@ -61,10 +63,18 @@ class Fingerprint:
                 record = None
             if record and record.room_id:
                 room = dao.get_room(manager.conn, record.room_id)
-                room_seq = room.seq if room else 0
+                # Work notes intentionally do not consume a transcript/event
+                # sequence number, but their write still touches updated_at.
+                # Fingerprint both so the UI receives them immediately.
+                room_seq = (room.seq, room.updated_at) if room else (0, "")
+                activities = tuple(
+                    (item["participant_id"], item["summary"], item["expires_at"])
+                    for item in dao.list_live_activities(manager.conn, record.room_id)
+                )
         return cls(
             sessions=sessions,
             room_seq=room_seq,
+            activities=activities,
             drafts=tuple(sorted(drafts_module.versions(manager.conn).items())),
         )
 
@@ -104,6 +114,8 @@ def events(workspace: Workspace, session_id: str | None, *, stop=lambda: False):
                 if current.sessions != previous.sessions:
                     changed.append("sessions")
                 if current.room_seq != previous.room_seq:
+                    changed.append("conversation")
+                if current.activities != previous.activities and "conversation" not in changed:
                     changed.append("conversation")
                 if current.drafts != previous.drafts:
                     changed.append("drafts")

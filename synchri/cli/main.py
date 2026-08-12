@@ -237,6 +237,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_room_actor(passer)
     passer.add_argument("--reason", help="optional short reason, recorded in the transcript")
 
+    activity = command(
+        "activity",
+        "Share a short public work note without sending a response or moving the queue.",
+    )
+    _add_room_actor(activity, actor_flags=("--from", "--as"))
+    activity.add_argument("--message", "-m", dest="summary", help="short public work note")
+    activity.add_argument("--clear", action="store_true", help="remove your current work note")
+    activity.add_argument(
+        "--ttl", type=int, default=900, metavar="SECONDS", help="how long the note stays visible"
+    )
+
     floor = command("request-floor", "Ask for a turn without being addressed.")
     _add_room_actor(floor)
     floor.add_argument("--priority", choices=["queued", "optional"], default="queued")
@@ -803,6 +814,26 @@ def cmd_pass(args: argparse.Namespace, broker: Broker) -> int:
     return _out(args, result, text)
 
 
+def cmd_activity(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    credential = _credential(args, broker, room_id)
+    if args.clear:
+        if args.summary:
+            raise ValidationError("use either --clear or --message, not both")
+        result = broker.clear_activity(room_id, credential=credential)
+        return _out(args, result, "live work note cleared" if result["cleared"] else "no live work note")
+    if not args.summary:
+        raise ValidationError("--message is required unless --clear is supplied")
+    result = broker.publish_activity(
+        room_id,
+        credential=credential,
+        summary=args.summary,
+        ttl_seconds=args.ttl,
+    )
+    activity = result["activity"]
+    return _out(args, result, f"live work note published for {activity['name']}: {activity['summary']}")
+
+
 def cmd_request_floor(args: argparse.Namespace, broker: Broker) -> int:
     room_id = _room(args, broker)
     result = broker.request_floor(
@@ -1045,6 +1076,7 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
     "turn": cmd_turn,
     "wait": cmd_wait,
     "pass": cmd_pass,
+    "activity": cmd_activity,
     "request-floor": cmd_request_floor,
     "run": cmd_run,
     "status": cmd_status,

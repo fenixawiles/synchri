@@ -216,6 +216,24 @@ adds any missing columns listed in `ADDED_COLUMNS`.
 user's durable data. Additive-only keeps that a two-line operation with no migration
 framework. Every added column is nullable for the same reason.
 
+### D13. Live work notes are expiring UI state, not a fourth conversation type
+
+**Decision.** A floor-holding agent may publish one short public work note in
+`agent_activity`. It has a TTL, is scoped to the room and participant, and clears
+when that agent replies, passes, is interrupted, is removed, or the room pauses or
+stops.
+
+**Why.** A human watching a long-running turn needs an honest indication of what is
+happening. But a provider's private reasoning is neither available nor appropriate
+to mirror, and treating partial work as a room response would let the next agent act
+against an unfinished thought. Activity therefore lives inside the SQLite
+orchestration layer, but it never creates a message, consumes a sequence number,
+changes the queue, enters `transcript.jsonl`, or becomes semantic memory.
+
+**Cost.** Agents need to intentionally publish a concise, high-level note. The
+single-terminal conductor supplies an opening note automatically; attached agents
+receive the one-command convention in their setup prompt.
+
 ## 3. Data model
 
 `rooms` carries the authoritative room state, including the `seq` counter, the active
@@ -227,7 +245,8 @@ reserved so a removed agent's name cannot be silently reused.
 enforcing at most one live entry per participant per room — the invariant is a database
 constraint, not just application logic. `turns` records every floor grant and how it
 ended. `tasks` tracks units of work opened by a targeted `task` message. `events` is the
-audit log for transitions that are not messages.
+audit log for transitions that are not messages. `agent_activity` holds only expiring
+public work notes; it is deliberately absent from both the transcript and the ledger.
 
 **`rooms.seq` is a per-room monotonic counter shared by messages and events**, so the
 two streams interleave into one total order. It is incremented with

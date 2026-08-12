@@ -141,6 +141,20 @@ class Conductor:
             # interrupt at any moment, and that is allowed to beat us.
             return {"participant": name, "skipped": status["state"]}
 
+        # Give the local UI an immediate, honest indication that the agent has
+        # started. This is intentionally a separate, expiring work note: the
+        # invocation's stdout remains the one completed room response.
+        try:
+            self.broker.publish_activity(
+                self.room_id,
+                credential=credential,
+                summary="Reading the assigned task and working through the next step.",
+            )
+        except SynchriError:
+            # A human can interrupt between turn inspection and this note. The
+            # post path will re-check room state and report the actual outcome.
+            pass
+
         prompt = self.build_prompt(name, status)
         self.on_event("agent.invoking", {"participant": name, "prompt_chars": len(prompt)})
 
@@ -295,6 +309,8 @@ class Conductor:
                 "--- how to reply ---",
                 "Do the work, then print your reply on stdout. Everything you print becomes",
                 "your message in the room, so do not print progress chatter.",
+                "Synchri has already published a short live work note for this turn. Do not",
+                "put private reasoning or tool-by-tool progress in your reply.",
                 "",
                 "You may end your output with any of these control lines:",
                 "  SYNCHRI-TO: <participant>        address them directly (blocks everyone else)",

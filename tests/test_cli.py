@@ -84,6 +84,22 @@ def test_secret_is_resolved_from_the_session_file(cli, cli_room):
     assert code == 0
 
 
+def test_activity_is_a_live_work_note_not_a_message(cli, cli_room):
+    room_id = cli_room["room_id"]
+    # Give Claude the floor so publishing a note cannot be used to bypass turns.
+    assert cli("--json", "send", "--room", room_id, "--from", "human", "--to", "claude", "-m", "inspect this")[0] == 0
+
+    code, out, _ = cli(
+        "--json", "activity", "--room", room_id, "--as", "claude", "-m", "Inspecting the startup path"
+    )
+
+    assert code == 0
+    assert json.loads(out)["activity"]["summary"] == "Inspecting the startup path"
+    code, out, _ = cli("--json", "read", "--room", room_id, "--as", "human")
+    assert code == 0
+    assert [message["content"] for message in json.loads(out)["messages"]] == ["inspect this"]
+
+
 def test_explicit_bad_secret_beats_the_session_file(cli, cli_room):
     code, _, err = cli(
         "--json", "send", "--room", cli_room["room_id"], "--from", "codex",

@@ -187,6 +187,16 @@ def test_agents_step_has_a_real_save_action_and_footer_navigation():
     assert "if (S.step === \"agents\" && S.agentDraft)" in source
 
 
+def test_every_session_start_routes_to_the_agent_setup_prompts():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "function showLaunch(result)" in source
+    assert "showLaunch(r);" in source
+    assert 'id="setup-agents"' in source
+    assert "openLaunch(S.session)" in source
+
+
 def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
     from synchri.ui.api import Api
 

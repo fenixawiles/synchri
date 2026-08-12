@@ -233,9 +233,7 @@ function renderQuick() {
     q.repo_path = document.getElementById("quick-repo").value.trim();
     q.goal = document.getElementById("quick-goal").value.trim();
     const result = await api("quick-start", q);
-    S.session = result.session.session_id; S.launch = result.launch; S.view = "launch";
-    if (result.clone) S.launch.clone = result.clone;
-    renderLaunch(); listen();
+    showLaunch(result);
   });
 }
 
@@ -251,8 +249,20 @@ function copyText(value) {
 
 async function refreshLaunch() {
   const result = await api("launch?session=" + encodeURIComponent(S.session));
+  showLaunch(result);
+}
+
+function showLaunch(result) {
+  S.session = result.session.session_id;
   S.launch = result.launch;
-  renderLaunch();
+  if (result.clone) S.launch.clone = result.clone;
+  S.view = "launch";
+  renderLaunch(); listen();
+}
+
+async function openLaunch(id) {
+  const result = await api("launch?session=" + encodeURIComponent(id));
+  showLaunch(result);
 }
 
 function renderLaunch() {
@@ -612,7 +622,7 @@ function stepReview() {
   actions.querySelector("#go").onclick = guard(async () => {
     const r = await api("start", { draft: "default",
       save_preset: document.getElementById("pn").value.trim() || undefined });
-    openSession(r.session.session_id);
+    showLaunch(r);
   });
 }
 
@@ -689,10 +699,13 @@ function renderSession() {
 
   if (d.acknowledgments && !d.acknowledgments.all_accepted) {
     const a = d.acknowledgments;
-    app().append($(`<div class="note ${a.conflicts.length?"bad":"warn"}" style="margin-top:1rem">
+    const waiting = $(`<div class="note ${a.conflicts.length?"bad":"warn"}" style="margin-top:1rem">
       <b>Not started yet — the contract needs everyone's agreement.</b>
       ${a.conflicts.map(c=>`<div class="small">CONFLICT · <b>${esc(c.participant)}</b>: ${esc(c.reason)}</div>`).join("")}
-      ${a.waiting.length?`<div class="small">Waiting on ${esc(a.waiting.join(", "))}</div>`:""}</div>`));
+      ${a.waiting.length?`<div class="small">Waiting on ${esc(a.waiting.join(", "))}</div>`:""}
+      <button class="primary" id="setup-agents" style="margin-top:.7rem">Set up agents</button></div>`);
+    waiting.querySelector("#setup-agents").onclick = guard(() => openLaunch(S.session));
+    app().append(waiting);
   }
   for (const b of d.open_blockers.slice(0,4))
     app().append($(`<div class="note bad small" style="margin-top:.5rem">${esc(b)}</div>`));

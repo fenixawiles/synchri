@@ -208,6 +208,15 @@ def test_live_updates_repaint_only_the_chat_surface():
     assert "list.scrollTo({ top: list.scrollHeight, behavior: \"smooth\" })" in source
 
 
+def test_completed_session_is_read_only_and_exposes_its_changelog():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'tab !== "changelog" || s.status === "complete"' in source
+    assert 'd.session.status !== "active"' in source
+    assert "Session complete — the final changelog is available in the rail." in source
+
+
 def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
     from synchri.ui.api import Api
 
@@ -475,6 +484,24 @@ def test_stopping_from_the_ui_ends_the_session(ui, repo):
     call(ui, "/api/control", {"session": session_id, "action": "stop", "reason": "changed my mind"})
     session = call(ui, f"/api/session?session={session_id}")
     assert session["status"] == "stopped" and session["ended_reason"] == "changed my mind"
+
+
+def test_completing_from_the_ui_closes_the_room_and_exposes_the_changelog(ui, repo):
+    session_id = _active(ui, repo)
+    call(ui, "/api/gate", {
+        "session": session_id,
+        "gate_id": "AUTH-01",
+        "status": "pass",
+        "evidence": ["tests/test_auth.py::test_login"],
+        "builder_assessment": "implemented",
+        "reviewer_assessment": "reviewed independently",
+    })
+
+    dashboard = call(ui, "/api/control", {"session": session_id, "action": "complete"})
+    assert dashboard["session"]["status"] == "complete"
+    changelog = call(ui, f"/api/changelog?session={session_id}")
+    assert "# Synchri final changelog" in changelog["markdown"]
+    assert "AUTH-01" in changelog["markdown"]
 
 
 def test_presets_can_be_saved_from_the_wizard(ui, repo):

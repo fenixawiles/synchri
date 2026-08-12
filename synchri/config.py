@@ -71,6 +71,10 @@ class Workspace:
     def transcript_path(self, room_id: str) -> Path:
         return self.room_dir(room_id) / "transcript.jsonl"
 
+    def final_changelog_path(self, room_id: str) -> Path:
+        """The durable completion record for a successfully finished room."""
+        return self.room_dir(room_id) / "final-changelog.md"
+
     def session_path(self, room_id: str, participant_name: str) -> Path:
         from .ids import NAME_PATTERN  # local import to keep module import cheap
 

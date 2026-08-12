@@ -732,7 +732,19 @@ def test_completion_requires_evidence_and_both_sign_offs(manager, repo, agents):
         manager.complete(record.session_id)
 
     manager.update_gate(record.session_id, "AUTH-01", reviewer_assessment="verified independently")
-    assert manager.complete(record.session_id).status == SessionStatus.COMPLETE.value
+    completed = manager.complete(record.session_id)
+    assert completed.status == SessionStatus.COMPLETE.value
+    room = manager.broker.room_status(record.room_id, credential=manager._human_credential(record))
+    assert room["room"]["status"] == "stopped"
+    changelog = manager.final_changelog(record.session_id)
+    assert "# Synchri final changelog" in changelog["markdown"]
+    assert "AUTH-01" in changelog["markdown"]
+    assert changelog["path"] == str(manager.broker.workspace.final_changelog_path(record.room_id))
+    assert manager.broker.workspace.final_changelog_path(record.room_id).stat().st_mode & 0o777 == 0o600
+    event_types = [event["event_type"] for event in manager.broker.events(
+        record.room_id, credential=manager._human_credential(record)
+    )["events"]]
+    assert "session.completed" in event_types
 
 
 def test_unverified_is_not_a_pass(manager, repo, agents):

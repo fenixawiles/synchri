@@ -27,12 +27,14 @@ from enum import Enum
 from pathlib import Path
 
 from ..broker import Broker, Credential
+from ..config import write_private
 from ..models.envelope import MessageDraft
 from ..errors import ConflictError, NotFoundError, StateError, ValidationError
 from ..ids import new_id, utc_now
 from ..protocol import events as ev
 from ..storage import db
 from . import contract as contract_module
+from . import changelog as changelog_module
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
@@ -686,22 +688,99 @@ class SessionManager:
         ]
 
     def complete(self, session_id: str) -> SessionRecord:
-        """Mark the session complete — only on evidence."""
+        """Close a verified session and preserve its final changelog.
+
+        Completion is deliberately unlike ``stop``: it proves every required
+        gate, closes the room so no more work can be accepted, and writes a
+        permanent human-readable delivery record. The state change and room
+        closure share one SQLite transaction; the changelog write is restored
+        if that transaction cannot commit.
+        """
+        changelog_path = None
+        previous_changelog = None
+        wrote_changelog = False
+        try:
+            with db.transaction(self.conn):
+                record = self.get(session_id)
+                if record.is_terminal:
+                    raise StateError(f"session is already {record.status}", code="session_finished")
+                if not record.room_id:
+                    raise StateError("cannot complete a session without a room", code="no_room")
+                gates = self.gates(session_id)
+                if not gates:
+                    raise StateError(
+                        "cannot complete a session with no acceptance gates defined",
+                        code="no_gates",
+                    )
+                report = summarize(gates)
+                if not report["complete"]:
+                    raise StateError(
+                        "cannot complete: " + "; ".join(report["blockers"]),
+                        code="gates_unsatisfied",
+                    )
+
+                completed_at = utc_now()
+                changes = self.changes(session_id)
+                markdown = changelog_module.render(
+                    record,
+                    gates,
+                    changes,
+                    self.last_test_run(session_id),
+                    completed_at=completed_at,
+                )
+                changelog_path = self.broker.workspace.final_changelog_path(record.room_id)
+                previous_changelog = (
+                    changelog_path.read_text(encoding="utf-8") if changelog_path.exists() else None
+                )
+                write_private(changelog_path, markdown)
+                wrote_changelog = True
+
+                # The broker owns terminal room state. Because it shares this
+                # connection, its stop is part of this same BEGIN IMMEDIATE
+                # transaction rather than a best-effort follow-up.
+                self.broker.stop_room(
+                    record.room_id, credential=self._human_credential(record)
+                )
+                metadata = {
+                    **record.metadata,
+                    "final_changelog": {
+                        "path": str(changelog_path),
+                        "completed_at": completed_at,
+                        "head": changes.get("head"),
+                        "commits": changes.get("commits", 0),
+                    },
+                }
+                completed = self._finish(
+                    record,
+                    SessionStatus.COMPLETE,
+                    "all acceptance gates satisfied",
+                    metadata=metadata,
+                    ended_at=completed_at,
+                )
+                self._log(
+                    completed,
+                    ev.SESSION_COMPLETED,
+                    {"final_changelog": str(changelog_path), "commits": changes.get("commits", 0)},
+                )
+        except Exception:
+            if wrote_changelog and changelog_path is not None:
+                if previous_changelog is None:
+                    changelog_path.unlink(missing_ok=True)
+                else:
+                    write_private(changelog_path, previous_changelog)
+            raise
+        return completed
+
+    def final_changelog(self, session_id: str) -> dict:
+        """Return the durable artifact created by a successful completion."""
         record = self.get(session_id)
-        if record.is_terminal:
-            raise StateError(f"session is already {record.status}", code="session_finished")
-        gates = self.gates(session_id)
-        if not gates:
-            raise StateError(
-                "cannot complete a session with no acceptance gates defined",
-                code="no_gates",
-            )
-        report = summarize(gates)
-        if not report["complete"]:
-            raise StateError(
-                "cannot complete: " + "; ".join(report["blockers"]), code="gates_unsatisfied"
-            )
-        return self._finish(record, SessionStatus.COMPLETE, "all acceptance gates satisfied")
+        entry = (record.metadata or {}).get("final_changelog") or {}
+        if record.status != SessionStatus.COMPLETE.value or not entry.get("path"):
+            raise StateError("this session has not completed yet", code="session_not_complete")
+        path = self.broker.workspace.final_changelog_path(record.room_id)
+        if not path.exists():
+            raise StateError("the final changelog is missing", code="changelog_missing")
+        return {"path": str(path), "markdown": path.read_text(encoding="utf-8"), **entry}
 
     def expire(self, session_id: str) -> dict:
         """Compatibility read for callers that used to enforce a deadline.
@@ -731,6 +810,7 @@ class SessionManager:
             "status": record.status,
             "reason_stopped": record.ended_reason,
             "complete": record.status == SessionStatus.COMPLETE.value,
+            "final_changelog": ((record.metadata or {}).get("final_changelog") or {}).get("path"),
             "branch": record.worktree_branch,
             "head": head,
             "worktree": record.worktree_path,
@@ -957,13 +1037,23 @@ class SessionManager:
     # internals
     # ------------------------------------------------------------------
 
-    def _finish(self, record: SessionRecord, status: SessionStatus, reason: str) -> SessionRecord:
-        self._update(
-            record.session_id,
-            status=status.value,
-            ended_at=utc_now(),
-            ended_reason=reason,
-        )
+    def _finish(
+        self,
+        record: SessionRecord,
+        status: SessionStatus,
+        reason: str,
+        *,
+        metadata: dict | None = None,
+        ended_at: str | None = None,
+    ) -> SessionRecord:
+        fields = {
+            "status": status.value,
+            "ended_at": ended_at or utc_now(),
+            "ended_reason": reason,
+        }
+        if metadata is not None:
+            fields["metadata"] = json.dumps(metadata)
+        self._update(record.session_id, **fields)
         self._log(record, ev.SESSION_ENDED, {"status": status.value, "reason": reason})
         return self.get(record.session_id)
 

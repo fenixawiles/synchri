@@ -110,6 +110,11 @@ synchri briefing --as <NAME>
    one-shot command: remain silent while you wait and do not repeatedly announce
    that you are waiting.
 
+   At the true end of a session, the builder and reviewer each send their final
+   evidence-backed assessment into the room. They do not call `stop-room`.
+   The human then uses Synchri's explicit **Complete** action, which closes the
+   room and writes the final changelog.
+
 4. **Pass when you have nothing material to add** — do not send an empty or filler
    message:
    ```bash

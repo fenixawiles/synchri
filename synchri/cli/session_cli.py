@@ -85,7 +85,7 @@ def add_parsers(sub, command) -> None:
         default="show",
         choices=[
             "list", "show", "contract", "ack", "activate", "dashboard",
-            "gates", "stop", "restore", "permissions", "escalate",
+            "gates", "complete", "stop", "restore", "permissions", "escalate",
         ],
     )
     session.add_argument("value", nargs="?", help="participant name for 'ack', gate id for 'gates'")
@@ -516,6 +516,10 @@ def cmd_session(args: argparse.Namespace, broker: Broker) -> int:
         for blocker in report["blockers"]:
             text += f"\n  blocked: {blocker}"
         return _out(args, {"gates": [g.to_dict() for g in gates], "summary": report}, text)
+    if action == "complete":
+        manager.complete(session_id)
+        report = manager.handoff_report(session_id)
+        return _out(args, report, render_handoff(report))
     if action == "stop":
         record = manager.stop(session_id, args.reason or "stopped by the user")
         report = manager.handoff_report(session_id)
@@ -620,6 +624,8 @@ def render_handoff(report: dict) -> str:
     for blocker in report["open_blockers"]:
         lines.append(f"  blocker: {blocker}")
     lines += ["", f"  Recommended next: {report['recommended_next_action']}"]
+    if report.get("final_changelog"):
+        lines.append(f"  Final changelog    {report['final_changelog']}")
     return "\n".join(lines)
 
 

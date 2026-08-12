@@ -186,6 +186,11 @@ Completion requires evidence, not agreement. A gate is PASS only when there are
 tests, commits, or inspectable artifacts backing it, and both the builder and the
 reviewer have signed off. If you cannot verify a gate, mark it UNVERIFIED.
 
+When the final evidence and both assessments are in the room, send one concise
+completion-ready response to the human. Do not stop the room yourself or treat
+an ordinary completed response as the end: the human performs Synchri's explicit
+completion transition, which closes the room and preserves the final changelog.
+
 If a timebox is present, use it as pacing guidance: explore early, implement and
 review in the middle, and stabilise near its end. It is not a stop condition.
 Finish early when the evidence supports completion; if more time is genuinely

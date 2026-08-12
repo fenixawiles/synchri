@@ -58,6 +58,7 @@ class Api:
             ("POST", "ack"): self.acknowledge,
             ("POST", "activate"): self.activate,
             ("GET", "conversation"): self.conversation,
+            ("GET", "changelog"): self.changelog,
             ("POST", "message"): self.message,
             ("GET", "gates"): self.gates,
             ("POST", "gate"): self.update_gate,
@@ -429,6 +430,9 @@ class Api:
             return {"messages": []}
         return self.broker.read(record.room_id, credential=self._human(record))
 
+    def changelog(self, query: dict, body: dict) -> dict:
+        return self.manager.final_changelog(self._session_id(query))
+
     def message(self, query: dict, body: dict) -> dict:
         """Put a human reply back in front of the agent that needs it.
 
@@ -537,7 +541,7 @@ class Api:
         )
 
     def control(self, query: dict, body: dict) -> dict:
-        """Pause, resume, stop, escalate — the human's controls."""
+        """Pause, resume, complete, stop, or reconfigure — the human's controls."""
         session_id = self._session_id(query, body)
         record = self.manager.get(session_id)
         action = body.get("action")
@@ -551,6 +555,8 @@ class Api:
             if record.room_id:
                 self.broker.stop_room(record.room_id, credential=credential)
             self.manager.stop(session_id, body.get("reason") or "stopped by the user")
+        elif action == "complete":
+            self.manager.complete(session_id)
         elif action == "remove":
             self.broker.remove_participant(
                 record.room_id, body["participant"], credential=credential

@@ -715,7 +715,7 @@ function listen() {
   es.onerror = () => { /* EventSource retries on its own */ };
 }
 
-const DETAIL_TABS = ["gates","tests","changes","commits","worktree","memory","raw","contract"];
+const DETAIL_TABS = ["gates","tests","changes","commits","worktree","memory","raw","contract","changelog"];
 
 function timeboxText(deadline) {
   if (!deadline?.ends_at) return "Open-ended";
@@ -752,7 +752,7 @@ function renderSession() {
     return `<div class="team-line" data-member="${esc(p.name)}"><span class="presence"><i class="${active ? "live" : ""}"></i>${esc(p.name)}</span>
       <span class="muted small" data-team-state>${activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting")}</span></div>`;
   }).join("");
-  const nav = ["conversation", ...DETAIL_TABS];
+  const nav = ["conversation", ...DETAIL_TABS.filter(tab => tab !== "changelog" || s.status === "complete")];
   const layout = $(`<div class="session-layout"><aside class="session-rail">
       <div><div class="rail-kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
       <div class="rail-status"><i id="rail-current-dot" class="${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
@@ -761,17 +761,23 @@ function renderSession() {
         `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
       ).join("")}</nav>
       <div class="rail-team"><div class="rail-kicker" style="margin-bottom:.35rem">Team</div>${team}</div>
-      <div class="rail-controls"><button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button><button id="c-stop">Stop</button></div>
+      <div class="rail-controls">${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${s.status === "active" ? `<button id="c-complete">Complete</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button id="c-stop">Stop</button>` : ""}</div>
     </aside><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
       <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.repository.branch || "")}</div></div>
       <div class="chat-time">${esc(g.satisfied + "/" + g.required)} gates verified</div></div>
       <div id="conversation-panel" class="conversation-feed"><span class="muted small">Loading conversation…</span></div>
       <section id="detail-panel" class="details-panel hide"></section></main></div>`);
   app().append(layout);
-  document.getElementById("c-pause").onclick = guard(async () => {
+  const pause = document.getElementById("c-pause");
+  if (pause) pause.onclick = guard(async () => {
     S.dash = await api("control", { session: S.session,
       action: s.status === "active" ? "pause" : "resume" }); renderSession(); });
-  document.getElementById("c-stop").onclick = guard(async () => {
+  const complete = document.getElementById("c-complete");
+  if (complete) complete.onclick = guard(async () => {
+    if (!confirm("Complete this session? Synchri will verify its gates, close the room, and create the final changelog.")) return;
+    S.dash = await api("control", { session: S.session, action: "complete" }); renderSession(); });
+  const stop = document.getElementById("c-stop");
+  if (stop) stop.onclick = guard(async () => {
     if (!confirm("Stop this session? Agents stop immediately. The worktree and all work stay.")) return;
     S.dash = await api("control", { session: S.session, action: "stop" }); renderSession(); });
   layout.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => {
@@ -835,6 +841,15 @@ async function paint(tab, el) {
         ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}</div>`;
     }).join("") : `<span class="muted">Nothing said yet.</span>`;
     el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork;
+    const list = el.querySelector(".message-list");
+    requestAnimationFrame(() => list.scrollTo({ top: list.scrollHeight, behavior: "smooth" }));
+    if (d.session.status !== "active") {
+      const closed = d.session.status === "complete"
+        ? "Session complete — the final changelog is available in the rail."
+        : `Session ${d.session.status.replace("_", " ")} — messaging is closed.`;
+      el.append($(`<div class="chat-compose muted small">${esc(closed)}</div>`));
+      return;
+    }
     const send = $(`<div class="chat-compose">
       <input id="mm" placeholder="Message the agents">
       <button class="primary" id="ms">Send</button></div>`);
@@ -851,8 +866,9 @@ async function paint(tab, el) {
       await api("message", { session: S.session, content: v, interrupt: true });
       paint("conversation", el);
     });
-    const list = el.querySelector(".message-list");
-    requestAnimationFrame(() => list.scrollTo({ top: list.scrollHeight, behavior: "smooth" }));
+  } else if (tab === "changelog") {
+    const r = await api("changelog" + q);
+    el.innerHTML = `<div class="rich">${rich(r.markdown)}</div>`;
   } else if (tab === "gates") {
     const r = await api("gates" + q);
     el.innerHTML = r.gates.length ? `<table><thead><tr><th>Gate</th><th>Status</th><th>Description</th>

@@ -110,7 +110,13 @@ AUTH-01  [PASS]  users can log in
 ```
 
 `complete()` refuses with the concrete blocker until every required gate is
-satisfied.
+satisfied. Successful completion is a distinct terminal transition: it closes
+the room, marks the session `complete`, and writes `final-changelog.md` beside
+the room's transcript and memory.
+
+```bash
+synchri session complete --session <SESSION-ID>
+```
 
 ## Timeboxes
 

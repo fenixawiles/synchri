@@ -95,7 +95,10 @@ class Api:
         }
 
     def repositories(self, query: dict, body: dict) -> dict:
-        return discovery.repositories(include_github=query.get("github") != "0")
+        return discovery.repositories(
+            include_github=query.get("github") != "0",
+            include_local=query.get("local") != "0",
+        )
 
     @staticmethod
     def _valid_repository(path: str | None) -> str | None:

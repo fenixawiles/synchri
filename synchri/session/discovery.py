@@ -199,7 +199,7 @@ def github_available() -> bool:
     return completed.returncode == 0
 
 
-def github_repositories(limit: int = 50) -> list[dict]:
+def github_repositories(limit: int = 50, *, local: list[dict] | None = None) -> list[dict]:
     """Repositories the user's own `gh` can see. Empty if unavailable."""
     try:
         completed = subprocess.run(
@@ -231,31 +231,31 @@ def github_repositories(limit: int = 50) -> list[dict]:
             "updated_at": item.get("updatedAt"),
             "private": item.get("isPrivate", False),
             # A GitHub entry is only usable once it exists on disk.
-            "local_path": _matching_local_clone(item.get("nameWithOwner") or ""),
+            "local_path": _matching_local_clone(item.get("nameWithOwner") or "", local=local),
         }
         for item in raw
     ]
 
 
-def _matching_local_clone(full_name: str) -> str | None:
+def _matching_local_clone(full_name: str, *, local: list[dict] | None = None) -> str | None:
     """Is this GitHub repo already cloned somewhere we can see?"""
     if not full_name:
         return None
     tail = full_name.split("/")[-1]
-    for repo in local_repositories():
+    for repo in (local if local is not None else local_repositories()):
         remote = (repo.get("remote") or "").lower()
         if full_name.lower() in remote or (repo["name"] == tail and remote):
             return repo["path"]
     return None
 
 
-def repositories(include_github: bool = True) -> dict:
+def repositories(include_github: bool = True, *, include_local: bool = True) -> dict:
     """Everything the repository step can offer, in one call."""
-    local = local_repositories()
+    local = local_repositories() if include_local else []
     github: list[dict] = []
     available = include_github and github_available()
     if available:
-        github = github_repositories()
+        github = github_repositories(local=local)
     return {
         "local": local,
         "github": github,

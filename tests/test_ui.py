@@ -166,6 +166,27 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     assert boot["sessions"] == [] and "workspace" in boot
 
 
+def test_local_repositories_do_not_wait_for_github(ui, monkeypatch):
+    from synchri.session import discovery
+
+    monkeypatch.setattr(discovery, "local_repositories", lambda: [{"name": "fast", "path": "/fast"}])
+    monkeypatch.setattr(
+        discovery, "github_available", lambda: pytest.fail("GitHub lookup ran on the local pass")
+    )
+    result = call(ui, "/api/repositories?github=0")
+    assert result["local"] == [{"name": "fast", "path": "/fast"}]
+    assert result["github"] == [] and result["github_available"] is False
+
+
+def test_agents_step_has_a_real_save_action_and_footer_navigation():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "actions.append(add, save);" in source
+    assert "box.append($(`<div class=\"row\"></div>`)).lastChild" not in source
+    assert "if (S.step === \"agents\" && S.agentDraft)" in source
+
+
 def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
     from synchri.ui.api import Api
 

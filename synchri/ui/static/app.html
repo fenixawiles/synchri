@@ -135,7 +135,7 @@ const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flas
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
-            agentDraft:null };
+            agentDraft:null, githubReposRequest:null, githubReposLoading:false };
 const app = () => document.getElementById("app");
 
 /* ------------------------------------------------------------------ home */
@@ -394,8 +394,21 @@ async function stepRepo() {
   });
   const loading = $(`<div class="muted small">Looking for repositories…</div>`);
   box.append(loading);
-  S.repos = S.repos || await api("repositories");
+  // A GitHub lookup can take seconds (or its full timeout while offline).  Do
+  // not make the local chooser wait for a network request the user may not
+  // even need.  It lands first, then GitHub fills in when it is available.
+  if (!S.repos) S.repos = await api("repositories?github=0");
   loading.remove();
+  if (!S.githubReposRequest) {
+    S.githubReposLoading = true;
+    S.githubReposRequest = api("repositories").then(repos => {
+      S.repos = repos; S.githubReposLoading = false;
+      if (S.view === "wizard" && S.step === "repository") renderWizard();
+    }).catch(() => {
+      S.repos = {...S.repos, github_available:false}; S.githubReposLoading = false;
+      if (S.view === "wizard" && S.step === "repository") renderWizard();
+    });
+  }
   if (S.repos.local.length) {
     box.append($(`<h3 class="small muted" style="margin-top:.5rem">ON THIS MACHINE</h3>`));
     for (const r of S.repos.local.slice(0, 12)) {
@@ -418,6 +431,8 @@ async function stepRepo() {
       if (usable) b.onclick = guard(() => patch({ repo_path: r.local_path }));
       box.append(b);
     }
+  } else if (S.githubReposLoading) {
+    box.append($(`<div class="small muted">Loading your GitHub repositories…</div>`));
   } else if (!S.repos.github_available) {
     box.append($(`<div class="small muted">GitHub listing needs the <code>gh</code> CLI signed in.
       Local repositories work without it.</div>`));
@@ -482,7 +497,9 @@ function stepAgents() {
     S.draft = await api("draft", { draft: "default", agents: agents.filter(a => a.name.trim()) });
     renderWizard();
   });
-  box.append($(`<div class="row"></div>`)).lastChild.append(add, save);
+  const actions = $(`<div class="row" style="margin-top:.4rem"></div>`);
+  actions.append(add, save);
+  box.append(actions);
 }
 
 function stepPerms() {

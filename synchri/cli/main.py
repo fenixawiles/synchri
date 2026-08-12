@@ -32,7 +32,7 @@ from ..runner.conductor import (
     STOP_ROOM_STOPPED,
     STOP_UNMANAGED_SPEAKER,
 )
-from . import render, session
+from . import render, session, session_cli
 
 #: ``wait`` exit codes, so a shell loop can branch without parsing output.
 WAIT_EXIT_CODES = {
@@ -84,8 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     def command(name: str, help_text: str, **kwargs) -> argparse.ArgumentParser:
         return sub.add_parser(name, help=help_text, description=help_text, **kwargs)
 
+    # -- session startup ------------------------------------------------
+    session_cli.add_parsers(sub, command)
+
     # -- lifecycle ------------------------------------------------------
-    command("start", "Initialize the local workspace and show its state.")
+    command("workspace", "Initialize the local workspace and show its state.")
 
     create = command("create-room", "Create a room and its owning human participant.")
     create.add_argument("--name", required=True, help="human-readable room name")
@@ -343,6 +346,11 @@ def _add_room_reader(parser: argparse.ArgumentParser) -> None:
 
 EPILOG = """\
 typical flow
+  synchri start                       the session wizard: mode, repo, worktree,
+                                      agents, permissions, spec, deadline, contract
+  synchri session dashboard           mission control for a running session
+
+room-level commands (a session drives these for you)
   synchri create-room --name "PR 89 review" --agents claude,codex
   # paste the printed command into each agent's session; each is single-use
   synchri join <invite-token> --name claude
@@ -987,7 +995,10 @@ def cmd_config(args: argparse.Namespace, broker: Broker) -> int:
 
 
 HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
-    "start": cmd_start,
+    "start": session_cli.cmd_start,
+    "session": session_cli.cmd_session,
+    "preset": session_cli.cmd_preset,
+    "workspace": cmd_start,
     "create-room": cmd_create_room,
     "rooms": cmd_rooms,
     "join": cmd_join,

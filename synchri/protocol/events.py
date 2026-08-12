@@ -41,4 +41,14 @@ AUTONOMY_LIMIT_REACHED = "autonomy.limit_reached"
 
 MEMORY_UPDATED = "memory.updated"
 
+SESSION_CREATED = "session.created"
+SESSION_CONTRACT_ISSUED = "session.contract_issued"
+SESSION_ACKNOWLEDGED = "session.acknowledged"
+SESSION_CONFLICT = "session.conflict"
+SESSION_ACTIVATED = "session.activated"
+SESSION_ENDED = "session.ended"
+SESSION_GATE_UPDATED = "session.gate_updated"
+SESSION_ESCALATED = "session.escalated"
+SESSION_PERMISSION_DENIED = "session.permission_denied"
+
 ALL = [value for name, value in list(globals().items()) if name.isupper() and name != "ALL"]

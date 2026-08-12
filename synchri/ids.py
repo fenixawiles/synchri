@@ -23,6 +23,8 @@ ID_PATTERNS = {
     "task": re.compile(rf"^task_{_ID_BODY}$"),
     "evt": re.compile(rf"^evt_{_ID_BODY}$"),
     "invite": re.compile(rf"^invite_{_ID_BODY}$"),
+    "sess": re.compile(rf"^sess_{_ID_BODY}$"),
+    "esc": re.compile(rf"^esc_{_ID_BODY}$"),
 }
 
 #: Participant names are used in transcripts and CLI flags, never in paths.

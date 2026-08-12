@@ -189,3 +189,108 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE UNIQUE INDEX IF NOT EXISTS events_room_seq ON events(room_id, seq);
 CREATE INDEX IF NOT EXISTS events_room_type ON events(room_id, event_type);
+
+-- ----------------------------------------------------------------------
+-- Session layer (startup contract, worktree, permissions, gates).
+--
+-- A session sits ABOVE a room: the room keeps owning messaging, the queue and
+-- shared memory, while the session owns the operating contract the agents work
+-- under. sessions.room_id is the link.
+-- ----------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id        TEXT PRIMARY KEY,
+    room_id           TEXT REFERENCES rooms(room_id) ON DELETE SET NULL,
+    name              TEXT NOT NULL,
+    mode              TEXT NOT NULL,
+    status            TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    activated_at      TEXT,
+    ended_at          TEXT,
+    ended_reason      TEXT,
+    -- repository + the ONE authorized mutation target
+    repo_root         TEXT NOT NULL,
+    repo_name         TEXT NOT NULL,
+    repo_remote       TEXT,
+    base_branch       TEXT NOT NULL,
+    worktree_name     TEXT,
+    worktree_path     TEXT,
+    worktree_branch   TEXT,
+    -- configuration, all JSON
+    permissions       TEXT NOT NULL DEFAULT '{}',
+    spec              TEXT,
+    deadline          TEXT,
+    escalation        TEXT NOT NULL DEFAULT '{}',
+    metadata          TEXT NOT NULL DEFAULT '{}',
+    contract_revision INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS sessions_repo ON sessions(repo_root, status);
+CREATE INDEX IF NOT EXISTS sessions_room ON sessions(room_id);
+
+CREATE TABLE IF NOT EXISTS session_participants (
+    session_id   TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    runtime      TEXT NOT NULL DEFAULT 'generic',
+    role         TEXT NOT NULL,
+    command      TEXT,
+    status       TEXT NOT NULL DEFAULT 'invited',
+    metadata     TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (session_id, name)
+);
+
+-- Every revision is kept: the exact text agents agreed to must stay auditable
+-- even after a permission change forces a new one.
+CREATE TABLE IF NOT EXISTS session_contracts (
+    session_id   TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    revision     INTEGER NOT NULL,
+    digest       TEXT NOT NULL,
+    core_text    TEXT NOT NULL,
+    role_sections TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL,
+    reason       TEXT,
+    PRIMARY KEY (session_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS session_acknowledgments (
+    session_id   TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    revision     INTEGER NOT NULL,
+    participant  TEXT NOT NULL,
+    accepted     INTEGER NOT NULL,
+    digest       TEXT NOT NULL,
+    raw_reply    TEXT NOT NULL DEFAULT '',
+    conflict     TEXT,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (session_id, revision, participant)
+);
+
+CREATE TABLE IF NOT EXISTS session_gates (
+    session_id          TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    gate_id             TEXT NOT NULL,
+    description         TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    required            INTEGER NOT NULL DEFAULT 1,
+    evidence            TEXT NOT NULL DEFAULT '[]',
+    tests               TEXT NOT NULL DEFAULT '[]',
+    commits             TEXT NOT NULL DEFAULT '[]',
+    builder_assessment  TEXT,
+    reviewer_assessment TEXT,
+    updated_at          TEXT,
+    updated_by          TEXT,
+    PRIMARY KEY (session_id, gate_id)
+);
+
+CREATE TABLE IF NOT EXISTS session_escalations (
+    escalation_id TEXT PRIMARY KEY,
+    session_id    TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    rule          TEXT NOT NULL,
+    raised_by     TEXT,
+    detail        TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    resolved_at   TEXT,
+    resolution    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS session_escalations_open
+    ON session_escalations(session_id, resolved_at);

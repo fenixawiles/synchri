@@ -40,6 +40,23 @@ You watch the whole exchange with `synchri watch`, and interrupt with `synchri i
 
 A participant is any *process* that can run the CLI. The room is a SQLite file: there is no tty affinity anywhere in the design, so "one terminal per agent" is a way to watch them, never a constraint. See [`docs/single-terminal.md`](docs/single-terminal.md).
 
+## Sessions
+
+`synchri start` walks you through one short wizard — mode, repository, isolated
+worktree, agents and roles, permissions, spec, deadline — then generates a single
+**session contract** that every agent must acknowledge with `UNDERSTOOD` before any
+work begins.
+
+```bash
+synchri start
+```
+
+Agents work in a dedicated git worktree (`synchri-lh-amber-fox-4821`), never in your
+primary tree. Permissions are explicit toggles with conservative defaults, and Synchri's
+grant is a ceiling that never overrides your provider, OS, or repo host. Completion
+requires evidence, not agreement. A deadline produces an honest handoff, never a false
+"done". Full detail: [`docs/sessions.md`](docs/sessions.md).
+
 ## Install
 
 Requires Python 3.10+. No runtime dependencies.

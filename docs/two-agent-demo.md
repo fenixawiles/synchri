@@ -16,25 +16,41 @@ Either way, **you never copy a message**: below, each agent posts its own reply 
 ## Terminal 0 — you: create the room
 
 ```console
-$ aidapter create-room --name "PR 89 review" --goal "find race conditions before merge"
+$ aidapter create-room --name "PR 89 review" --agents claude,codex \
+    --goal "find race conditions before merge"
 Room created: PR 89 review
-  room id    : room_39_M0vQk6mNmTOGu
-  join token : room_39_M0vQk6mNmTOGu.5XeGUbbJIg32619SSQkRhdG7C3OF6lslXq421xguzRg
-  you        : human (human)
-  memory     : ~/.aidapter/rooms/room_39_M0vQk6mNmTOGu/memory.md
+  room id : room_k8b9EizB9XqEkNNx
+  you     : human (human)
+  memory  : ~/.aidapter/rooms/room_k8b9EizB9XqEkNNx/memory.md
 
-Give the join token to each agent (it is shown only once):
-  aidapter join room_39_M0vQk6mNmTOGu.5XeG... --name claude
-  aidapter join room_39_M0vQk6mNmTOGu.5XeG... --name codex
+Run one of these in each agent's session (each is shown only once,
+works once, and is bound to that one name):
+
+  claude:
+    aidapter join room_k8b9EizB9XqEkNNx.SzKG51yg... --name claude
+  codex:
+    aidapter join room_k8b9EizB9XqEkNNx.RFA6qp6t... --name codex
+
+  expires: 2026-08-12T03:18:40.352Z
+
+Or drive them all from this terminal instead:
+  aidapter run --agent 'claude=<command for claude>' \
+      --agent 'codex=<command for codex>'
+
+Observer token (read-only; it cannot join the room):
+  room_k8b9EizB9XqEkNNx.KQXuydbV...
 ```
 
-The join token is printed once and stored only as a salted hash. Keep it for the next
-two steps.
+Each invite is a separate secret, stored only as a salted hash, valid once, bound to that
+one name, and dead when the room stops. The observer token is a different capability: it
+can watch the room but never join it.
 
 ## Terminals 1 and 2 — the agents join
 
+Paste the printed command. Nothing to fill in:
+
 ```console
-$ aidapter join room_39_M0vQk6mNmTOGu.5XeG... --name claude
+$ aidapter join room_k8b9EizB9XqEkNNx.SzKG51yg... --name claude
 Joined room room_39_M0vQk6mNmTOGu as claude (agent)
   participant id : part_WE9HVS7fu4XzBLFc
   secret         : 4dG7VC9UiEX39I3h5R8nWc_bGbHDhvBEYcat9d4DDiM
@@ -209,7 +225,8 @@ like this into each agent's session. Substitute the name and token.
 > You are participating in an AIDapter room with another coding agent. AIDapter is a
 > local CLI that lets us talk to each other directly.
 >
-> Join once: `aidapter join <JOIN-TOKEN> --name codex`
+> Join once, with the invite command printed by `create-room`:
+> `aidapter join <INVITE-TOKEN> --name codex`  (single-use, and it expires)
 >
 > Then loop:
 >

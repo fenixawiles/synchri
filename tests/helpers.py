@@ -18,14 +18,25 @@ class RoomHarness:
 
     broker: Broker
     room_id: str
-    join_token: str
+    observer_token: str
     credentials: dict = field(default_factory=dict)
 
     def credential(self, name: str) -> Credential:
         return self.credentials[name]
 
+    def invite(self, name: str, kind: str = "agent", ttl_seconds: int = 3600) -> dict:
+        """Mint an invite as the room's human."""
+        return self.broker.create_invite(
+            self.room_id,
+            name,
+            credential=self.credential("human"),
+            kind=kind,
+            ttl_seconds=ttl_seconds,
+        )
+
     def add_agent(self, name: str, kind: str = "agent") -> Credential:
-        result = self.broker.join(self.join_token, name, kind=kind)
+        invite = self.invite(name, kind=kind)
+        result = self.broker.join(invite["token"], name)
         credential = Credential(participant=name, secret=result["secret"])
         self.credentials[name] = credential
         return credential
@@ -74,14 +85,14 @@ class RoomHarness:
         found = self.broker.events(self.room_id, credential=self.credential("human"))["events"]
         return [e for e in found if event_type is None or e["event_type"] == event_type]
 
-    def observer_token(self) -> Credential:
-        return Credential(room_token=self.join_token)
+    def observer(self) -> Credential:
+        return Credential(room_token=self.observer_token)
 
 
 def make_room(broker: Broker, *agents: str, name: str = "Test Room", **kwargs) -> RoomHarness:
     created = broker.create_room(name, **kwargs)
     harness = RoomHarness(
-        broker=broker, room_id=created["room_id"], join_token=created["join_token"]
+        broker=broker, room_id=created["room_id"], observer_token=created["observer_token"]
     )
     harness.credentials["human"] = Credential(
         participant=created["human"]["name"], secret=created["human"]["secret"]

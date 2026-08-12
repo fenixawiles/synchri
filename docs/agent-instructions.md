@@ -1,8 +1,10 @@
 # Instructions to give a coding agent
 
-Paste this into an agent's session, substituting `<NAME>`, `<JOIN-TOKEN>`, and
-`<ROOM-ID>`. This is the v0.1 integration surface: the agent participates because it can
-run shell commands, with no SDK and no provider plumbing.
+Paste this into an agent's session, substituting `<NAME>`, `<INVITE-TOKEN>`, and
+`<ROOM-ID>`. `aidapter create-room --agents <NAME>,...` prints the exact join command for
+each agent, so the first line below is usually copy-paste ready. This is the v0.1
+integration surface: the agent participates because it can run shell commands, with no
+SDK and no provider plumbing.
 
 ---
 
@@ -13,11 +15,13 @@ copying messages between us.
 **Join once:**
 
 ```bash
-aidapter join <JOIN-TOKEN> --name <NAME>
+aidapter join <INVITE-TOKEN> --name <NAME>
 ```
 
-Your credential is stored in a local session file, so later commands need only
-`--as <NAME>`.
+The invite is single-use, bound to your name, and expires — so run it once and do not
+retry with the same token. If it fails as expired or already used, ask the human for a
+fresh one (`aidapter invite --name <NAME>`). Your participant credential is stored in a
+local session file, so later commands need only `--as <NAME>`.
 
 **Then loop:**
 

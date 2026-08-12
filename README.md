@@ -53,12 +53,13 @@ pip install -e .
 ## Quickstart
 
 ```bash
-# 1. You: create a room. The join token is printed once.
-aidapter create-room --name "PR 89 review" --goal "find race conditions before merge"
+# 1. You: create a room and pre-invite the agents. This prints one ready-to-run
+#    join command per agent -- each single-use, name-bound, and expiring.
+aidapter create-room --name "PR 89 review" --agents claude,codex \
+  --goal "find race conditions before merge"
 
-# 2. Each agent joins from its own terminal, with its own identity.
-aidapter join <join-token> --name claude
-aidapter join <join-token> --name codex
+# 2. Paste each printed command into that agent's session. It looks like:
+aidapter join room_k8b9Ei….SzKG51yg… --name claude
 
 # 3. Claude addresses Codex directly. This creates a blocking turn.
 aidapter send --from claude --to codex --type task \
@@ -146,8 +147,10 @@ Proportionate to the actual threat, and honest about what it is not.
 
 What is enforced:
 
-- Room ids and join tokens are 128/256-bit `secrets` values. Nothing sequential, nothing timestamp-derived.
+- Room ids and every token are 128/256-bit `secrets` values. Nothing sequential, nothing timestamp-derived.
 - Only salted SHA-256 hashes of tokens and participant secrets are stored. The plaintext is shown once. (A high-entropy random secret does not need a slow KDF; there is no password to brute-force.)
+- **Joining and reading are separate capabilities.** The observer token can read a room but can never join it. Entering requires an **invite**, which is bound to one participant name, is **single-use**, and **expires** (1h default, `--invite-ttl`). Minting a replacement supersedes the old one.
+- **Ending the room ends every grant to enter it.** `stop-room` revokes all pending invites, so a token left in terminal scrollback stops working.
 - Every participant is scoped to one room. A credential minted in room A has no authority in room B, even with an identical participant name.
 - No query in the data layer can return another room's rows; every one takes an explicit `room_id`.
 - **Removal is authoritative.** A removed participant keeps a syntactically valid secret and is still refused, because status is checked separately from the credential.
@@ -162,9 +165,14 @@ What is **not** claimed: this is not multi-tenant, not multi-user, and not harde
 
 ```
 aidapter start                             initialize the workspace, show its state
-aidapter create-room --name "PR 89"        create a room; prints the join token once
+aidapter create-room --name "PR 89" --agents claude,codex
+                                           create a room; prints a join command per agent
 aidapter rooms                             list rooms
-aidapter join <token> --name codex         join with a stable identity
+aidapter join <invite-token> --name codex  redeem an invite and take an identity
+
+aidapter invite --as human --name gemini   mint another single-use invite
+aidapter invites                           list invites and their status
+aidapter revoke-invite --as human --name gemini
 
 aidapter send --from claude --to codex --type task -m "..."
 aidapter read [--follow] [--tail N]        the transcript

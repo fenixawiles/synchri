@@ -27,11 +27,16 @@ def cli(workspace, capsys):
 
 @pytest.fixture
 def cli_room(cli):
-    code, out, _ = cli("--json", "create-room", "--name", "PR 89 Review", "--goal", "no races")
+    code, out, _ = cli(
+        "--json", "create-room", "--name", "PR 89 Review", "--goal", "no races",
+        "--agents", "claude,codex",
+    )
     assert code == 0
     created = json.loads(out)
-    for name in ("claude", "codex"):
-        assert cli("--json", "join", created["join_token"], "--name", name)[0] == 0
+    for invite in created["invites"]:
+        assert cli(
+            "--json", "join", invite["token"], "--name", invite["participant_name"]
+        )[0] == 0
     return created
 
 
@@ -58,7 +63,7 @@ def test_create_room_writes_a_session_file_with_owner_only_permissions(cli, work
     assert session_path.stat().st_mode & 0o777 == 0o600
     stored = json.loads(session_path.read_text(encoding="utf-8"))
     assert stored["secret"] == created["human"]["secret"]
-    assert stored["room_token"] == created["join_token"]
+    assert stored["room_token"] == created["observer_token"]
 
 
 def test_agent_session_files_do_not_store_the_room_join_token(cli, cli_room, workspace):
@@ -282,7 +287,7 @@ def test_bad_metadata_json_is_rejected(cli, cli_room):
 
 
 def test_duplicate_join_exit_code(cli, cli_room):
-    code, _, err = cli("--json", "join", cli_room["join_token"], "--name", "claude")
+    code, _, err = cli("--json", "join", cli_room["observer_token"], "--name", "claude")
     assert code == 5
     assert json.loads(err)["error"]["code"] == "duplicate_participant"
 

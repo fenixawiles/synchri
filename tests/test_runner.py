@@ -369,10 +369,10 @@ def test_run_command_drives_a_room_from_one_terminal(workspace, tmp_path, capsys
         code = main(["--home", str(workspace.home), *args])
         return code, capsys.readouterr().out
 
-    _, out = cli("--json", "create-room", "--name", "One terminal")
+    _, out = cli("--json", "create-room", "--name", "One terminal", "--agents", "claude,codex")
     created = json.loads(out)
-    for name in ("claude", "codex"):
-        cli("--json", "join", created["join_token"], "--name", name)
+    for invite in created["invites"]:
+        cli("--json", "join", invite["token"], "--name", invite["participant_name"])
     cli("--json", "send", "--from", "claude", "--to", "codex", "--type", "task", "-m", "review")
 
     spec = write_agent(tmp_path, "codex", "print('found a race')\n")
@@ -394,10 +394,13 @@ def test_run_command_reports_awaiting_human_with_a_distinct_exit_code(workspace,
         code = main(["--home", str(workspace.home), *args])
         return code, capsys.readouterr().out
 
-    _, out = cli("--json", "create-room", "--name", "Limit", "--max-agent-turns", "2")
+    _, out = cli(
+        "--json", "create-room", "--name", "Limit", "--max-agent-turns", "2",
+        "--agents", "claude,codex",
+    )
     created = json.loads(out)
-    for name in ("claude", "codex"):
-        cli("--json", "join", created["join_token"], "--name", name)
+    for invite in created["invites"]:
+        cli("--json", "join", invite["token"], "--name", invite["participant_name"])
     cli("--json", "send", "--from", "claude", "--to", "codex", "--type", "task", "-m", "go")
 
     specs = [
@@ -416,9 +419,10 @@ def test_run_start_flag_gives_an_idle_room_its_first_turn(workspace, tmp_path, c
         code = main(["--home", str(workspace.home), *args])
         return code, capsys.readouterr().out
 
-    _, out = cli("--json", "create-room", "--name", "Kickoff")
+    _, out = cli("--json", "create-room", "--name", "Kickoff", "--agents", "claude")
     created = json.loads(out)
-    cli("--json", "join", created["join_token"], "--name", "claude")
+    invite = created["invites"][0]
+    cli("--json", "join", invite["token"], "--name", "claude")
 
     spec = write_agent(tmp_path, "claude", "print('starting the review')\n")
     code, out = cli("--json", "run", "--agent", spec, "--start", "claude", "--turns", "1")

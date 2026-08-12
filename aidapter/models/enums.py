@@ -28,6 +28,13 @@ class ParticipantStatus(StrEnum):
     REMOVED = "removed"
 
 
+class InviteStatus(StrEnum):
+    PENDING = "pending"
+    REDEEMED = "redeemed"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
+
 class MessageType(StrEnum):
     CHAT = "chat"
     TASK = "task"

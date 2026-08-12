@@ -51,6 +51,33 @@ CREATE TABLE IF NOT EXISTS participants (
 CREATE UNIQUE INDEX IF NOT EXISTS participants_room_name
     ON participants(room_id, name);
 
+-- Invites are the only way to become a participant.  Each one is bound to a
+-- single participant name, is single-use, and expires -- so a token left in
+-- terminal scrollback stops being useful.  The room's observer token can read
+-- a room but can never join it; those two capabilities are deliberately split.
+CREATE TABLE IF NOT EXISTS invites (
+    invite_id              TEXT PRIMARY KEY,
+    room_id                TEXT NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
+    participant_name       TEXT NOT NULL,
+    kind                   TEXT NOT NULL CHECK (kind IN ('agent', 'human')),
+    token_salt             TEXT NOT NULL,
+    token_hash             TEXT NOT NULL,
+    created_at             TEXT NOT NULL,
+    created_by             TEXT,
+    expires_at             TEXT,
+    redeemed_at            TEXT,
+    redeemed_participant_id TEXT,
+    revoked_at             TEXT,
+    revoked_reason         TEXT
+);
+
+-- At most one live invite per name per room; minting a new one supersedes the old.
+CREATE UNIQUE INDEX IF NOT EXISTS invites_live_name
+    ON invites(room_id, participant_name)
+    WHERE redeemed_at IS NULL AND revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS invites_room ON invites(room_id, created_at);
+
 CREATE TABLE IF NOT EXISTS messages (
     message_id            TEXT PRIMARY KEY,
     room_id               TEXT NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,

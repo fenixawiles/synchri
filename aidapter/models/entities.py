@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 
-from .enums import ParticipantKind, ParticipantStatus, RoomStatus
+from ..ids import utc_now
+from .enums import InviteStatus, ParticipantKind, ParticipantStatus, RoomStatus
 
 
 @dataclass
@@ -194,6 +195,47 @@ class Task:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass
+class Invite:
+    """A single-use, name-bound, expiring grant to join one room."""
+
+    invite_id: str
+    room_id: str
+    participant_name: str
+    kind: str
+    created_at: str
+    created_by: str | None = None
+    expires_at: str | None = None
+    redeemed_at: str | None = None
+    redeemed_participant_id: str | None = None
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
+
+    def status(self, now: str) -> str:
+        """Derive the invite's status; expiry is a function of time, not a flag."""
+        if self.redeemed_at:
+            return InviteStatus.REDEEMED.value
+        if self.revoked_at:
+            return InviteStatus.REVOKED.value
+        if self.expires_at and self.expires_at <= now:
+            return InviteStatus.EXPIRED.value
+        return InviteStatus.PENDING.value
+
+    @property
+    def is_live(self) -> bool:
+        return not (self.redeemed_at or self.revoked_at)
+
+    @classmethod
+    def from_row(cls, row) -> "Invite":
+        data = dict(row)
+        return cls(**{k: data[k] for k in cls.__dataclass_fields__})
+
+    def to_dict(self, now: str | None = None) -> dict:
+        payload = asdict(self)
+        payload["status"] = self.status(now or utc_now())
+        return payload
 
 
 @dataclass

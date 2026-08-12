@@ -29,13 +29,13 @@ def test_participant_identity_is_stable_across_messages(room):
 
 def test_duplicate_join_without_secret_is_rejected(room):
     with pytest.raises(ConflictError) as exc:
-        room.broker.join(room.join_token, "claude")
+        room.broker.join(room.room_id, "claude")
     assert exc.value.code == "duplicate_participant"
 
 
 def test_duplicate_join_with_the_right_secret_reattaches(room):
     secret = room.credential("claude").secret
-    result = room.broker.join(room.join_token, "claude", rejoin_secret=secret)
+    result = room.broker.join(room.observer_token, "claude", rejoin_secret=secret)
     assert result["rejoined"] is True
     assert result["secret"] == secret
 
@@ -45,10 +45,10 @@ def test_duplicate_join_with_the_right_secret_reattaches(room):
 
 def test_rejoin_with_a_wrong_secret_is_rejected(room):
     with pytest.raises(AuthError):
-        room.broker.join(room.join_token, "claude", rejoin_secret="not-the-secret")
+        room.broker.join(room.observer_token, "claude", rejoin_secret="not-the-secret")
 
 
-def test_join_requires_a_token(room):
+def test_join_requires_an_invite(room):
     with pytest.raises(AuthError):
         room.broker.join(room.room_id, "gemini")
 
@@ -56,7 +56,7 @@ def test_join_requires_a_token(room):
 def test_join_rejects_invalid_names(room):
     for bad in ["", "has space", "../escape", "a" * 100, "-leading"]:
         with pytest.raises(ValidationError):
-            room.broker.join(room.join_token, bad)
+            room.broker.join(room.room_id, bad)
 
 
 def test_removal_revokes_the_participant_immediately(room):
@@ -108,7 +108,7 @@ def test_removed_participant_cannot_be_addressed(room):
 def test_removed_name_cannot_be_reclaimed_by_a_new_join(room):
     room.broker.remove_participant(room.room_id, "codex", credential=room.credential("human"))
     with pytest.raises(ConflictError) as exc:
-        room.broker.join(room.join_token, "codex")
+        room.broker.join(room.room_id, "codex")
     assert exc.value.code == "participant_removed"
 
 

@@ -46,6 +46,22 @@ def _run_cli(workspace, *args: str, check: bool = True) -> subprocess.CompletedP
     return result
 
 
+def _create_room(workspace, name: str, agents: str = "claude,codex", *extra: str) -> dict:
+    return json.loads(
+        _run_cli(
+            workspace, "--json", "create-room", "--name", name, "--agents", agents, *extra
+        ).stdout
+    )
+
+
+def _join_all(workspace, created: dict) -> None:
+    """Redeem every invite the room was created with."""
+    for invite in created["invites"]:
+        _run_cli(
+            workspace, "--json", "join", invite["token"], "--name", invite["participant_name"]
+        )
+
+
 def test_only_one_agent_wins_a_contested_floor(workspace):
     """Ten agents send at once into an idle room; exactly one may hold the floor."""
     with Broker(workspace) as setup:
@@ -175,14 +191,10 @@ def test_concurrent_memory_writes_do_not_lose_entries(workspace):
 
 def test_two_separate_processes_share_one_room(workspace):
     """The end-to-end claim: two terminals, one room, no shared process."""
-    created = json.loads(
-        _run_cli(workspace, "--json", "create-room", "--name", "Cross process").stdout
-    )
+    created = _create_room(workspace, "Cross process")
     room_id = created["room_id"]
-    token = created["join_token"]
 
-    _run_cli(workspace, "--json", "join", token, "--name", "claude")
-    _run_cli(workspace, "--json", "join", token, "--name", "codex")
+    _join_all(workspace, created)
 
     sent = json.loads(
         _run_cli(
@@ -229,12 +241,9 @@ def test_two_separate_processes_share_one_room(workspace):
 
 def test_wait_in_one_process_unblocks_when_another_process_addresses_it(workspace):
     """``aidapter wait`` is how an agent parks until it is on point."""
-    created = json.loads(
-        _run_cli(workspace, "--json", "create-room", "--name", "Wait test").stdout
-    )
-    room_id, token = created["room_id"], created["join_token"]
-    _run_cli(workspace, "--json", "join", token, "--name", "claude")
-    _run_cli(workspace, "--json", "join", token, "--name", "codex")
+    created = _create_room(workspace, "Wait test")
+    room_id = created["room_id"]
+    _join_all(workspace, created)
 
     env = {**os.environ, "AIDAPTER_HOME": str(workspace.home), "PYTHONPATH": REPO_ROOT}
     waiter = subprocess.Popen(
@@ -265,10 +274,8 @@ def test_wait_in_one_process_unblocks_when_another_process_addresses_it(workspac
 
 
 def test_wait_times_out_with_a_distinct_exit_code(workspace):
-    created = json.loads(
-        _run_cli(workspace, "--json", "create-room", "--name", "Timeout test").stdout
-    )
-    _run_cli(workspace, "--json", "join", created["join_token"], "--name", "codex")
+    created = _create_room(workspace, "Timeout test", "codex")
+    _join_all(workspace, created)
     result = _run_cli(
         workspace, "--json", "wait", "--room", created["room_id"], "--as", "codex",
         "--timeout", "1", "--poll", "0.1", check=False,
@@ -278,9 +285,9 @@ def test_wait_times_out_with_a_distinct_exit_code(workspace):
 
 
 def test_hard_stop_from_another_process_ends_a_wait(workspace):
-    created = json.loads(_run_cli(workspace, "--json", "create-room", "--name", "Stop test").stdout)
-    room_id, token = created["room_id"], created["join_token"]
-    _run_cli(workspace, "--json", "join", token, "--name", "codex")
+    created = _create_room(workspace, "Stop test", "codex")
+    room_id = created["room_id"]
+    _join_all(workspace, created)
 
     env = {**os.environ, "AIDAPTER_HOME": str(workspace.home), "PYTHONPATH": REPO_ROOT}
     waiter = subprocess.Popen(

@@ -16,7 +16,11 @@ from typing import Callable
 
 from .. import __version__
 from ..broker import Broker, Credential
-from ..config import DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS, resolve_workspace
+from ..config import (
+    DEFAULT_INVITE_TTL_SECONDS,
+    DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
+    resolve_workspace,
+)
 from ..errors import AidapterError, ValidationError
 from ..memory.ledger import SECTIONS
 from ..models.enums import MessageType, ResponseStatus, TurnState
@@ -88,6 +92,20 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--human-name", default="human", help="name for your own identity")
     create.add_argument("--goal", help="seed the memory ledger with the room goal")
     create.add_argument(
+        "--agents",
+        action="append",
+        default=[],
+        metavar="NAME[,NAME...]",
+        help="pre-invite these agents and print a ready-to-run join command for each",
+    )
+    create.add_argument(
+        "--invite-ttl",
+        type=int,
+        default=DEFAULT_INVITE_TTL_SECONDS,
+        metavar="SECONDS",
+        help="how long the invites stay valid (0 = until the room is stopped)",
+    )
+    create.add_argument(
         "--max-agent-turns",
         type=int,
         default=DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
@@ -96,13 +114,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     command("rooms", "List rooms in this workspace.")
 
-    join = command("join", "Join a room using a join token.")
-    join.add_argument("reference", help="room id or full join token")
+    join = command("join", "Redeem an invite and join a room.")
+    join.add_argument("reference", help="the invite token (or a bare room id when --rejoin-ing)")
     join.add_argument("--name", required=True, help="participant name, e.g. claude or codex")
-    join.add_argument("--kind", choices=["agent", "human"], default="agent")
-    join.add_argument("--token", help="join token, if the reference was a bare room id")
+    join.add_argument("--token", help="invite token, if the reference was a bare room id")
     join.add_argument("--rejoin", metavar="SECRET", help="re-attach to an existing identity")
     join.add_argument("--meta", help="JSON object of participant metadata")
+
+    invite = command("invite", "Mint a single-use, expiring invite for one participant.")
+    _add_room_actor(invite)
+    invite.add_argument("--name", required=True, help="the participant this invite is bound to")
+    invite.add_argument("--kind", choices=["agent", "human"], default="agent")
+    invite.add_argument(
+        "--ttl",
+        type=int,
+        default=DEFAULT_INVITE_TTL_SECONDS,
+        metavar="SECONDS",
+        help="validity window (0 = until the room is stopped)",
+    )
+
+    invites = command("invites", "List this room's invites and their status.")
+    _add_room_reader(invites)
+
+    revoke = command("revoke-invite", "Revoke a pending invite (human only).")
+    _add_room_actor(revoke)
+    revoke.add_argument("--name", required=True)
 
     # -- messaging ------------------------------------------------------
     send = command("send", "Send a message into a room.")
@@ -285,9 +321,9 @@ def _add_room_reader(parser: argparse.ArgumentParser) -> None:
 
 EPILOG = """\
 typical flow
-  aidapter create-room --name "PR 89 review" --goal "find race conditions"
-  aidapter join <join-token> --name claude
-  aidapter join <join-token> --name codex
+  aidapter create-room --name "PR 89 review" --agents claude,codex
+  # paste the printed command into each agent's session; each is single-use
+  aidapter join <invite-token> --name claude
   aidapter send --from claude --to codex --type task \\
       -m "Adversarially review commit abc123 for race conditions." \\
       --artifact git:abc123 --constraint "preserve the existing runtime contract"
@@ -412,6 +448,8 @@ def cmd_create_room(args: argparse.Namespace, broker: Broker) -> int:
         human_name=args.human_name,
         goal=args.goal,
         max_consecutive_agent_turns=args.max_agent_turns,
+        agents=args.agents,
+        invite_ttl_seconds=args.invite_ttl,
     )
     record = session.SessionRecord(
         room_id=result["room_id"],
@@ -420,22 +458,95 @@ def cmd_create_room(args: argparse.Namespace, broker: Broker) -> int:
         secret=result["human"]["secret"],
         kind="human",
         room_name=result["name"],
-        room_token=result["join_token"],
+        room_token=result["observer_token"],
     )
     result["session_file"] = session.save(broker.workspace, record)
     session.set_current_room(broker.workspace, result["room_id"])
+    return _out(args, result, _room_created_summary(result))
 
-    text = (
-        f"Room created: {result['name']}\n"
-        f"  room id    : {result['room_id']}\n"
-        f"  join token : {result['join_token']}\n"
-        f"  you        : {result['human']['name']} ({result['human']['kind']})\n"
-        f"  memory     : {result['memory_path']}\n\n"
-        "Give the join token to each agent (it is shown only once):\n"
-        f"  aidapter join {result['join_token']} --name claude\n"
-        f"  aidapter join {result['join_token']} --name codex"
+
+def _room_created_summary(result: dict) -> str:
+    lines = [
+        f"Room created: {result['name']}",
+        f"  room id : {result['room_id']}",
+        f"  you     : {result['human']['name']} ({result['human']['kind']})",
+        f"  memory  : {result['memory_path']}",
+        "",
+    ]
+    if result["invites"]:
+        lines.append("Run one of these in each agent's session (each is shown only once,")
+        lines.append("works once, and is bound to that one name):")
+        lines.append("")
+        for invite in result["invites"]:
+            lines.append(f"  {invite['participant_name']}:")
+            lines.append(f"    {invite['command']}")
+        lines.append("")
+        lines.append(f"  expires: {_expiry_text(result['invites'][0]['expires_at'])}")
+        managed = " \\\n      ".join(
+            f"--agent '{invite['participant_name']}=<command for {invite['participant_name']}>'"
+            for invite in result["invites"]
+        )
+        lines.extend(
+            [
+                "",
+                "Or drive them all from this terminal instead:",
+                f"  aidapter run {managed}",
+            ]
+        )
+    else:
+        lines.append("Invite an agent with:")
+        lines.append(f"  aidapter invite --room {result['room_id']} --name codex")
+    lines.extend(
+        [
+            "",
+            "Observer token (read-only; it cannot join the room):",
+            f"  {result['observer_token']}",
+        ]
     )
-    return _out(args, result, text)
+    return "\n".join(lines)
+
+
+def _expiry_text(expires_at: str | None) -> str:
+    return expires_at if expires_at else "never (lives until the room is stopped)"
+
+
+def cmd_invite(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    invite = broker.create_invite(
+        room_id,
+        args.name,
+        credential=_credential(args, broker, room_id),
+        kind=args.kind,
+        ttl_seconds=args.ttl,
+    )
+    text = (
+        f"Invite for {invite['participant_name']} ({invite['kind']}), "
+        f"single-use, expires: {_expiry_text(invite['expires_at'])}\n\n"
+        f"  {invite['command']}"
+    )
+    if invite.get("superseded_invite_id"):
+        text += "\n\n(the previous invite for this name no longer works)"
+    return _out(args, invite, text)
+
+
+def cmd_invites(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    found = broker.list_invites(room_id, credential=_credential(args, broker, room_id))
+    lines = [f"{'NAME':<16} {'KIND':<6} {'STATUS':<9} EXPIRES"]
+    for invite in found:
+        lines.append(
+            f"{invite['participant_name']:<16} {invite['kind']:<6} {invite['status']:<9} "
+            f"{invite['expires_at'] or '-'}"
+        )
+    return _out(args, {"invites": found}, "\n".join(lines) if found else "(no invites)")
+
+
+def cmd_revoke_invite(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    result = broker.revoke_invite(
+        room_id, args.name, credential=_credential(args, broker, room_id)
+    )
+    return _out(args, result, f"revoked the invite for {result['revoked']}")
 
 
 def cmd_rooms(args: argparse.Namespace, broker: Broker) -> int:
@@ -448,7 +559,6 @@ def cmd_join(args: argparse.Namespace, broker: Broker) -> int:
         args.reference,
         args.name,
         token=args.token,
-        kind=args.kind,
         rejoin_secret=args.rejoin,
         metadata=_metadata(args.meta),
     )
@@ -838,6 +948,9 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
     "create-room": cmd_create_room,
     "rooms": cmd_rooms,
     "join": cmd_join,
+    "invite": cmd_invite,
+    "invites": cmd_invites,
+    "revoke-invite": cmd_revoke_invite,
     "send": cmd_send,
     "interrupt": cmd_interrupt,
     "read": cmd_read,

@@ -12,7 +12,7 @@ import sqlite3
 from typing import Iterable, Sequence
 
 from ..ids import new_id, utc_now
-from ..models.entities import Event, Participant, QueueEntry, Room, Task, Turn
+from ..models.entities import Event, Invite, Participant, QueueEntry, Room, Task, Turn
 from ..models.enums import ParticipantStatus, TaskStatus, TurnStatus
 from ..models.envelope import MessageEnvelope
 
@@ -139,6 +139,62 @@ def touch_participant(conn: sqlite3.Connection, room_id: str, participant_id: st
     conn.execute(
         "UPDATE participants SET last_seen_at = ? WHERE room_id = ? AND participant_id = ?",
         (utc_now(), room_id, participant_id),
+    )
+
+
+# --------------------------------------------------------------------------
+# invites
+# --------------------------------------------------------------------------
+
+
+def insert_invite(conn: sqlite3.Connection, **fields) -> None:
+    columns = ", ".join(fields)
+    placeholders = ", ".join("?" for _ in fields)
+    conn.execute(f"INSERT INTO invites ({columns}) VALUES ({placeholders})", tuple(fields.values()))
+
+
+def list_invites(conn: sqlite3.Connection, room_id: str, live_only: bool = False) -> list[Invite]:
+    sql = "SELECT * FROM invites WHERE room_id = ?"
+    if live_only:
+        sql += " AND redeemed_at IS NULL AND revoked_at IS NULL"
+    sql += " ORDER BY created_at ASC"
+    return [Invite.from_row(r) for r in conn.execute(sql, (room_id,)).fetchall()]
+
+
+def get_live_invite_by_name(conn: sqlite3.Connection, room_id: str, name: str) -> Invite | None:
+    row = conn.execute(
+        "SELECT * FROM invites WHERE room_id = ? AND participant_name = ? "
+        "AND redeemed_at IS NULL AND revoked_at IS NULL",
+        (room_id, name),
+    ).fetchone()
+    return Invite.from_row(row) if row else None
+
+
+def get_invite_secret(conn: sqlite3.Connection, room_id: str, invite_id: str) -> tuple[str, str] | None:
+    row = conn.execute(
+        "SELECT token_salt, token_hash FROM invites WHERE room_id = ? AND invite_id = ?",
+        (room_id, invite_id),
+    ).fetchone()
+    return (row["token_salt"], row["token_hash"]) if row else None
+
+
+def update_invite(conn: sqlite3.Connection, room_id: str, invite_id: str, **fields) -> None:
+    if not fields:
+        return
+    assignments = ", ".join(f"{k} = ?" for k in fields)
+    conn.execute(
+        f"UPDATE invites SET {assignments} WHERE room_id = ? AND invite_id = ?",
+        (*fields.values(), room_id, invite_id),
+    )
+
+
+def revoke_live_invites(conn: sqlite3.Connection, room_id: str, reason: str) -> int:
+    return int(
+        conn.execute(
+            "UPDATE invites SET revoked_at = ?, revoked_reason = ? WHERE room_id = ? "
+            "AND redeemed_at IS NULL AND revoked_at IS NULL",
+            (utc_now(), reason, room_id),
+        ).rowcount
     )
 
 

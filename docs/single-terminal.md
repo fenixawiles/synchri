@@ -30,6 +30,7 @@ the floor, invokes that participant's command, feeds it the pending request on
 stdin (or via `{prompt}`), and posts its stdout back into the room.
 
 ```bash
+aidapter create-room --name "PR 89 review" --agents claude,codex
 aidapter run \
   --agent 'claude=claude -p {prompt}' \
   --agent 'codex=codex exec {prompt}' \
@@ -37,6 +38,10 @@ aidapter run \
 ```
 
 One command. One terminal. The agents talk to each other; you watch.
+
+(Managed agents still need real identities, so redeem each invite that `create-room`
+printed before the first `run` — or let `run` fail loudly telling you which credential
+is missing.)
 
 ```console
 → codex thinking…

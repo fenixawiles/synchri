@@ -13,6 +13,9 @@ ROOM_RESUMED = "room.resumed"
 ROOM_STOPPED = "room.stopped"
 ROOM_CONFIG_UPDATED = "room.config_updated"
 
+INVITE_CREATED = "invite.created"
+INVITE_REVOKED = "invite.revoked"
+
 PARTICIPANT_JOINED = "participant.joined"
 PARTICIPANT_REJOINED = "participant.rejoined"
 PARTICIPANT_REMOVED = "participant.removed"

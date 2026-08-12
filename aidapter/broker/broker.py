@@ -20,9 +20,14 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Sequence
 
-from ..config import DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS, Workspace, resolve_workspace
+from ..config import (
+    DEFAULT_INVITE_TTL_SECONDS,
+    DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
+    Workspace,
+    resolve_workspace,
+)
 from ..errors import (
     AuthError,
     ConflictError,
@@ -35,6 +40,7 @@ from ..ids import NAME_PATTERN, is_valid_id, new_id, new_secret, utc_now
 from ..memory.ledger import LedgerStore
 from ..models.entities import Participant, Room, Turn
 from ..models.enums import (
+    InviteStatus,
     MessageType,
     ParticipantKind,
     ParticipantStatus,
@@ -98,16 +104,20 @@ class Broker:
         human_name: str = "human",
         goal: str | None = None,
         max_consecutive_agent_turns: int = DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
+        agents: Sequence[str] = (),
+        invite_ttl_seconds: int = DEFAULT_INVITE_TTL_SECONDS,
     ) -> dict:
-        """Create a room and its owning human participant.
+        """Create a room, its owning human, and an invite per named agent.
 
-        Returns the join token and the human's participant secret.  Both are
-        shown exactly once; only salted hashes are stored.
+        Returns the observer token, the human's participant secret, and one
+        ready-to-run join command per agent.  All secrets are shown exactly
+        once; only salted hashes are stored.
         """
         name = _require_text(name, "room name", max_len=200)
         _validate_name(human_name)
         if not isinstance(max_consecutive_agent_turns, int) or max_consecutive_agent_turns < 1:
             raise ValidationError("max-agent-turns must be a positive integer")
+        agent_names = _unique_names(agents, human_name)
 
         room_id = new_id("room")
         join_secret = new_secret()
@@ -142,17 +152,166 @@ class Broker:
                     "goal": goal,
                 },
             )
+            invites = [
+                self._mint_invite(
+                    room_id,
+                    agent_name,
+                    ParticipantKind.AGENT,
+                    invite_ttl_seconds,
+                    actor_id=human["participant_id"],
+                    actor_name=human_name,
+                )
+                for agent_name in agent_names
+            ]
 
         memory_path = self.ledger.initialize(room_id, name, goal=goal)
         self.workspace.ensure_room_dir(room_id)
         return {
             "room_id": room_id,
             "name": name,
-            "join_token": tokens.compose_join_token(room_id, join_secret),
+            # Read-only capability: it can watch the room but never join it.
+            "observer_token": tokens.compose_join_token(room_id, join_secret),
             "human": human,
+            "invites": invites,
             "max_consecutive_agent_turns": max_consecutive_agent_turns,
             "memory_path": str(memory_path),
             "transcript_path": str(self.workspace.transcript_path(room_id)),
+        }
+
+    # ------------------------------------------------------------------
+    # invites
+    # ------------------------------------------------------------------
+
+    def create_invite(
+        self,
+        room_id: str,
+        participant_name: str,
+        *,
+        credential: "Credential",
+        kind: str = ParticipantKind.AGENT.value,
+        ttl_seconds: int = DEFAULT_INVITE_TTL_SECONDS,
+    ) -> dict:
+        """Mint a single-use, name-bound, expiring invite.
+
+        Minting for a name that already has a live invite supersedes the old
+        one, which is strictly tightening: the previous token stops working.
+        """
+        _validate_name(participant_name)
+        if kind not in {k.value for k in ParticipantKind}:
+            raise ValidationError(f"kind must be 'agent' or 'human', got {kind!r}")
+        with db.transaction(self.conn):
+            room = self._get_room(room_id)
+            actor = self._authorize_actor(room, credential, require_human=True)
+            self._require_mutable(room)
+            existing = dao.get_participant_by_name(self.conn, room_id, participant_name)
+            if existing is not None:
+                raise ConflictError(
+                    f"{participant_name!r} is already a participant in this room"
+                    + ("; it was removed and the name cannot be reused" if not existing.is_active else ""),
+                    code="duplicate_participant",
+                )
+            return self._mint_invite(
+                room_id,
+                participant_name,
+                ParticipantKind(kind),
+                ttl_seconds,
+                actor_id=actor.participant_id,
+                actor_name=actor.name,
+            )
+
+    def list_invites(self, room_id: str, *, credential: "Credential") -> list[dict]:
+        room = self._get_room(room_id)
+        self._authorize_read(room, credential)
+        now = utc_now()
+        return [invite.to_dict(now) for invite in dao.list_invites(self.conn, room_id)]
+
+    def revoke_invite(
+        self, room_id: str, participant_name: str, *, credential: "Credential"
+    ) -> dict:
+        with db.transaction(self.conn):
+            room = self._get_room(room_id)
+            actor = self._authorize_actor(room, credential, require_human=True)
+            invite = dao.get_live_invite_by_name(self.conn, room_id, participant_name)
+            if invite is None:
+                raise NotFoundError(f"no live invite for {participant_name!r} in this room")
+            dao.update_invite(
+                self.conn,
+                room_id,
+                invite.invite_id,
+                revoked_at=utc_now(),
+                revoked_reason="revoked_by_human",
+            )
+            self._log(
+                room_id,
+                ev.INVITE_REVOKED,
+                actor_participant_id=actor.participant_id,
+                actor_name=actor.name,
+                payload={"invite_id": invite.invite_id, "participant_name": participant_name},
+            )
+            return {"revoked": participant_name, "invite_id": invite.invite_id}
+
+    def _mint_invite(
+        self,
+        room_id: str,
+        participant_name: str,
+        kind: ParticipantKind,
+        ttl_seconds: int,
+        *,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> dict:
+        """Create an invite row and return it with its one-time token."""
+        if not isinstance(ttl_seconds, int) or ttl_seconds < 0:
+            raise ValidationError("invite TTL must be a non-negative number of seconds")
+
+        superseded = dao.get_live_invite_by_name(self.conn, room_id, participant_name)
+        if superseded is not None:
+            dao.update_invite(
+                self.conn,
+                room_id,
+                superseded.invite_id,
+                revoked_at=utc_now(),
+                revoked_reason="superseded",
+            )
+
+        invite_id = new_id("invite")
+        secret = new_secret()
+        salt = tokens.new_salt()
+        expires_at = _expiry(ttl_seconds)
+        dao.insert_invite(
+            self.conn,
+            invite_id=invite_id,
+            room_id=room_id,
+            participant_name=participant_name,
+            kind=kind.value,
+            token_salt=salt,
+            token_hash=tokens.hash_secret(secret, salt),
+            created_at=utc_now(),
+            created_by=actor_id,
+            expires_at=expires_at,
+        )
+        self._log(
+            room_id,
+            ev.INVITE_CREATED,
+            actor_participant_id=actor_id,
+            actor_name=actor_name,
+            payload={
+                "invite_id": invite_id,
+                "participant_name": participant_name,
+                "kind": kind.value,
+                "expires_at": expires_at,
+                "superseded": superseded.invite_id if superseded else None,
+            },
+        )
+        token = tokens.compose_join_token(room_id, secret)
+        return {
+            "invite_id": invite_id,
+            "participant_name": participant_name,
+            "kind": kind.value,
+            "token": token,
+            "expires_at": expires_at,
+            "command": f"aidapter join {token} --name {participant_name}",
+            "superseded_invite_id": superseded.invite_id if superseded else None,
         }
 
     def list_rooms(self) -> list[dict]:
@@ -213,32 +372,42 @@ class Broker:
             raise ValidationError(f"kind must be 'agent' or 'human', got {kind!r}")
 
         room_id, embedded_secret = self._resolve_room_reference(room_reference)
-        join_secret = embedded_secret or token
-        if not join_secret:
-            raise AuthError("a join token is required to join a room")
+        invite_secret = embedded_secret or token
 
         with db.transaction(self.conn):
             room = self._get_room(room_id)
             if room.is_stopped:
                 raise StateError("room is stopped; it cannot accept new participants")
-            salt_hash = dao.get_room_token_hash(self.conn, room_id)
-            if salt_hash is None or not tokens.verify_secret(join_secret, *salt_hash):
-                # Same error for "bad token" and "wrong room" on purpose.
-                raise AuthError("invalid join token for this room")
 
             existing = dao.get_participant_by_name(self.conn, room_id, name)
             if existing is not None:
+                # Re-attaching proves you already hold the identity, so it needs
+                # no invite -- the participant secret is the credential.
                 return self._rejoin(room, existing, rejoin_secret, metadata)
 
+            if not invite_secret:
+                raise AuthError(
+                    "joining requires an invite token; ask the room owner to run "
+                    f"'aidapter invite --room {room_id} --name {name}'"
+                )
+            invite = self._redeem_invite(room_id, name, invite_secret)
+
             participant = self._insert_participant(
-                room_id, name, ParticipantKind(kind), metadata=metadata
+                room_id, name, ParticipantKind(invite.kind), metadata=metadata
+            )
+            dao.update_invite(
+                self.conn,
+                room_id,
+                invite.invite_id,
+                redeemed_at=utc_now(),
+                redeemed_participant_id=participant["participant_id"],
             )
             self._log(
                 room_id,
                 ev.PARTICIPANT_JOINED,
                 actor_participant_id=participant["participant_id"],
                 actor_name=name,
-                payload={"kind": kind},
+                payload={"kind": invite.kind, "invite_id": invite.invite_id},
             )
             return {
                 **participant,
@@ -247,6 +416,47 @@ class Broker:
                 "rejoined": False,
                 "memory_path": str(self.workspace.memory_path(room_id)),
             }
+
+    def _redeem_invite(self, room_id: str, name: str, secret: str):
+        """Find and validate the invite this token unlocks.
+
+        Invites are matched by comparing the presented secret against each live
+        invite's hash in constant time.  Rooms hold a handful of invites, so the
+        linear scan is free and it keeps the token format uniform.
+        """
+        now = utc_now()
+        candidates = dao.list_invites(self.conn, room_id)
+        for invite in candidates:
+            stored = dao.get_invite_secret(self.conn, room_id, invite.invite_id)
+            if stored is None or not tokens.verify_secret(secret, *stored):
+                continue
+            status = invite.status(now)
+            if status == InviteStatus.REDEEMED.value:
+                raise AuthError(
+                    f"this invite was already used to join as {invite.participant_name!r}; "
+                    "invites are single-use",
+                    code="invite_already_used",
+                )
+            if status == InviteStatus.REVOKED.value:
+                raise AuthError(
+                    f"this invite was revoked ({invite.revoked_reason or 'no reason given'})",
+                    code="invite_revoked",
+                )
+            if status == InviteStatus.EXPIRED.value:
+                raise AuthError(
+                    f"this invite expired at {invite.expires_at}; ask for a new one with "
+                    f"'aidapter invite --room {room_id} --name {invite.participant_name}'",
+                    code="invite_expired",
+                )
+            if invite.participant_name != name:
+                raise AuthError(
+                    f"this invite is for {invite.participant_name!r}, not {name!r}",
+                    code="invite_name_mismatch",
+                )
+            return invite
+        # Deliberately identical for "not a token here" and "token for another
+        # room": the error must not confirm which rooms or invites exist.
+        raise AuthError("invalid invite token for this room", code="invalid_invite")
 
     def _rejoin(
         self,
@@ -1043,6 +1253,8 @@ class Broker:
                 )
             scheduler.clear_queue(self.conn, room_id)
             dao.cancel_open_tasks(self.conn, room_id)
+            # Ending the room ends every outstanding grant to enter it.
+            revoked = dao.revoke_live_invites(self.conn, room_id, "room_stopped")
             dao.update_room(
                 self.conn,
                 room_id,
@@ -1056,6 +1268,7 @@ class Broker:
                 ev.ROOM_STOPPED,
                 actor_participant_id=actor.participant_id,
                 actor_name=actor.name,
+                payload={"revoked_invites": revoked},
             )
         return self.room_status(room_id, credential=credential)
 
@@ -1588,6 +1801,34 @@ def _validate_name(name: str) -> None:
             f"invalid participant name {name!r}: use 1-64 characters from "
             "[A-Za-z0-9._-], starting with a letter or digit"
         )
+
+
+def _unique_names(names: Sequence[str], human_name: str) -> list[str]:
+    """Validate and de-duplicate the agent names a room is created with."""
+    seen: list[str] = []
+    for raw in names or ():
+        for candidate in str(raw).split(","):
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            _validate_name(candidate)
+            if candidate == human_name:
+                raise ValidationError(
+                    f"{candidate!r} is already the human participant's name"
+                )
+            if candidate not in seen:
+                seen.append(candidate)
+    return seen
+
+
+def _expiry(ttl_seconds: int) -> str | None:
+    """Absolute expiry for a TTL; 0 means 'lives as long as the room does'."""
+    if not ttl_seconds:
+        return None
+    from datetime import datetime, timedelta, timezone
+
+    moment = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def _json(value: dict | None) -> str:

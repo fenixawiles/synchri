@@ -33,7 +33,8 @@ code,pre,.mono{font-family:var(--mono);font-size:13px}
 pre{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
   border-radius:var(--radius);padding:1rem;margin:0}
 a{color:var(--accent)}
-.wrap{max-width:64rem;margin:0 auto;padding:2rem 1.5rem 5rem}
+.wrap{max-width:76rem;margin:0 auto;padding:2rem 2rem 5rem}
+.wrap.session-app{max-width:none;margin:0;padding:0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.25rem}
 .muted{color:var(--dim)}
 .small{font-size:13px}
@@ -80,20 +81,20 @@ header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;ali
 .quick textarea{min-height:7rem}
 .agent-card{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--panel)}
 .agent-card pre{margin-top:.75rem;white-space:pre-wrap;word-break:break-word}
-/* focused session view: chat first, tools tucked into one quiet left rail */
-.session-layout{display:grid;grid-template-columns:13.5rem minmax(0,1fr);gap:0;min-height:calc(100vh - 8.5rem);border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}
-.session-rail{padding:1.1rem .8rem;border-right:1px solid var(--line);background:#fafaf8;display:flex;flex-direction:column;gap:1.1rem}
+/* focused session view: a fixed rail and a contained, breathing chat surface */
+.session-layout{display:grid;grid-template-columns:15.5rem minmax(0,1fr);height:calc(100vh - 58px);min-height:34rem;background:var(--panel);overflow:hidden}
+.session-rail{position:sticky;top:0;height:calc(100vh - 58px);padding:1.35rem 1rem;border-right:1px solid var(--line);background:#fafaf8;display:flex;flex-direction:column;gap:1.15rem;overflow-y:auto}
 .rail-kicker{font-size:11px;font-weight:700;letter-spacing:.09em;color:var(--dim);text-transform:uppercase}.rail-title{font-size:15px;font-weight:680;line-height:1.3}.rail-status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:.4rem}.rail-status i{width:.45rem;height:.45rem;border-radius:50%;background:var(--line);display:inline-block}.rail-status i.live{background:var(--accent)}
 .rail-clock{font-size:12px;color:var(--dim);margin-top:-.6rem}.rail-nav{display:grid;gap:.15rem}.rail-nav button{text-align:left;border:0;background:transparent;padding:.48rem .55rem;border-radius:6px;color:var(--dim);font-size:13px}.rail-nav button:hover{background:var(--bg);color:var(--ink)}.rail-nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
 .rail-team{border-top:1px solid var(--line);padding-top:.85rem;margin-top:auto}.team-line{display:flex;align-items:center;justify-content:space-between;gap:.45rem;font-size:12px;padding:.16rem 0}.presence{display:inline-flex;align-items:center;gap:.42rem;min-width:0}.presence i{width:.46rem;height:.46rem;border-radius:50%;background:var(--line);display:inline-block;flex:none}.presence i.live{background:var(--accent)}
 .rail-controls{display:flex;gap:.4rem;border-top:1px solid var(--line);padding-top:.85rem}.rail-controls button{font-size:12px;padding:.35rem .5rem}
-.conversation-shell{min-width:0;display:flex;flex-direction:column;background:var(--panel)}.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.1rem 1.3rem .9rem;border-bottom:1px solid var(--line)}.chat-title{font-size:17px;font-weight:680}.chat-subtitle{font-size:12px;color:var(--dim);margin-top:.1rem}.chat-time{font-size:12px;color:var(--dim);white-space:nowrap}
-.conversation-feed{padding:.35rem 1.3rem 1rem;min-height:31rem}.conversation-feed .msg{padding:1rem 0;border-bottom:0;max-width:48rem}.conversation-feed .msg .who{font-size:11px;letter-spacing:.075em;font-weight:750;color:var(--dim)}.conversation-feed .msg .body{white-space:normal;margin-top:.28rem;line-height:1.58}.msg.you .who{color:var(--accent)}.msg.system .body{color:var(--dim);font-size:13px}.handoff{margin:.52rem 0 0;font-size:10px;font-weight:750;letter-spacing:.08em;color:var(--accent)}.response-state{margin-top:.45rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
-.live-work{margin:.7rem 0 .25rem;padding:.75rem .85rem;border:1px solid var(--accent-soft);border-radius:8px;background:#f7fbf8;max-width:48rem}.live-work-label{font-size:10px;font-weight:750;letter-spacing:.09em;color:var(--accent);margin-bottom:.35rem}.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.55rem;align-items:baseline;font-size:13px;padding:.12rem 0}.live-note b{font-size:11px;letter-spacing:.06em}.live-note .dot{color:var(--accent)}
-.rich{max-width:48rem}.rich h3,.rich h4{font-size:14px;margin:.65rem 0 .2rem}.rich h4{font-size:13px}.rich p{margin:.45rem 0}.rich .rich-list{margin:.42rem 0;padding-left:1.1rem}.rich .rich-list div{margin:.16rem 0}.rich code{font-size:.88em;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:.1rem .28rem}.rich .rich-code{margin:.65rem 0;padding:.75rem .85rem;border:1px solid var(--line);background:#f7f7f5;border-radius:7px;overflow:auto;line-height:1.5}.rich .rich-code code{padding:0;border:0;background:transparent}.rich a{color:var(--accent);text-decoration-thickness:1px}.live-note .rich{display:inline}.live-note .rich p{display:inline;margin:0}.live-note .rich .rich-code{display:block}
-.chat-compose{display:flex;gap:.55rem;margin:1.15rem 0 0;padding-top:1rem;border-top:1px solid var(--line);max-width:48rem}.chat-compose input{min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:.55rem .05rem;background:transparent}.chat-compose input:focus{outline:none;border-color:var(--accent)}.chat-compose button{padding:.45rem .8rem}
-.details-panel{margin:0;padding:1rem 1.3rem 1.5rem;border-top:1px solid var(--line);background:#fcfcfb}.detail-heading{font-size:11px;letter-spacing:.08em;color:var(--dim);font-weight:750;margin-bottom:.7rem}
-@media(max-width:760px){.session-layout{grid-template-columns:1fr;border-radius:0;border-left:0;border-right:0}.session-rail{border-right:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:.6rem}.rail-nav{grid-column:1/-1;display:flex;overflow:auto}.rail-nav button{white-space:nowrap}.rail-team,.rail-controls{display:none}.conversation-feed{min-height:24rem;padding-left:1rem;padding-right:1rem}.chat-header{padding-left:1rem;padding-right:1rem}}
+.conversation-shell{min-width:0;min-height:0;height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--panel)}.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.2rem clamp(2rem,4vw,5rem) 1rem;border-bottom:1px solid var(--line)}.chat-title{font-size:17px;font-weight:680}.chat-subtitle{font-size:12px;color:var(--dim);margin-top:.1rem}.chat-time{font-size:12px;color:var(--dim);white-space:nowrap}
+.conversation-feed{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto auto;overflow:hidden}.message-list{min-height:0;overflow-y:auto;padding:1rem clamp(2rem,4vw,5rem) .6rem;scroll-behavior:smooth}.message-list .msg{padding:1rem 0;border-bottom:0;max-width:62rem}.conversation-feed .msg .who{font-size:11px;letter-spacing:.075em;font-weight:750;color:var(--dim)}.conversation-feed .msg .body{white-space:normal;margin-top:.28rem;line-height:1.62}.msg.you .who{color:var(--accent)}.msg.system .body{color:var(--dim);font-size:13px}.handoff{margin:.52rem 0 0;font-size:10px;font-weight:750;letter-spacing:.08em;color:var(--accent)}.response-state{margin-top:.45rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
+.live-work{margin:0;padding:.3rem clamp(2rem,4vw,5rem) .45rem;max-width:none;background:transparent}.live-work-label{font-size:10px;font-weight:750;letter-spacing:.09em;color:var(--accent);margin-bottom:.18rem}.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.55rem;align-items:baseline;font-size:13px;padding:.08rem 0;max-width:62rem}.live-note b{font-size:11px;letter-spacing:.06em}.live-note .dot{color:var(--accent)}
+.rich{max-width:62rem}.rich h3,.rich h4{font-size:14px;margin:.65rem 0 .2rem}.rich h4{font-size:13px}.rich p{margin:.45rem 0}.rich .rich-list{margin:.42rem 0;padding-left:1.1rem}.rich .rich-list div{margin:.16rem 0}.rich code{font-size:.88em;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:.1rem .28rem}.rich .rich-code{margin:.65rem 0;padding:.75rem .85rem;border:1px solid var(--line);background:#f7f7f5;border-radius:7px;overflow:auto;line-height:1.5}.rich .rich-code code{padding:0;border:0;background:transparent}.rich a{color:var(--accent);text-decoration-thickness:1px}.live-note .rich{display:inline}.live-note .rich p{display:inline;margin:0}.live-note .rich .rich-code{display:block}
+.chat-compose{display:flex;gap:.55rem;margin:0;padding:.7rem clamp(2rem,4vw,5rem) 1rem;max-width:none}.chat-compose input{min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:.55rem .05rem;background:transparent;max-width:62rem}.chat-compose input:focus{outline:none;border-color:var(--accent)}.chat-compose button{padding:.45rem .8rem}
+.details-panel{margin:0;padding:1rem clamp(2rem,4vw,5rem) 1.5rem;border-top:1px solid var(--line);background:#fcfcfb;max-height:45vh;overflow:auto}.detail-heading{font-size:11px;letter-spacing:.08em;color:var(--dim);font-weight:750;margin-bottom:.7rem}
+@media(max-width:760px){.wrap{padding-left:1rem;padding-right:1rem}.wrap.session-app{padding:0}.session-layout{grid-template-columns:1fr;height:auto;min-height:calc(100vh - 58px)}.session-rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:.6rem}.rail-nav{grid-column:1/-1;display:flex;overflow:auto}.rail-nav button{white-space:nowrap}.rail-team,.rail-controls{display:none}.conversation-shell{min-height:32rem}.message-list{padding-left:1rem;padding-right:1rem}.live-work,.chat-compose{padding-left:1rem;padding-right:1rem}.chat-header{padding-left:1rem;padding-right:1rem}}
 .msg{border-bottom:1px solid var(--line);padding:.7rem 0}
 .msg:last-child{border-bottom:none}
 .msg .who{font-weight:640}
@@ -173,6 +174,7 @@ const app = () => document.getElementById("app");
 /* ------------------------------------------------------------------ home */
 async function home() {
   stopClock();
+  app().classList.remove("session-app");
   S.view = "home"; S.session = null;
   S.boot = await api("bootstrap");
   listen();
@@ -217,6 +219,7 @@ async function home() {
 /* ------------------------------------------------------------- quick start */
 async function quickStart() {
   stopClock();
+  app().classList.remove("session-app");
   if (!S.boot) S.boot = await api("bootstrap");
   S.view = "quick"; S.session = null; S.launch = null;
   S.quick = {
@@ -288,6 +291,7 @@ async function refreshLaunch() {
 
 function showLaunch(result) {
   stopClock();
+  app().classList.remove("session-app");
   S.session = result.session.session_id;
   S.launch = result.launch;
   if (result.clone) S.launch.clone = result.clone;
@@ -347,6 +351,7 @@ function renderLaunch() {
 /* ---------------------------------------------------------------- wizard */
 async function newSession(resume) {
   stopClock();
+  app().classList.remove("session-app");
   S.view = "wizard"; S.step = "mode";
   S.draft = resume ? await api("draft?draft=default")
                    : await api("draft/reset", { draft: "default" });
@@ -664,6 +669,7 @@ function stepReview() {
 
 /* ------------------------------------------------------------- dashboard */
 async function openSession(id) {
+  app().classList.add("session-app");
   S.view = "session"; S.session = id;
   S.dash = await api("dashboard?session=" + encodeURIComponent(id));
   S.tab = S.dash.session.status === "awaiting_ack" ? "contract" : "conversation";
@@ -683,7 +689,16 @@ function listen() {
     try {
       if (S.view === "session") {
         S.dash = await api("dashboard?session=" + encodeURIComponent(S.session));
-        renderSession();
+        // Room messages and Live Work arrive often. Repainting the whole
+        // session made the page visibly jump and threw away scroll position.
+        // Only structural session changes need a full layout rebuild.
+        if (what.includes("sessions")) {
+          renderSession();
+        } else {
+          refreshSessionChrome();
+          const conversation = document.getElementById("conversation-panel");
+          if (conversation) await paint("conversation", conversation);
+        }
       } else if (S.view === "launch" && S.session) {
         const result = await api("launch?session=" + encodeURIComponent(S.session));
         S.launch = result.launch; renderLaunch();
@@ -734,13 +749,13 @@ function renderSession() {
   app().innerHTML = "";
   const team = s.participants.map(p => {
     const active = p.name === d.current_actor;
-    return `<div class="team-line"><span class="presence"><i class="${active ? "live" : ""}"></i>${esc(p.name)}</span>
-      <span class="muted small">${activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting")}</span></div>`;
+    return `<div class="team-line" data-member="${esc(p.name)}"><span class="presence"><i class="${active ? "live" : ""}"></i>${esc(p.name)}</span>
+      <span class="muted small" data-team-state>${activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting")}</span></div>`;
   }).join("");
   const nav = ["conversation", ...DETAIL_TABS];
   const layout = $(`<div class="session-layout"><aside class="session-rail">
       <div><div class="rail-kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
-      <div class="rail-status"><i class="${working ? "live" : ""}"></i>${esc(current)}</div>
+      <div class="rail-status"><i id="rail-current-dot" class="${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
       <div id="timebox" class="rail-clock mono">${esc(timeboxText(s.deadline))}</div>
       <nav class="rail-nav" aria-label="Session tools">${nav.map(tab =>
         `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
@@ -773,16 +788,39 @@ function renderSession() {
   startClock(s.deadline);
 }
 
+function refreshSessionChrome() {
+  const d = S.dash, s = d.session;
+  const current = d.current_actor || (s.status === "active" ? "Waiting for the next turn" : s.status.replace("_", " "));
+  const activeNotes = new Set((d.activities || []).map(note => note.name));
+  const currentEl = document.getElementById("rail-current");
+  if (currentEl) currentEl.textContent = current;
+  const dot = document.getElementById("rail-current-dot");
+  if (dot) dot.classList.toggle("live", s.status === "active");
+  document.querySelectorAll(".team-line[data-member]").forEach(row => {
+    const name = row.dataset.member;
+    const active = name === d.current_actor;
+    const state = row.querySelector("[data-team-state]");
+    if (state) state.textContent = activeNotes.has(name) ? "working" : (active ? "on point" : "waiting");
+    const presence = row.querySelector(".presence i");
+    if (presence) presence.classList.toggle("live", active);
+  });
+}
+
 async function paint(tab, el) {
   const q = "?session=" + encodeURIComponent(S.session);
   const d = S.dash;
   if (tab === "conversation") {
+    const previousInput = el.querySelector("#mm");
+    const draftValue = previousInput?.value || "";
+    const draftFocused = document.activeElement === previousInput;
+    const caretStart = previousInput?.selectionStart ?? draftValue.length;
+    const caretEnd = previousInput?.selectionEnd ?? draftValue.length;
     const r = await api("conversation" + q);
     const activityTrail = d.activity_entries || d.activities || [];
-    const liveWork = activityTrail.length ? `<section class="live-work" aria-live="polite">
-      <div class="live-work-label">LIVE WORK · THIS TURN</div>${activityTrail.map(note =>
+    const liveWork = `<section class="live-work" aria-live="polite">
+      ${activityTrail.length ? `<div class="live-work-label">LIVE WORK · THIS TURN</div>${activityTrail.map(note =>
         `<div class="live-note"><span class="dot">●</span><b>${esc(String(note.name).toUpperCase())}</b><div>${rich(note.summary)}</div></div>`
-      ).join("")}</section>` : "";
+      ).join("")}` : ""}</section>`;
     const messages = r.messages.length ? r.messages.map(m => {
       const speaker = m.metadata?.source === "session_activation" ? "SYNCHRI"
         : (m.sender === "human" ? "YOU" : String(m.sender).toUpperCase());
@@ -794,16 +832,25 @@ async function paint(tab, el) {
         ${responseState ? `<div class="response-state">${esc(responseState)}</div>` : ""}
         ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}</div>`;
     }).join("") : `<span class="muted">Nothing said yet.</span>`;
-    el.innerHTML = liveWork + messages;
+    el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork;
     const send = $(`<div class="chat-compose">
       <input id="mm" placeholder="Give the team direction — the builder takes it first">
       <button class="primary" id="ms">Send</button></div>`);
     el.append(send);
+    const input = send.querySelector("#mm");
+    input.value = draftValue;
+    if (draftFocused) {
+      input.focus();
+      input.setSelectionRange(caretStart, caretEnd);
+    }
     send.querySelector("#ms").onclick = guard(async () => {
-      const v = document.getElementById("mm").value.trim(); if (!v) return;
+      const v = input.value.trim(); if (!v) return;
+      input.value = "";
       await api("message", { session: S.session, content: v, interrupt: true });
       paint("conversation", el);
     });
+    const list = el.querySelector(".message-list");
+    requestAnimationFrame(() => list.scrollTo({ top: list.scrollHeight, behavior: "smooth" }));
   } else if (tab === "gates") {
     const r = await api("gates" + q);
     el.innerHTML = r.gates.length ? `<table><thead><tr><th>Gate</th><th>Status</th><th>Description</th>

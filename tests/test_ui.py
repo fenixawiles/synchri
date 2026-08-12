@@ -197,6 +197,16 @@ def test_every_session_start_routes_to_the_agent_setup_prompts():
     assert "function openLaunch(id)" in source
 
 
+def test_live_updates_repaint_only_the_chat_surface():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "if (what.includes(\"sessions\")) {\n          renderSession();" in source
+    assert "refreshSessionChrome();" in source
+    assert '<div class="message-list">${messages}</div>' in source
+    assert "list.scrollTo({ top: list.scrollHeight, behavior: \"smooth\" })" in source
+
+
 def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
     from synchri.ui.api import Api
 

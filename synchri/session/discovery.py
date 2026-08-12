@@ -42,7 +42,8 @@ _GITHUB_REFERENCE = re.compile(
 
 def desktop_clone_root() -> Path:
     """The visible, user-owned home for repositories Synchri fetches."""
-    return Path.home() / "Desktop" / "Synchri"
+    # Keep user projects distinct from a source checkout of Synchri itself.
+    return Path.home() / "Desktop" / "Synchri Projects"
 
 
 def github_reference(value: str) -> tuple[str, str, str] | None:

@@ -35,7 +35,7 @@ def add_parsers(sub, command) -> None:
     start = command(
         "start",
         "Start a new Synchri session: mode, repository, isolated worktree, agents, "
-        "permissions, spec, deadline, contract.",
+        "permissions, spec, optional timebox, contract.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "  synchri start                       walk through the wizard\n"
@@ -66,8 +66,8 @@ def add_parsers(sub, command) -> None:
     )
     start.add_argument("--spec", help="product specification text")
     start.add_argument("--spec-file", help="read the specification from a file")
-    start.add_argument("--deadline", help="duration, e.g. '10 hours'")
-    start.add_argument("--deadline-at", help="fixed time, e.g. '2026-08-12T08:00'")
+    start.add_argument("--deadline", help="optional timebox duration, e.g. '10 hours'")
+    start.add_argument("--deadline-at", help="optional timebox end, e.g. '2026-08-12T08:00'")
     start.add_argument("--name", help="session name")
     start.add_argument("--preset", help="load a saved preset")
     start.add_argument("--save-preset", metavar="NAME", help="save this configuration as a preset")

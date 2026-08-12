@@ -9,8 +9,8 @@ This is where the startup invariants are actually enforced, in this order:
 * changing permissions, the spec, the deadline, or the roster produces a new
   revision and clears acknowledgments, so nobody is working under terms they
   never saw;
-* a deadline that expires ends the session as ``timed_out`` with an honest
-  handoff, never as complete;
+* an optional timebox guides pacing but never falsely ends work or claims it is
+  complete;
 * completion requires every required gate satisfied with evidence and both
   sign-offs.
 
@@ -27,6 +27,7 @@ from enum import Enum
 from pathlib import Path
 
 from ..broker import Broker, Credential
+from ..models.envelope import MessageDraft
 from ..errors import ConflictError, NotFoundError, StateError, ValidationError
 from ..ids import new_id, utc_now
 from ..protocol import events as ev
@@ -475,14 +476,74 @@ class SessionManager:
                 "cannot activate: still waiting on " + ", ".join(state["waiting"]),
                 code="awaiting_acknowledgment",
             )
-        # 3. the deadline has not already passed
-        if record.deadline and record.deadline.is_expired():
-            raise StateError("the deadline has already passed", code="deadline_passed")
-
+        # 3. Acknowledge is an agreement to the contract; joining proves that
+        # the agent has a usable credential and can actually receive the first
+        # task. Never turn an unconnected roster into a fake "active" room.
+        room = self.broker.room_status(
+            record.room_id, credential=self._human_credential(record)
+        ) if record.room_id else {"participants": []}
+        joined = {
+            participant["name"]
+            for participant in room.get("participants", [])
+            if participant.get("status") != "removed"
+        }
+        waiting_to_join = [plan.name for plan in record.participants if plan.name not in joined]
+        if waiting_to_join:
+            raise StateError(
+                "cannot activate: still waiting for " + ", ".join(waiting_to_join) + " to join",
+                code="awaiting_join",
+            )
         now = utc_now()
         self._update(session_id, status=SessionStatus.ACTIVE.value, activated_at=now)
         self._log(record, ev.SESSION_ACTIVATED, {"revision": record.contract_revision})
+        try:
+            self._open_collaboration(record)
+        except Exception:
+            # Activation promises a live collaboration, not a status badge.
+            # A failure to create the opening turn pauses safely for the user.
+            self._update(session_id, status=SessionStatus.PAUSED.value)
+            raise
         return self.get(session_id)
+
+    def _open_collaboration(self, record: SessionRecord) -> None:
+        """Give the first actual turn to the builder when a session activates."""
+        if not record.room_id:
+            raise StateError("the session has no room", code="no_room")
+        builder = next(
+            (plan for plan in record.participants if plan.role == "primary_builder"),
+            record.participants[0] if record.participants else None,
+        )
+        if builder is None:
+            raise StateError("the session has no participants", code="no_participants")
+        reviewer = next(
+            (plan for plan in record.participants if plan.role == "adversarial_reviewer"), None
+        )
+        review_line = (
+            f"Then hand your opening approach and first implementation checkpoint to {reviewer.name} "
+            "for adversarial review."
+            if reviewer
+            else "Then continue with the first implementation checkpoint."
+        )
+        spec_line = (
+            "Read the canonical product specification and the authorized worktree."
+            if record.spec
+            else "Inspect the authorized worktree and establish the concrete first objective."
+        )
+        self.broker.send(
+            record.room_id,
+            credential=self._human_credential(record),
+            draft=MessageDraft(
+                message_type="task",
+                target=builder.name,
+                metadata={"source": "session_activation"},
+                content=(
+                    f"Begin working on the specification. {spec_line} Publish your opening build approach: "
+                    "current repository facts, implementation order, first change, and risks. "
+                    "Do not stop at the proposal—start the first coherent unit of work. "
+                    + review_line
+                ),
+            ),
+        )
 
     # ------------------------------------------------------------------
     # reconfiguration
@@ -640,21 +701,15 @@ class SessionManager:
             raise StateError(
                 "cannot complete: " + "; ".join(report["blockers"]), code="gates_unsatisfied"
             )
-        if record.deadline and record.deadline.is_expired():
-            raise StateError(
-                "the deadline passed before completion; finish as timed out instead",
-                code="deadline_passed",
-            )
         return self._finish(record, SessionStatus.COMPLETE, "all acceptance gates satisfied")
 
     def expire(self, session_id: str) -> dict:
-        """The deadline arrived. End honestly, with a handoff, not a claim."""
-        record = self.get(session_id, sweep=False)
-        if record.is_terminal:
-            return self.handoff_report(session_id)
-        self._finish(record, SessionStatus.TIMED_OUT, "deadline reached")
-        self._log(record, ev.SESSION_ESCALATED, {"rule": "deadline_reached"})
-        return self.handoff_report(session_id)
+        """Compatibility read for callers that used to enforce a deadline.
+
+        An elapsed timebox is deliberately not an escalation or state change.
+        """
+        self.get(session_id, sweep=False)
+        return self.dashboard(session_id)
 
     def stop(self, session_id: str, reason: str = "stopped by the user") -> SessionRecord:
         record = self.get(session_id)
@@ -780,10 +835,9 @@ class SessionManager:
     def get(self, session_id: str, *, sweep: bool = True) -> SessionRecord:
         """Read a session.
 
-        ``sweep`` lets an expired deadline take effect without a daemon: any
-        read of a live session past its deadline ends it as ``timed_out`` first.
-        Internal calls pass ``sweep=False`` to avoid re-entering the transition
-        they are already performing.
+        ``sweep`` remains for compatibility with earlier callers. A timebox is
+        advisory now, so reading a session never ends its work behind the
+        user's back.
         """
         row = self.conn.execute(
             "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
@@ -791,28 +845,15 @@ class SessionManager:
         if row is None:
             raise NotFoundError(f"no such session: {session_id}")
         record = self._hydrate(row)
-        if sweep and self._should_expire(record):
-            self._finish(record, SessionStatus.TIMED_OUT, "deadline reached")
-            return self.get(session_id, sweep=False)
         return record
 
     @staticmethod
     def _should_expire(record: SessionRecord) -> bool:
-        return bool(
-            record.deadline
-            and record.deadline.is_expired()
-            and not record.is_terminal
-            and record.status != SessionStatus.CONFIGURING.value
-        )
+        return False
 
     def sweep_expired(self) -> list[str]:
-        """End every live session whose deadline has passed. Returns their ids."""
-        expired = []
-        for record in self.list_sessions(active_only=True):
-            if self._should_expire(record):
-                self._finish(record, SessionStatus.TIMED_OUT, "deadline reached")
-                expired.append(record.session_id)
-        return expired
+        """Compatibility no-op: timeboxes are intentionally not hard stops."""
+        return []
 
     def list_sessions(self, *, repo_root: str | None = None, active_only: bool = False) -> list[SessionRecord]:
         sql = "SELECT * FROM sessions"
@@ -873,7 +914,6 @@ class SessionManager:
                 self.open_escalations(session_id)
                 or record.status
                 in {SessionStatus.AWAITING_ACK.value, SessionStatus.PAUSED.value}
-                or (deadline and deadline.is_expired())
             ),
             "worktree_present": bool(record.worktree and worktree_module.exists(record.worktree)),
         }
@@ -894,8 +934,11 @@ class SessionManager:
             problems.extend(repo.problems)
         expired = bool(record.deadline and record.deadline.is_expired())
         if expired and not record.is_terminal:
-            problems.append("the deadline passed while Synchri was not running")
+            problems.append("the timebox elapsed while Synchri was not running; work can continue")
 
+        blocking_problems = [
+            problem for problem in problems if not problem.startswith("the timebox elapsed")
+        ]
         return {
             "session": record.to_dict(),
             "was_active": record.status == SessionStatus.ACTIVE.value,
@@ -904,7 +947,7 @@ class SessionManager:
             "deadline_expired": expired,
             "problems": problems,
             "participants_must_reconnect": [p.name for p in record.participants],
-            "resumable": not problems and not record.is_terminal,
+            "resumable": not blocking_problems and not record.is_terminal,
             "contract_revision": record.contract_revision,
         }
 

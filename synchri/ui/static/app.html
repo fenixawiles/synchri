@@ -78,15 +78,24 @@ header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;ali
 .quick textarea{min-height:7rem}
 .agent-card{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--panel)}
 .agent-card pre{margin-top:.75rem;white-space:pre-wrap;word-break:break-word}
-/* dashboard */
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:.75rem}
-.tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:.85rem 1rem}
-.tile .k{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
-.tile .v{font-size:20px;font-weight:660;margin-top:.15rem;letter-spacing:-.02em}
-.tabs{display:flex;gap:.15rem;overflow-x:auto;border-bottom:1px solid var(--line);margin:1.5rem 0 1rem}
-.tabs button{border:none;background:none;border-radius:0;border-bottom:2px solid transparent;
-  padding:.55rem .85rem;color:var(--dim);white-space:nowrap}
-.tabs button.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+/* focused session view */
+.session-head{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;margin-bottom:1.1rem}
+.session-head h2{font-size:21px}
+.session-meta{display:flex;align-items:center;gap:.65rem;color:var(--dim);font-size:13px;white-space:nowrap}
+.session-layout{display:grid;grid-template-columns:minmax(0,1fr) 17rem;gap:1rem;align-items:start}
+.conversation-shell{min-width:0}.conversation-shell .card{min-height:34rem}
+.conversation-feed{padding:1.1rem 1.25rem}.conversation-feed .msg{padding:.85rem 0}
+.chat-compose{display:flex;gap:.6rem;margin-top:1rem}.chat-compose input{min-width:0}
+.handoff{margin:.15rem 0 .7rem;font-size:11px;font-weight:700;letter-spacing:.07em;color:var(--accent)}
+.response-state{margin-top:.42rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
+.side{position:sticky;top:5.25rem}.side-card{padding:1rem}.side-card>*+*{margin-top:.75rem}
+.side-line{display:flex;justify-content:space-between;gap:.75rem;font-size:13px}.side-line b{font-weight:650}
+.team-line{display:flex;align-items:center;justify-content:space-between;gap:.6rem;font-size:13px}.presence{display:inline-flex;align-items:center;gap:.42rem}.presence i{width:.52rem;height:.52rem;border-radius:50%;background:var(--line);display:inline-block}.presence i.live{background:var(--accent)}
+.detail-summary{cursor:pointer;font-weight:600;font-size:13px}.details-panel{margin-top:.75rem}
+.detail-tabs{display:flex;flex-wrap:wrap;gap:.25rem;margin:.7rem 0}.detail-tabs button{font-size:12px;padding:.3rem .45rem}
+.detail-tabs button.on{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.mini-stats{display:grid;grid-template-columns:1fr 1fr;gap:.45rem}.mini-stat{font-size:12px;color:var(--dim)}.mini-stat b{display:block;color:var(--ink);font-size:14px;margin-top:.1rem}
+@media(max-width:760px){.session-layout{grid-template-columns:1fr}.side{position:static}.conversation-shell .card{min-height:24rem}.session-head{align-items:flex-start}.session-meta{flex-wrap:wrap;justify-content:flex-end}}
 .msg{border-bottom:1px solid var(--line);padding:.7rem 0}
 .msg:last-child{border-bottom:none}
 .msg .who{font-weight:640}
@@ -134,12 +143,13 @@ function flash(message) {
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
-            tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
-            agentDraft:null, githubReposRequest:null, githubReposLoading:false };
+            tab:"gates", dash:null, repos:null, es:null, quick:null, launch:null,
+            agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null };
 const app = () => document.getElementById("app");
 
 /* ------------------------------------------------------------------ home */
 async function home() {
+  stopClock();
   S.view = "home"; S.session = null;
   S.boot = await api("bootstrap");
   listen();
@@ -183,6 +193,7 @@ async function home() {
 
 /* ------------------------------------------------------------- quick start */
 async function quickStart() {
+  stopClock();
   if (!S.boot) S.boot = await api("bootstrap");
   S.view = "quick"; S.session = null; S.launch = null;
   S.quick = {
@@ -253,6 +264,7 @@ async function refreshLaunch() {
 }
 
 function showLaunch(result) {
+  stopClock();
   S.session = result.session.session_id;
   S.launch = result.launch;
   if (result.clone) S.launch.clone = result.clone;
@@ -311,6 +323,7 @@ function renderLaunch() {
 
 /* ---------------------------------------------------------------- wizard */
 async function newSession(resume) {
+  stopClock();
   S.view = "wizard"; S.step = "mode";
   S.draft = resume ? await api("draft?draft=default")
                    : await api("draft/reset", { draft: "default" });
@@ -328,7 +341,7 @@ function stepSatisfied(key) {
   const d = S.draft.draft;
   return ({ mode: !!d.mode, repository: !!d.repo_path, worktree: true,
             agents: d.agents.length > 0, permissions: true,
-            spec: !!d.spec, deadline: !!d.deadline, review: true })[key] ?? true;
+            spec: !!d.spec, deadline: true, review: true })[key] ?? true;
 }
 
 async function patch(body) {
@@ -566,9 +579,9 @@ function stepSpec() {
 
 function stepDeadline() {
   const d = S.draft.draft.deadline;
-  const box = $(`<div class="stack"><h2>When does this need to be done?</h2>
-    <div class="muted small">A real boundary: agents shift to stabilising as it nears, and if it
-      passes they hand back an honest incomplete report rather than claiming success.</div>
+  const box = $(`<div class="stack"><h2>Set a timebox, if useful</h2>
+    <div class="muted small">This helps the team pace itself. It never stops the session: agents
+      can finish early when the work is verified, or continue when more work remains.</div>
     <div class="row">${["4 hours","8 hours","10 hours","24 hours"].map(x=>
       `<button data-d="${x}">${x}</button>`).join("")}</div>
     <div class="row"><input id="dl" placeholder="e.g. 10 hours, or 2h30m"><button id="setdl">Set</button></div>
@@ -592,7 +605,7 @@ function stepReview() {
       <div class="between"><span class="muted small">BASE BRANCH</span><span class="mono">${esc(s.repository.branch||"—")}</span></div>
       <div class="between"><span class="muted small">WORKTREE</span><span class="mono">${esc(s.worktree.name)}</span></div>
       <div class="between"><span class="muted small">PRODUCT SPEC</span><span>${esc(s.spec)}</span></div>
-      <div class="between"><span class="muted small">DEADLINE</span><span>${esc(s.deadline)}</span></div>
+      <div class="between"><span class="muted small">TIMEBOX</span><span>${esc(s.deadline)}</span></div>
     </div>
     <div class="card"><h3 class="small muted">AGENTS</h3><table><tbody>
       ${s.agents.map(a=>`<tr><td><b>${esc(a.name)}</b></td><td>${esc(a.role_label)}</td>
@@ -664,59 +677,80 @@ function listen() {
   es.onerror = () => { /* EventSource retries on its own */ };
 }
 
-const TABS = ["conversation","gates","tests","changes","commits","worktree","memory","raw","contract"];
+const DETAIL_TABS = ["gates","tests","changes","commits","worktree","memory","raw","contract"];
+
+function timeboxText(deadline) {
+  if (!deadline?.ends_at) return "Open-ended";
+  const seconds = Math.ceil((Date.parse(deadline.ends_at) - Date.now()) / 1000);
+  if (seconds <= 0) return "Timebox passed";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return `${String(hours).padStart(2,"0")}:${String(minutes).padStart(2,"0")}:${String(seconds % 60).padStart(2,"0")} remaining`;
+}
+
+function startClock(deadline) {
+  stopClock();
+  const tick = () => {
+    const clock = document.getElementById("timebox");
+    if (clock) clock.textContent = timeboxText(deadline);
+  };
+  tick();
+  if (deadline?.ends_at) S.clock = setInterval(tick, 1000);
+}
+
+function stopClock() {
+  if (S.clock) clearInterval(S.clock);
+  S.clock = null;
+}
 
 function renderSession() {
   const d = S.dash, s = d.session, g = d.gates.summary;
+  const working = s.status === "active";
+  const current = d.current_actor || (working ? "Waiting for the next turn" : s.status.replace("_", " "));
   app().innerHTML = "";
-  app().append($(`<div class="between" style="margin-bottom:1rem">
-    <div><h2>${esc(s.name)}</h2>
-      <div class="small muted">${esc(s.mode_label)} · ${esc(s.repository.name)} ·
-        <span class="mono">${esc(s.worktree?s.worktree.branch:"—")}</span></div></div>
-    <div class="row">
-      <button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>
-      <button id="c-stop">Stop</button>
-    </div></div>`));
+  app().append($(`<div class="session-head"><div><h2>Synchri session</h2>
+    <div class="small muted">${esc(s.name)} · ${esc(s.repository.name)}</div></div>
+    <div class="session-meta"><span id="timebox" class="mono">${esc(timeboxText(s.deadline))}</span></div></div>`));
+
+  const team = s.participants.map(p => {
+    const active = p.name === d.current_actor;
+    return `<div class="team-line"><span class="presence"><i class="${active ? "live" : ""}"></i>${esc(p.name)}</span>
+      <span class="muted small">${active ? "working" : "waiting"}</span></div>`;
+  }).join("");
+  const layout = $(`<div class="session-layout"><main class="conversation-shell">
+      <div id="conversation-panel" class="card conversation-feed"><span class="muted small">Loading conversation…</span></div>
+    </main><aside class="side"><div class="card side-card">
+      <div class="side-line"><span>Now</span><b>${esc(current)}</b></div>
+      <div><div class="small muted" style="margin-bottom:.45rem">TEAM</div>${team}</div>
+      <details><summary class="detail-summary">Session details</summary>
+        <div class="mini-stats" style="margin-top:.75rem">
+          <div class="mini-stat">Gates<b>${esc(`${g.satisfied}/${g.required}`)}</b></div>
+          <div class="mini-stat">Tests<b>${esc(d.tests ? `${d.tests.passed} passed` : "—")}</b></div>
+          <div class="mini-stat">Changes<b>${esc(`${d.changes.files_changed} files`)}</b></div>
+          <div class="mini-stat">Commits<b>${esc(d.changes.commits)}</b></div>
+        </div>
+        <div class="row" style="margin-top:.75rem"><button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>
+          <button id="c-stop">Stop</button></div>
+        <div class="detail-tabs">${DETAIL_TABS.map(tab =>
+          `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab[0].toUpperCase()+tab.slice(1)}</button>`
+        ).join("")}</div><div id="detail-panel" class="details-panel hide"></div>
+      </details></div></aside></div>`);
+  app().append(layout);
   document.getElementById("c-pause").onclick = guard(async () => {
     S.dash = await api("control", { session: S.session,
       action: s.status === "active" ? "pause" : "resume" }); renderSession(); });
   document.getElementById("c-stop").onclick = guard(async () => {
     if (!confirm("Stop this session? Agents stop immediately. The worktree and all work stay.")) return;
     S.dash = await api("control", { session: S.session, action: "stop" }); renderSession(); });
-
-  const tiles = $(`<div class="tiles"></div>`);
-  const tile = (k, v) => tiles.append($(`<div class="tile"><div class="k">${esc(k)}</div>
-    <div class="v">${esc(v)}</div></div>`));
-  tile("Status", s.status.replace("_"," ").toUpperCase());
-  if (d.time_remaining) tile("Time remaining", d.time_remaining);
-  tile("Current actor", d.current_actor || "—");
-  tile("Spec gates", `${g.satisfied} / ${g.required}`);
-  tile("Tests", d.tests ? `${d.tests.passed} / ${d.tests.passed + d.tests.failed}` : "not run");
-  tile("Commits", d.changes.commits);
-  tile("Blockers", d.open_blockers.length);
-  tile("You", d.user_intervention_required ? "NEEDED" : "not needed");
-  app().append(tiles);
-
-  if (d.acknowledgments && !d.acknowledgments.all_accepted) {
-    const a = d.acknowledgments;
-    const waiting = $(`<div class="note ${a.conflicts.length?"bad":"warn"}" style="margin-top:1rem">
-      <b>Not started yet — the contract needs everyone's agreement.</b>
-      ${a.conflicts.map(c=>`<div class="small">CONFLICT · <b>${esc(c.participant)}</b>: ${esc(c.reason)}</div>`).join("")}
-      ${a.waiting.length?`<div class="small">Waiting on ${esc(a.waiting.join(", "))}</div>`:""}
-      <button class="primary" id="setup-agents" style="margin-top:.7rem">Set up agents</button></div>`);
-    waiting.querySelector("#setup-agents").onclick = guard(() => openLaunch(S.session));
-    app().append(waiting);
-  }
-  for (const b of d.open_blockers.slice(0,4))
-    app().append($(`<div class="note bad small" style="margin-top:.5rem">${esc(b)}</div>`));
-
-  const bar = $(`<div class="tabs"></div>`);
-  TABS.forEach(t => { const b = $(`<button class="${t===S.tab?"on":""}">${t[0].toUpperCase()+t.slice(1)}</button>`);
-    b.onclick = () => { S.tab = t; renderSession(); }; bar.append(b); });
-  app().append(bar);
-  const panel = $(`<div id="panel" class="card"><span class="muted small">Loading…</span></div>`);
-  app().append(panel);
-  paint(S.tab, panel).catch(e => panel.innerHTML = `<span class="muted">${esc(e.message)}</span>`);
+  layout.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => {
+    S.tab = button.dataset.tab; const panel = document.getElementById("detail-panel");
+    panel.classList.remove("hide"); panel.innerHTML = `<span class="muted small">Loading…</span>`;
+    layout.querySelectorAll("[data-tab]").forEach(item => item.classList.toggle("on", item === button));
+    paint(S.tab, panel).catch(error => panel.innerHTML = `<span class="muted">${esc(error.message)}</span>`);
+  });
+  paint("conversation", document.getElementById("conversation-panel"))
+    .catch(error => document.getElementById("conversation-panel").innerHTML = `<span class="muted">${esc(error.message)}</span>`);
+  startClock(s.deadline);
 }
 
 async function paint(tab, el) {
@@ -724,13 +758,19 @@ async function paint(tab, el) {
   const d = S.dash;
   if (tab === "conversation") {
     const r = await api("conversation" + q);
-    el.innerHTML = r.messages.length ? r.messages.map(m => `<div class="msg">
-      <div class="who">${esc(m.sender)}${m.target?` <span class="muted">→ ${esc(m.target)}</span>`:""}
-        <span class="small muted">${esc(m.timestamp.slice(11,19))} ${esc(m.message_type)}</span></div>
-      <div class="body">${esc(m.content)}</div></div>`).join("")
+    el.innerHTML = r.messages.length ? r.messages.map(m => {
+      const speaker = m.metadata?.source === "session_activation" ? "SYNCHRI"
+        : (m.sender === "human" ? "YOU" : String(m.sender).toUpperCase());
+      const responseState = m.message_type === "response"
+        ? `${String(m.response_status || "complete").toUpperCase()} RESPONSE` : "";
+      return `<div class="msg"><div class="who">${esc(speaker)}</div>
+        <div class="body">${esc(m.content)}</div>
+        ${responseState ? `<div class="response-state">${esc(responseState)}</div>` : ""}
+        ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}</div>`;
+    }).join("")
       : `<span class="muted">Nothing said yet.</span>`;
-    const send = $(`<div class="row" style="margin-top:1rem">
-      <input id="mm" placeholder="Say something to the agents — you always outrank the queue">
+    const send = $(`<div class="chat-compose">
+      <input id="mm" placeholder="Give the team direction — the builder takes it first">
       <button class="primary" id="ms">Send</button></div>`);
     el.append(send);
     send.querySelector("#ms").onclick = guard(async () => {

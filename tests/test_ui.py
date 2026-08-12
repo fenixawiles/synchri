@@ -193,8 +193,8 @@ def test_every_session_start_routes_to_the_agent_setup_prompts():
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
     assert "function showLaunch(result)" in source
     assert "showLaunch(r);" in source
-    assert 'id="setup-agents"' in source
-    assert "openLaunch(S.session)" in source
+    assert "Copy setup instruction" in source
+    assert "function openLaunch(id)" in source
 
 
 def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
@@ -294,6 +294,10 @@ def test_the_ui_cannot_activate_before_acknowledgment(ui, repo):
         call(ui, "/api/activate", {"session": session_id})
     assert json.loads(exc.value.read())["error"]["code"] == "awaiting_acknowledgment"
 
+    launch = call(ui, f"/api/launch?session={session_id}")["launch"]
+    for agent in launch["agents"]:
+        token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]
+        ui["broker"].join(token, agent["name"])
     for agent in ("claude", "codex"):
         call(ui, "/api/ack", {"session": session_id, "participant": agent, "reply": "UNDERSTOOD"})
     assert call(ui, "/api/activate", {"session": session_id})["status"] == "active"
@@ -330,6 +334,10 @@ def _ready_draft(ui, repo, mode="long_horizon"):
 def _active(ui, repo):
     _ready_draft(ui, repo)
     session_id = call(ui, "/api/start", {"draft": "d"})["session"]["session_id"]
+    launch = call(ui, f"/api/launch?session={session_id}")["launch"]
+    for agent in launch["agents"]:
+        token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]
+        ui["broker"].join(token, agent["name"])
     for agent in ("claude", "codex"):
         call(ui, "/api/ack", {"session": session_id, "participant": agent, "reply": "UNDERSTOOD"})
     call(ui, "/api/activate", {"session": session_id})
@@ -500,7 +508,7 @@ def test_a_permission_edit_does_not_corrupt_the_draft_id(ui, repo):
     assert reloaded["draft"]["mode"] == "long_horizon", "the draft was saved under its own id"
 
 
-def test_a_restored_draft_drops_an_expired_deadline(workspace, repo):
+def test_a_restored_draft_keeps_an_elapsed_timebox(workspace, repo):
     from synchri.session.draft import SessionDraft
 
     state = {
@@ -510,7 +518,7 @@ def test_a_restored_draft_drops_an_expired_deadline(workspace, repo):
                      "started_at": "1999-01-01T00:00:00.000Z", "source": "fixed"},
     }
     restored = SessionDraft.from_state(state)
-    assert restored.deadline is None, "an expired deadline is not a usable choice"
+    assert restored.deadline is not None
     assert restored.mode == "long_horizon"
 
 
@@ -638,11 +646,12 @@ def test_the_stream_requires_the_token(ui):
     assert exc.value.code == 401
 
 
-def test_the_client_uses_eventsource_and_never_polls(ui):
+def test_the_client_uses_eventsource_and_never_polls_the_api(ui):
     with urllib.request.urlopen(ui["url"], timeout=20) as response:
         page = response.read().decode()
     assert "new EventSource(" in page
-    assert "setInterval" not in page, "the dashboard must be push-driven, not polled"
+    assert "setInterval(() => api" not in page, "the dashboard must be push-driven, not polled"
+    assert "setInterval(tick, 1000)" in page, "the local timebox clock updates once a second"
 
 
 def test_a_quiet_stream_stays_open(ui, repo):

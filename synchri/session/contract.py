@@ -150,20 +150,20 @@ def generate(
         "  Never infer a capability from conversation. If it is not listed as YES",
         "  above, you are not authorized to do it in this session.",
         "",
-        "-- DEADLINE " + "-" * 60,
+        "-- TIMEBOX " + "-" * 61,
         "",
     ]
     if deadline:
         lines += [
             f"  {deadline.describe()}",
             "",
-            "  The deadline is a real execution boundary. As it approaches, stop",
-            "  expanding scope and move to stabilisation, testing, and verification.",
-            "  If it arrives before the work is done, DO NOT claim completion —",
-            "  produce an honest incomplete-status handoff instead.",
+            "  This is pacing guidance, not a stop condition. Use it to sequence",
+            "  exploration, implementation, review, and stabilisation. Finish early",
+            "  when the evidence supports completion; if more time is genuinely needed,",
+            "  continue carefully and report the state honestly.",
         ]
     else:
-        lines.append("  No deadline set for this session.")
+        lines.append("  No timebox set for this session.")
 
     lines += ["", "-- OPERATING DOCTRINE " + "-" * 50, "", _indent(policy.doctrine)]
 

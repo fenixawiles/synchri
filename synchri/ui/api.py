@@ -329,7 +329,10 @@ class Api:
                     f"   {acknowledge_command}",
                     "4. Stay available for your first turn:",
                     f"   {wait_command}",
-                    "Do not start changing code until the room is activated and you receive a task.",
+                    "When wait returns, act on the task immediately: read the room briefing, "
+                    "work in the authorized worktree, report concrete progress, then hand off. "
+                    "The session activation task starts the Primary Builder automatically; do not "
+                    "wait for the human to say 'begin'.",
                 ]
             )
             agents.append(
@@ -409,17 +412,20 @@ class Api:
         return self.broker.read(record.room_id, credential=self._human(record))
 
     def message(self, query: dict, body: dict) -> dict:
-        """The human speaking. Always outranks the queue."""
+        """The human speaks to the builder first; the reviewer follows its handoff."""
         from ..models.envelope import MessageDraft
 
         record = self.manager.get(self._session_id(query, body))
+        primary_builder = next(
+            (plan.name for plan in record.participants if plan.role == "primary_builder"), None
+        )
         return self.broker.send(
             record.room_id,
             credential=self._human(record),
             draft=MessageDraft(
                 content=body.get("content", ""),
                 message_type="interrupt" if body.get("interrupt") else "chat",
-                target=body.get("target") or None,
+                target=body.get("target") or primary_builder,
             ),
         )
 

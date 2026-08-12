@@ -18,11 +18,11 @@ synchri start
    ├─ 4  agents        who, which runtime, which role
    ├─ 5  permissions   explicit toggles, conservative defaults
    ├─ 6  spec          what to build (canonical, hashed, immutable)
-   ├─ 7  deadline      duration or fixed time
+   ├─ 7  timebox       optional duration or suggested end time
    ├─ 8  review        one screen, no jargon
    ├─ 9  contract      generated once, same core for every agent
-   ├─ 10 acknowledge   UNDERSTOOD or CONFLICT: <reason>
-   └─ 11 activate      only when all agree
+   ├─ 10 join + acknowledge   agent joins, then UNDERSTOOD or CONFLICT: <reason>
+   └─ 11 activate      only when everyone is connected and agrees; builder gets the first task
 ```
 
 Every step is a flag too, so the whole thing is scriptable:
@@ -41,7 +41,7 @@ synchri start --yes --mode long_horizon --repo . \
 | Mode | Autonomy | Requires | Notes |
 |---|---|---|---|
 | **Interactive Collaboration** | 8 agent turns before yielding | — | you stay in the room |
-| **Long Horizon Development** | 200 | spec + deadline + 2 agents | agents keep going; finishing a turn is not a reason to ping you |
+| **Long Horizon Development** | 200 | spec + 2 agents | builder and reviewer keep going; finishing a turn is not a reason to ping you |
 | **Review / Audit** | 24 | spec (the criteria) | forces push, merge, deploy, destructive OFF regardless of what you ticked |
 
 A mode may *narrow* your permissions. It can never widen them. Adding a mode is
@@ -91,7 +91,7 @@ is a real identity.
 inside a sentence: an agent musing "I understood the contract and will begin"
 does not count. `CONFLICT: <reason>` blocks activation and shows you the reason.
 
-Change a permission, the spec, the deadline, or the roster and you get a new
+Change a permission, the spec, the timebox, or the roster and you get a new
 revision; every prior acknowledgment is void and everyone agrees again. Terms
 never drift mid-session without anyone noticing.
 
@@ -112,25 +112,25 @@ AUTH-01  [PASS]  users can log in
 `complete()` refuses with the concrete blocker until every required gate is
 satisfied.
 
-## Deadlines
+## Timeboxes
 
-A real boundary, not metadata. Phases shift as it approaches: exploration →
-implementation → stabilisation → freeze. When it passes the session becomes
-`timed_out` and produces an honest handoff — branch, head, gates satisfied,
-gates unmet, blockers, worktree, recommended next action, reason stopped. It
-**never** claims completion.
+An optional pacing aid, not a stop condition. Phases shift as it approaches:
+exploration → implementation → stabilisation → freeze. Agents may finish in
+thirty minutes of a two-hour timebox when the gates have evidence, and they may
+continue past it when work remains. Only evidence and the required sign-offs can
+complete a session; the clock never produces a false failure or completion.
 
 ## Restart
 
 Everything is on disk. On restart, `synchri session restore` reports what was
 active, whether the worktree still exists, whether the repo is still valid,
-whether the deadline passed while you were away, and who must reconnect. It
+whether the timebox elapsed while you were away, and who must reconnect. It
 **resumes nothing** — no mutating action restarts on its own.
 
 ## Presets
 
 `--save-preset "Claude + Codex Safe Build"` stores mode, agents, roles,
-permissions and escalation policy. It never stores the spec, deadline, worktree,
+permissions and escalation policy. It never stores the spec, timebox, worktree,
 or session id — those are what make a session *this* session.
 
 ## Hard invariants (enforced in code, not documented at)
@@ -142,7 +142,7 @@ or session id — those are what make a session *this* session.
 | 3 | Permissions are read from state, never inferred | `check_permission()` |
 | 4 | The primary tree is never the mutation target | `worktree.validate()` |
 | 5 | Human interruption outranks the queue | broker |
-| 6 | A deadline never causes a false completion claim | `expire()` / `complete()` |
+| 6 | A timebox never stops work or causes a false completion claim | `expire()` / `complete()` |
 | 7 | Agreement alone is not evidence | `Gate.blocks_completion()` |
 | 8 | Agents cannot rewrite spec gates | spec is hashed; edits version it |
 | 9 | Meaningful actions retain provenance | room event log |
@@ -151,3 +151,5 @@ or session id — those are what make a session *this* session.
 | 12 | Destructive actions default off | `CATALOG` defaults |
 | 13 | Removed participants cannot mutate | broker |
 | 14 | The UI prevents mistakes rather than documenting them | `SessionDraft` validation |
+| 15 | Activation creates the builder's opening turn only after everyone joined | `activate()` |
+| 16 | Working activity is non-addressable; only a committed response and explicit handoff advance the room | broker turn transaction |

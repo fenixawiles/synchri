@@ -51,7 +51,7 @@ Synchri that opens a socket — loopback-only, token-gated per launch, and opt-i
 ## Sessions
 
 `synchri start` walks you through one short wizard — mode, repository, isolated
-worktree, agents and roles, permissions, spec, deadline — then generates a single
+worktree, agents and roles, permissions, spec, optional timebox — then generates a single
 **session contract** that every agent must acknowledge with `UNDERSTOOD` before any
 work begins.
 
@@ -62,8 +62,9 @@ synchri start
 Agents work in a dedicated git worktree (`synchri-lh-amber-fox-4821`), never in your
 primary tree. Permissions are explicit toggles with conservative defaults, and Synchri's
 grant is a ceiling that never overrides your provider, OS, or repo host. Completion
-requires evidence, not agreement. A deadline produces an honest handoff, never a false
-"done". Full detail: [`docs/sessions.md`](docs/sessions.md).
+requires evidence, not agreement. A timebox guides pacing but never stops a good
+session or claims "done". Activation gives the Primary Builder the opening task
+automatically; the reviewer follows its handoff. Full detail: [`docs/sessions.md`](docs/sessions.md).
 
 ## Install
 

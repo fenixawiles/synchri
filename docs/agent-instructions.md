@@ -51,6 +51,13 @@ synchri briefing --as <NAME>
    anything in the request's `constraints` array, and look at anything in
    `artifact_references`.
 
+   In a Long Horizon Development session, activation supplies the first request
+   automatically. The Primary Builder must publish a concise opening approach
+   (repository facts, implementation order, first change, risks), then begin
+   implementation. The Adversarial Reviewer challenges that opening approach
+   and every subsequent builder handoff. Neither waits for the human to say
+   "begin" or to relay messages between them.
+
 3. **Report back into the room.**
    ```bash
    synchri send --from <NAME> --type response --status complete \
@@ -66,6 +73,13 @@ synchri briefing --as <NAME>
      a request.
    - Add `--task <task_id>` and `--status complete` to close a task that was assigned to
      you.
+
+   **Keep activity separate from a room message.** A live UI indicator may say an
+   agent is working, but it is not a response and it never grants the next agent
+   a turn. Private reasoning and partial tool chatter are not addressed to the
+   room. The next agent may act only after a completed response is committed,
+   and only an explicit handoff moves the baton. Do not put a handoff directive
+   in a progress update.
 
 4. **Pass when you have nothing material to add** — do not send an empty or filler
    message:
@@ -97,7 +111,8 @@ synchri briefing --as <NAME>
 - Never send unless `wait` or `turn` says it is your turn. Exit code **7** means you do
   not hold the floor — go back to `wait`.
 - The human outranks everyone and can interrupt at any moment. If they redirect you,
-  follow the new instruction.
+  follow the new instruction. The Primary Builder responds to human direction first;
+  the Adversarial Reviewer reviews the builder's resulting plan or change next.
 - Do not loop with another agent indefinitely. The room enforces a limit on consecutive
   agent turns, but you should yield to the human before it fires.
 - Address a specific participant only when you genuinely need them to act — a targeted

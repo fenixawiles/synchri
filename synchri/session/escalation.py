@@ -34,7 +34,7 @@ CATALOG: tuple[EscalationRule, ...] = (
     EscalationRule("provider_approval",
                    "Your runtime or provider explicitly requires human approval.", True),
     EscalationRule("deadline_reached",
-                   "The deadline has been reached.", True),
+                   "The suggested timebox has elapsed.", False),
     EscalationRule("user_interrupt",
                    "The user paused, stopped, or interrupted the session.", True),
     EscalationRule("spec_ambiguity",
@@ -48,7 +48,9 @@ CATALOG: tuple[EscalationRule, ...] = (
 )
 
 BY_KEY = {rule.key: rule for rule in CATALOG}
-DEFAULT_KEYS = tuple(rule.key for rule in CATALOG)
+# An elapsed timebox informs pacing; it is never a reason to interrupt the
+# human or stop the agents. Keep the legacy key readable for old sessions.
+DEFAULT_KEYS = tuple(rule.key for rule in CATALOG if rule.key != "deadline_reached")
 DEFAULT_DEADLOCK_CYCLES = 3
 
 

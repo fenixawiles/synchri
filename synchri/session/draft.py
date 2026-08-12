@@ -7,7 +7,7 @@ owns the rules.
 
 Progressive disclosure is a property of the data: each step declares only the
 fields it needs, and ``visible_steps`` hides the ones the chosen mode does not
-use (no deadline step for a review, for example).
+use (no timebox step for a review, for example).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ STEPS = (
     ("agents", "Choose agents and roles"),
     ("permissions", "Decide what agents may do"),
     ("spec", "Describe what to build"),
-    ("deadline", "Set a deadline"),
+    ("deadline", "Set a timebox (optional)"),
     ("review", "Review the session"),
 )
 
@@ -66,6 +66,9 @@ class SessionDraft:
             if key == "spec" and self.policy and not self.policy.requires_spec:
                 # Still offered, just relabelled: an optional brief is useful.
                 steps.append((key, "Describe the work (optional)"))
+                continue
+            if key == "deadline" and self.policy and not self.policy.requires_deadline:
+                steps.append((key, "Set a timebox (optional)"))
                 continue
             steps.append((key, label))
         return steps
@@ -304,9 +307,9 @@ class SessionDraft:
     def from_state(cls, state: dict) -> "SessionDraft":
         """Rebuild an unfinished wizard.
 
-        Tolerant on purpose: a repository that has since been deleted, or a
-        deadline that has since passed, should reopen the wizard with that step
-        blank rather than fail to load at all.
+        Tolerant on purpose: a repository that has since been deleted should
+        not stop the wizard from opening. An elapsed timebox is preserved: it
+        is historical pacing information, not an invalid configuration.
         """
         draft = cls.from_preset(state or {})
         if state.get("repo_path"):
@@ -321,8 +324,7 @@ class SessionDraft:
             draft.spec = ProductSpec.from_dict(state["spec"])
         if state.get("deadline"):
             restored = Deadline.from_dict(state["deadline"])
-            # An expired deadline is not a usable choice; make the user re-pick.
-            draft.deadline = restored if restored and not restored.is_expired() else None
+            draft.deadline = restored
         return draft
 
     def to_preset(self) -> dict:

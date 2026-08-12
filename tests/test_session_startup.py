@@ -6,7 +6,7 @@ The invariants under test, in code terms:
 * a session cannot activate until every participant acknowledged the CURRENT revision
 * changing material terms forces a new revision and clears acknowledgments
 * permissions are read from state, never inferred; ASK is not a grant
-* a deadline never produces a false completion claim
+* a timebox never produces a false stop or completion claim
 * completion requires evidence and both sign-offs
 * restart restores state without resuming anything
 """
@@ -95,8 +95,22 @@ def make_session(manager, repo, agents, **kwargs):
 
 
 def accept_all(manager, record):
+    join_all(manager, record)
     for plan in record.participants:
         manager.acknowledge(record.session_id, plan.name, ACK_TOKEN)
+
+
+def join_all(manager, record):
+    """Make test participants real room members before a live activation."""
+    present = {
+        participant["name"]
+        for participant in manager.broker.room_status(
+            record.room_id, credential=manager._human_credential(record)
+        )["participants"]
+    }
+    for invite in record.metadata["invites"]:
+        if invite["participant_name"] not in present:
+            manager.broker.join(invite["token"], invite["participant_name"])
 
 
 # ----------------------------------------------------------------------
@@ -448,6 +462,7 @@ def test_activation_waits_for_every_acknowledgment(manager, repo, agents):
     assert exc.value.code == "awaiting_acknowledgment"
     assert "codex" in exc.value.message
 
+    join_all(manager, record)
     manager.acknowledge(record.session_id, "codex", ACK_TOKEN)
     assert manager.activate(record.session_id).status == SessionStatus.ACTIVE.value
 
@@ -508,6 +523,24 @@ def test_activation_is_idempotent(manager, repo, agents):
     assert manager.activate(record.session_id).activated_at == first.activated_at
 
 
+def test_activation_starts_the_builder_with_an_opening_task(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.issue_contract(record.session_id)
+    accept_all(manager, record)
+
+    manager.activate(record.session_id)
+
+    messages = manager.broker.read(
+        record.room_id, credential=manager._human_credential(record)
+    )["messages"]
+    opening = messages[-1]
+    assert opening["sender"] == "human"
+    assert opening["target"] == "claude"
+    assert opening["message_type"] == "task"
+    assert "Begin working on the specification" in opening["content"]
+    assert manager.dashboard(record.session_id)["current_actor"] == "claude"
+
+
 # ----------------------------------------------------------------------
 # configuration changes
 # ----------------------------------------------------------------------
@@ -563,17 +596,17 @@ def test_every_contract_revision_is_retained(manager, repo, agents):
 # ----------------------------------------------------------------------
 
 
-def test_long_horizon_requires_a_spec_and_a_deadline(manager, repo, agents):
+def test_long_horizon_requires_a_spec_but_not_a_timebox(manager, repo, agents):
     with pytest.raises(ValidationError, match="specification"):
         manager.create(
             name="x", mode="long_horizon", repo_root=str(repo), participants=agents,
             deadline=Deadline.from_duration("2 hours"),
         )
-    with pytest.raises(ValidationError, match="deadline"):
-        manager.create(
-            name="x", mode="long_horizon", repo_root=str(repo), participants=agents,
-            spec=ProductSpec(text=SPEC_TEXT),
-        )
+    record = manager.create(
+        name="x", mode="long_horizon", repo_root=str(repo), participants=agents,
+        spec=ProductSpec(text=SPEC_TEXT),
+    )
+    assert record.deadline is None
 
 
 def test_long_horizon_requires_two_agents(manager, repo):
@@ -633,25 +666,25 @@ def test_deadline_phases_advance_with_elapsed_time():
         deadline.phase(now=start + timedelta(hours=h))[0] for h in (0, 4, 8, 9.5)
     ]
     assert phases == ["exploration", "implementation", "stabilisation", "freeze"]
-    assert deadline.phase(now=start + timedelta(hours=11))[0] == "expired"
+    assert deadline.phase(now=start + timedelta(hours=11))[0] == "elapsed"
 
 
-def test_an_expired_deadline_never_produces_a_completion_claim(manager, repo, agents):
+def test_an_elapsed_timebox_never_stops_or_claims_completion(manager, repo, agents):
     record = make_session(manager, repo, agents)
     manager.set_gates(record.session_id, [Gate("AUTH-01", "login works")])
     manager.expire(record.session_id)
 
     reloaded = manager.get(record.session_id)
-    assert reloaded.status == SessionStatus.TIMED_OUT.value
+    assert reloaded.status == SessionStatus.CONFIGURING.value
     report = manager.handoff_report(record.session_id)
     assert report["complete"] is False
-    assert report["reason_stopped"] == "deadline reached"
+    assert report["reason_stopped"] is None
     assert report["gates"]["unmet"] == ["AUTH-01"]
     assert report["branch"] and report["worktree"]
     assert report["recommended_next_action"]
 
 
-def test_a_session_cannot_activate_after_its_deadline(manager, repo, agents):
+def test_a_session_can_activate_after_its_timebox(manager, repo, agents):
     record = make_session(manager, repo, agents)
     manager.issue_contract(record.session_id)
     accept_all(manager, record)
@@ -662,12 +695,8 @@ def test_a_session_cannot_activate_after_its_deadline(manager, repo, agents):
              "source": "fixed"}
         ),
     )
-    # Reading the session sweeps it: a live session past its deadline ends as
-    # timed_out before anything can activate it.
-    with pytest.raises(StateError) as exc:
-        manager.activate(record.session_id)
-    assert exc.value.code == "session_finished"
-    assert manager.get(record.session_id).status == SessionStatus.TIMED_OUT.value
+    join_all(manager, record)
+    assert manager.activate(record.session_id).status == SessionStatus.ACTIVE.value
 
 
 # ----------------------------------------------------------------------
@@ -742,9 +771,9 @@ def test_gate_summary_lists_concrete_blockers():
 # ----------------------------------------------------------------------
 
 
-def test_mandatory_escalation_rules_cannot_be_removed():
+def test_safety_escalation_rules_cannot_be_removed():
     policy = EscalationPolicy(enabled=["spec_ambiguity"])
-    assert "deadline_reached" in policy.enabled
+    assert "deadline_reached" not in policy.enabled
     assert "destructive_action" in policy.enabled
 
 
@@ -859,7 +888,7 @@ def test_restore_flags_a_missing_worktree(workspace, repo, agents):
         assert any("worktree is gone" in p for p in report["problems"])
 
 
-def test_restore_flags_a_deadline_that_passed_while_offline(workspace, repo, agents):
+def test_restore_reports_an_elapsed_timebox_without_blocking_resume(workspace, repo, agents):
     with Broker(workspace) as first:
         manager = SessionManager(first)
         record = make_session(manager, repo, agents)
@@ -875,7 +904,7 @@ def test_restore_flags_a_deadline_that_passed_while_offline(workspace, repo, age
     with Broker(workspace) as second:
         report = SessionManager(second).restore(session_id)
         assert report["deadline_expired"] is True
-        assert report["resumable"] is False
+        assert report["resumable"] is True
 
 
 # ----------------------------------------------------------------------
@@ -925,7 +954,7 @@ def test_the_wizard_blocks_until_every_requirement_is_met(repo, agents):
 
     draft.set_agents(agents)
     problems = " ".join(draft.blocking_problems())
-    assert "specification" in problems and "deadline" in problems
+    assert "specification" in problems and "deadline" not in problems
 
     draft.set_spec(SPEC_TEXT)
     draft.set_deadline_duration("10 hours")
@@ -1016,6 +1045,9 @@ def test_cli_start_runs_the_whole_flow(workspace, repo, capsys):
                 "--session", session_id)
         capsys.readouterr()
 
+    with Broker(workspace) as live:
+        join_all(SessionManager(live), SessionManager(live).get(session_id))
+
     assert run_cli(workspace, "--json", "session", "activate", "--session", session_id) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "active"
 
@@ -1027,7 +1059,7 @@ def test_cli_start_refuses_incomplete_configuration(workspace, repo, capsys):
         "--agent", "codex:codex:adversarial_reviewer",
     )
     capsys.readouterr()
-    assert code == 2, "missing spec and deadline must block"
+    assert code == 2, "missing specification must block"
 
 
 def test_cli_dry_run_creates_nothing(workspace, repo, capsys):
@@ -1203,7 +1235,7 @@ def _backdate(manager, session_id):
     )
 
 
-def test_reading_a_session_past_its_deadline_ends_it(manager, repo, agents):
+def test_reading_a_session_past_its_timebox_keeps_it_live(manager, repo, agents):
     record = make_session(manager, repo, agents)
     manager.issue_contract(record.session_id)
     accept_all(manager, record)
@@ -1211,8 +1243,8 @@ def test_reading_a_session_past_its_deadline_ends_it(manager, repo, agents):
 
     _backdate(manager, record.session_id)
     reloaded = manager.get(record.session_id)
-    assert reloaded.status == SessionStatus.TIMED_OUT.value
-    assert reloaded.ended_reason == "deadline reached"
+    assert reloaded.status == SessionStatus.ACTIVE.value
+    assert reloaded.ended_reason is None
     assert manager.handoff_report(record.session_id)["complete"] is False
 
 
@@ -1223,7 +1255,7 @@ def test_a_configuring_session_is_not_swept(manager, repo, agents):
     assert manager.get(record.session_id).status == SessionStatus.CONFIGURING.value
 
 
-def test_sweep_expired_ends_every_live_session(manager, repo, agents):
+def test_sweep_expired_is_a_timebox_noop(manager, repo, agents):
     first = make_session(manager, repo, agents)
     second = make_session(manager, repo, [ParticipantPlan(a.name, a.runtime, a.role) for a in agents])
     for record in (first, second):
@@ -1232,9 +1264,9 @@ def test_sweep_expired_ends_every_live_session(manager, repo, agents):
         manager.activate(record.session_id)
         _backdate(manager, record.session_id)
 
-    expired = manager.sweep_expired()
-    assert sorted(expired) == sorted([first.session_id, second.session_id])
-    assert manager.sweep_expired() == [], "already-ended sessions are not swept twice"
+    assert manager.sweep_expired() == []
+    assert manager.get(first.session_id).status == SessionStatus.ACTIVE.value
+    assert manager.get(second.session_id).status == SessionStatus.ACTIVE.value
 
 
 # ----------------------------------------------------------------------

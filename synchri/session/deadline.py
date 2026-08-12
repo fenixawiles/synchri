@@ -1,8 +1,8 @@
-"""Deadlines, and the phases they impose.
+"""Optional timeboxes and the pacing phases they suggest.
 
-A deadline is an execution boundary, not decoration. It changes what agents are
-told to prioritise as it approaches, and when it passes it produces an honest
-incomplete handoff -- never a completion claim.
+``Deadline`` remains the persisted type for backward compatibility, but a
+timebox is guidance rather than an execution boundary. It changes what agents
+prioritise as it approaches; when it passes, the work remains live.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def parse_duration(text: str) -> int:
 
 @dataclass
 class Deadline:
-    """A resolved absolute deadline plus the window it was set over."""
+    """A resolved optional timebox plus the window it was set over."""
 
     ends_at: str
     started_at: str
@@ -103,7 +103,7 @@ class Deadline:
 
     def phase(self, *, now: datetime | None = None) -> tuple[str, str]:
         if self.is_expired(now=now):
-            return "expired", "The deadline has passed. Produce an incomplete-status handoff."
+            return "elapsed", "The timebox has elapsed. Continue or finish when the evidence supports it."
         elapsed = self.elapsed_fraction(now=now)
         name, guidance = PHASES[0][1], PHASES[0][2]
         for threshold, phase_name, phase_guidance in PHASES:
@@ -114,14 +114,14 @@ class Deadline:
     def remaining_text(self, *, now: datetime | None = None) -> str:
         seconds = self.seconds_remaining(now=now)
         if seconds <= 0:
-            return "expired"
+            return "elapsed"
         hours, rest = divmod(seconds, 3600)
         minutes, secs = divmod(rest, 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
     def describe(self) -> str:
         local = _parse(self.ends_at).astimezone()
-        return f"{self.source} — ends {local.strftime('%b %d, %Y at %I:%M %p %Z').strip()}"
+        return f"{self.source} — suggested through {local.strftime('%b %d, %Y at %I:%M %p %Z').strip()}"
 
     def to_dict(self) -> dict:
         return {

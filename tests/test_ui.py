@@ -8,10 +8,12 @@ do anything the manager would refuse — the UI holds no rules of its own.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -568,3 +570,47 @@ def test_a_quiet_stream_stays_open(ui, repo):
         assert not response.closed
     finally:
         response.close()
+
+
+# ----------------------------------------------------------------------
+# the page's JavaScript actually runs
+# ----------------------------------------------------------------------
+
+
+def test_every_wizard_step_and_the_dashboard_render_without_error():
+    """Execute the real page script and render every screen.
+
+    Regression guard for a class of bug the API tests cannot see: an exception
+    thrown while rendering. The original was `box.append(x).lastChild`, where
+    `Node.append()` returns undefined — the wizard's agents step died halfway,
+    taking the Save and Next buttons with it, while every API test stayed green.
+
+    The DOM shim is permissive: queries always resolve, so this checks that the
+    code *runs*, not that the markup or selectors are right. Only a browser
+    catches those.
+    """
+    harness = Path(__file__).parent / "js" / "render_wizard.js"
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed; the render harness needs it")
+
+    result = subprocess.run(
+        ["node", str(harness)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, (
+        "a screen failed to render:\n" + (result.stderr or result.stdout)
+    )
+
+
+def test_the_page_script_parses():
+    """A syntax error would blank the whole app, and serves fine over HTTP."""
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    page = (
+        Path(__file__).parent.parent / "synchri" / "ui" / "static" / "app.html"
+    ).read_text(encoding="utf-8")
+    script = page.split("<script>")[1].split("</" + "script>")[0]
+    result = subprocess.run(
+        ["node", "-e", "new Function(require('fs').readFileSync(0,'utf8'))"],
+        input=script, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

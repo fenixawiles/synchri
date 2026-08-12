@@ -131,7 +131,7 @@ function flash(message) {
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
-            tab:"conversation", dash:null, repos:null, es:null };
+            tab:"conversation", dash:null, repos:null, es:null, stepError:null };
 const app = () => document.getElementById("app");
 
 /* ------------------------------------------------------------------ home */
@@ -199,7 +199,7 @@ async function patch(body) {
   renderWizard();
 }
 
-function renderWizard() {
+async function renderWizard() {
   const d = S.draft, steps = d.steps.length ? d.steps : [{key:"mode",label:"Choose how this session runs"}];
   app().innerHTML = "";
   const bar = $(`<div class="steps"></div>`);
@@ -210,9 +210,21 @@ function renderWizard() {
     bar.append(b);
   });
   app().append(bar);
-  ({ mode: stepMode, repository: stepRepo, worktree: stepTree, agents: stepAgents,
-     permissions: stepPerms, spec: stepSpec, deadline: stepDeadline, review: stepReview
-   }[S.step] || stepMode)();
+  const step = { mode: stepMode, repository: stepRepo, worktree: stepTree, agents: stepAgents,
+                 permissions: stepPerms, spec: stepSpec, deadline: stepDeadline,
+                 review: stepReview }[S.step] || stepMode;
+  // Awaited so an async step (the repository list) finishes before the nav
+  // below is appended. A broken step shows an error in place rather than
+  // blanking the page -- and records itself on S.stepError, which is what the
+  // render harness in tests/js asserts on.
+  S.stepError = null;
+  try {
+    await step();
+  } catch (e) {
+    S.stepError = `${S.step}: ${e.message}`;
+    app().append($(`<div class="note bad">This step failed to render: ${esc(e.message)}
+      <div class="small">This is a bug in Synchri, not something you did.</div></div>`));
+  }
   const idx = steps.findIndex(s => s.key === S.step);
   const nav = $(`<div class="between" style="margin-top:1.5rem"></div>`);
   const back = $(`<button ${idx <= 0 ? "disabled" : ""}>Back</button>`);
@@ -339,7 +351,9 @@ function stepAgents() {
   add.onclick = () => { agents.push({name:"",runtime:"generic",role:"participant"}); draw(); };
   const save = $(`<button class="primary">Save agents</button>`);
   save.onclick = guard(() => patch({ agents: agents.filter(a => a.name.trim()) }));
-  box.append($(`<div class="row"></div>`)).lastChild.append(add, save);
+  const actions = $(`<div class="row"></div>`);
+  actions.append(add, save);
+  box.append(actions);
 }
 
 function stepPerms() {

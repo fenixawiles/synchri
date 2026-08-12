@@ -197,6 +197,38 @@ def test_starting_from_the_ui_creates_a_worktree_and_a_contract(ui, repo):
     assert "SYNCHRI SESSION CONTRACT" in result["contract"]["core_text"]
 
 
+def test_quick_start_returns_paste_ready_agent_setup_and_live_arrival_state(ui, repo):
+    result = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Review the current change together.",
+        "agents": [
+            {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+            {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+        ],
+    })
+
+    session_id = result["session"]["session_id"]
+    launch = result["launch"]
+    assert result["session"]["mode"] == "interactive"
+    assert launch["joined_count"] == 0
+    assert launch["agents"][0]["join_command"].startswith("cd ")
+    assert "synchri join " in launch["agents"][0]["setup_prompt"]
+    assert f"synchri session contract --session {session_id}" in launch["agents"][0]["setup_prompt"]
+
+    for agent in launch["agents"]:
+        token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]
+        ui["broker"].join(token, agent["name"])
+
+    refreshed = call(ui, f"/api/launch?session={session_id}")["launch"]
+    assert refreshed["joined_count"] == 2
+    assert all(agent["joined"] for agent in refreshed["agents"])
+    assert not refreshed["ready_to_activate"]
+
+    for name in ("codex", "copilot"):
+        call(ui, "/api/ack", {"session": session_id, "participant": name, "reply": "UNDERSTOOD"})
+    assert call(ui, f"/api/launch?session={session_id}")["launch"]["ready_to_activate"] is True
+
+
 def test_the_ui_cannot_activate_before_acknowledgment(ui, repo):
     _ready_draft(ui, repo)
     session_id = call(ui, "/api/start", {"draft": "d"})["session"]["session_id"]

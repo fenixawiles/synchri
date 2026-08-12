@@ -75,6 +75,9 @@ header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;ali
   border-radius:0 8px 8px 0}
 .note.warn{border-color:var(--warn);background:var(--warn-soft)}
 .note.bad{border-color:var(--bad);background:var(--bad-soft)}
+.quick textarea{min-height:7rem}
+.agent-card{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--panel)}
+.agent-card pre{margin-top:.75rem;white-space:pre-wrap;word-break:break-word}
 /* dashboard */
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:.75rem}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:.85rem 1rem}
@@ -99,7 +102,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)
   <div class="row">
     <span id="ctx" class="small muted"></span>
     <button class="ghost" id="nav-home">Sessions</button>
-    <button id="nav-new">New session</button>
+    <button id="nav-new">Start a room</button>
   </div>
 </div></header>
 
@@ -131,7 +134,8 @@ function flash(message) {
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
-            tab:"conversation", dash:null, repos:null, es:null };
+            tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
+            agentDraft:null };
 const app = () => document.getElementById("app");
 
 /* ------------------------------------------------------------------ home */
@@ -144,15 +148,20 @@ async function home() {
   app().innerHTML = "";
   if (!list.length) {
     app().append($(`<div class="card stack" style="text-align:center;padding:3.5rem 2rem">
-      <h2>No sessions yet</h2>
-      <p class="muted">A session gives your agents an isolated workspace, a set of
-        permissions, and one contract they all agree to before any work starts.</p>
-      <div><button class="primary" id="cta">Start a new session</button></div>
+      <h2>Put your agents in one room</h2>
+      <p class="muted">Describe the work once. Synchri makes a safe workspace and gives you
+        one ready-to-paste setup instruction for each agent.</p>
+      <div class="row" style="justify-content:center"><button class="primary" id="cta">Start a room</button>
+        <button id="advanced">Advanced setup</button></div>
     </div>`));
-    document.getElementById("cta").onclick = () => newSession();
+    document.getElementById("cta").onclick = () => quickStart();
+    document.getElementById("advanced").onclick = () => newSession();
     return;
   }
-  app().append($(`<h2 style="margin-bottom:1rem">Sessions</h2>`));
+  const title = $(`<div class="between" style="margin-bottom:1rem"><h2>Rooms</h2>
+    <button class="primary" id="new-room">Start a room</button></div>`);
+  title.querySelector("#new-room").onclick = () => quickStart();
+  app().append(title);
   for (const s of list) {
     const done = ["complete","timed_out","stopped","failed"].includes(s.status);
     const cls = s.status === "active" ? "" : (done ? "dim" : "warn");
@@ -170,6 +179,118 @@ async function home() {
     row.onclick = () => openSession(s.session_id);
     app().append(row);
   }
+}
+
+/* ------------------------------------------------------------- quick start */
+async function quickStart() {
+  if (!S.boot) S.boot = await api("bootstrap");
+  S.view = "quick"; S.session = null; S.launch = null;
+  S.quick = {
+    repo_path: S.boot.default_repo || "",
+    goal: "",
+    agents: [
+      {name:"codex", runtime:"codex", role:"primary_builder"},
+      {name:"copilot", runtime:"copilot", role:"adversarial_reviewer"},
+    ],
+  };
+  renderQuick();
+}
+
+function renderQuick() {
+  const q = S.quick;
+  app().innerHTML = "";
+  app().append($(`<div class="quick stack" style="max-width:48rem">
+    <div><h2>Start a collaboration room</h2>
+      <p class="muted">Synchri uses a separate worktree, so your primary checkout stays untouched.</p></div>
+    <label><b>Repository</b><input id="quick-repo" value="${esc(q.repo_path)}"
+      placeholder="/path/to/repository"></label>
+    <label><b>What do you want the team to do?</b>
+      <textarea id="quick-goal" placeholder="Review the current changes, then fix the most important issue.">${esc(q.goal)}</textarea></label>
+    <div class="card stack"><div><b>Your agents</b>
+      <div class="small muted">Use the names you want them to address each other by.</div></div>
+      <div id="quick-agents" class="stack"></div>
+    </div>
+    <div class="row"><button class="primary" id="quick-go">Create room and setup instructions</button>
+      <button id="quick-advanced">Advanced setup</button></div>
+  </div>`));
+  const agents = document.getElementById("quick-agents");
+  q.agents.forEach((agent, index) => {
+    const row = $(`<div class="grid" style="grid-template-columns:1fr 1fr;align-items:center">
+      <input value="${esc(agent.name)}" placeholder="agent name">
+      <select>${S.boot.runtimes.map(runtime =>
+        `<option value="${runtime.key}" ${runtime.key===agent.runtime?"selected":""}>${esc(runtime.label)}</option>`
+      ).join("")}</select></div>`);
+    const [name, runtime] = row.querySelectorAll("input,select");
+    name.oninput = event => q.agents[index].name = event.target.value;
+    runtime.onchange = event => q.agents[index].runtime = event.target.value;
+    agents.append(row);
+  });
+  document.getElementById("quick-advanced").onclick = () => newSession();
+  document.getElementById("quick-go").onclick = guard(async () => {
+    q.repo_path = document.getElementById("quick-repo").value.trim();
+    q.goal = document.getElementById("quick-goal").value.trim();
+    const result = await api("quick-start", q);
+    S.session = result.session.session_id; S.launch = result.launch; S.view = "launch";
+    renderLaunch(); listen();
+  });
+}
+
+function copyText(value) {
+  const fallback = () => {
+    const field = document.createElement("textarea");
+    field.value = value; field.style.position = "fixed"; field.style.opacity = "0";
+    document.body.append(field); field.select(); document.execCommand("copy"); field.remove();
+  };
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value).catch(fallback);
+  fallback(); return Promise.resolve();
+}
+
+async function refreshLaunch() {
+  const result = await api("launch?session=" + encodeURIComponent(S.session));
+  S.launch = result.launch;
+  renderLaunch();
+}
+
+function renderLaunch() {
+  const l = S.launch, a = l.acknowledgments;
+  app().innerHTML = "";
+  const heading = l.ready_to_activate ? "Everyone is ready" : "Your room is ready";
+  app().append($(`<div class="stack"><div class="between"><div>
+    <h2>${heading}</h2>
+    <div class="muted small">${esc(l.joined_count)} of ${esc(l.agents.length)} agents connected ·
+      worktree <span class="mono">${esc(l.worktree_path)}</span></div></div>
+    <button id="refresh">Check connections</button></div>
+    <div class="note">Paste each setup instruction into its agent. Synchri only marks an agent
+      connected after it actually joins the room.</div>
+  </div>`));
+  document.getElementById("refresh").onclick = guard(refreshLaunch);
+
+  for (const agent of l.agents) {
+    const status = agent.joined
+      ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">joined — reading agreement</span>`)
+      : `<span class="pill dim">waiting to join</span>`;
+    const card = $(`<div class="agent-card"><div class="between"><div><b>${esc(agent.name)}</b>
+      <span class="small muted">${esc(agent.role_label)} · ${esc(agent.runtime)}</span></div>${status}</div>
+      <div class="small muted" style="margin-top:.55rem">Paste this into ${esc(agent.name)}:</div>
+      <pre>${esc(agent.setup_prompt)}</pre>
+      <div class="row" style="margin-top:.75rem"><button class="primary">Copy setup instruction</button>
+        <button>Copy join command</button></div></div>`);
+    const [setup, join] = card.querySelectorAll("button");
+    setup.onclick = guard(async () => { await copyText(agent.setup_prompt); setup.textContent = "Copied"; });
+    join.onclick = guard(async () => { await copyText(agent.join_command); join.textContent = "Copied"; });
+    app().append(card);
+  }
+  const action = $(`<div class="card stack" style="margin-top:1rem"><div>
+    <b>Start the collaboration</b><div class="small muted">${l.ready_to_activate
+      ? "Both agents joined and acknowledged the agreement."
+      : `Waiting for: ${esc(a.waiting.join(", ") || l.agents.filter(x=>!x.joined).map(x=>x.name).join(", ") || "an acknowledgement")}`}
+    </div></div><div class="row"><button class="primary" id="activate" ${l.ready_to_activate?"":"disabled"}>Start collaboration</button>
+      <button id="open">Open room</button></div></div>`);
+  action.querySelector("#activate").onclick = guard(async () => {
+    await api("activate", {session:S.session}); await openSession(S.session);
+  });
+  action.querySelector("#open").onclick = guard(() => openSession(S.session));
+  app().append(action);
 }
 
 /* ---------------------------------------------------------------- wizard */
@@ -218,7 +339,19 @@ function renderWizard() {
   const back = $(`<button ${idx <= 0 ? "disabled" : ""}>Back</button>`);
   back.onclick = () => { S.step = steps[idx-1].key; renderWizard(); };
   const next = $(`<button class="primary">${idx === steps.length-1 ? "" : "Next"}</button>`);
-  if (idx < steps.length - 1) { next.onclick = () => { S.step = steps[idx+1].key; renderWizard(); }; }
+  if (idx < steps.length - 1) {
+    next.onclick = guard(async () => {
+      // Agent entries are the only wizard field edited locally before an
+      // explicit save.  Persist them on Next as well: leaving step 4 must not
+      // silently throw away the team the user just entered.
+      if (S.step === "agents" && S.agentDraft) {
+        S.draft = await api("draft", {
+          draft: "default", agents: S.agentDraft.filter(agent => agent.name.trim())
+        });
+      }
+      S.step = steps[idx+1].key; renderWizard();
+    });
+  }
   else next.className = "hide";
   nav.append(back, next);
   app().append(nav);
@@ -315,6 +448,7 @@ function stepAgents() {
   const agents = S.draft.draft.agents.length ? [...S.draft.draft.agents]
     : [{name:"claude",runtime:"claude_code",role:"primary_builder"},
        {name:"codex",runtime:"codex",role:"adversarial_reviewer"}];
+  S.agentDraft = agents;
   const box = $(`<div class="stack"><h2>Which agents, doing what?</h2></div>`);
   app().append(box);
   const list = $(`<div class="stack"></div>`); box.append(list);
@@ -338,7 +472,10 @@ function stepAgents() {
   const add = $(`<button>Add another agent</button>`);
   add.onclick = () => { agents.push({name:"",runtime:"generic",role:"participant"}); draw(); };
   const save = $(`<button class="primary">Save agents</button>`);
-  save.onclick = guard(() => patch({ agents: agents.filter(a => a.name.trim()) }));
+  save.onclick = guard(async () => {
+    S.draft = await api("draft", { draft: "default", agents: agents.filter(a => a.name.trim()) });
+    renderWizard();
+  });
   box.append($(`<div class="row"></div>`)).lastChild.append(add, save);
 }
 
@@ -478,6 +615,9 @@ function listen() {
       if (S.view === "session") {
         S.dash = await api("dashboard?session=" + encodeURIComponent(S.session));
         renderSession();
+      } else if (S.view === "launch" && S.session) {
+        const result = await api("launch?session=" + encodeURIComponent(S.session));
+        S.launch = result.launch; renderLaunch();
       } else if (S.view === "home" && what.includes("sessions")) {
         await home();
       } else if (S.view === "wizard" && what.includes("drafts")) {
@@ -642,6 +782,6 @@ async function paint(tab, el) {
 }
 
 document.getElementById("nav-home").onclick = guard(home);
-document.getElementById("nav-new").onclick = guard(newSession);
+document.getElementById("nav-new").onclick = guard(quickStart);
 guard(home)();
 </script>

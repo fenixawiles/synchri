@@ -240,6 +240,7 @@ def create_server(
     port: int = DEFAULT_PORT,
     token: str | None = None,
     allow_remote: bool = False,
+    default_repo: str | None = None,
 ) -> tuple[SynchriUIServer, str]:
     """Build the server. Returns it plus the launch URL, but does not serve."""
     if host != DEFAULT_HOST and not allow_remote:
@@ -250,7 +251,7 @@ def create_server(
             code="refused_bind",
         )
     resolved_token = token or secrets.token_urlsafe(32)
-    api = Api(broker, SessionManager(broker))
+    api = Api(broker, SessionManager(broker), default_repo=default_repo)
     server = SynchriUIServer(
         (host, port), Handler, api=api, token=resolved_token, allow_remote=allow_remote
     )
@@ -265,9 +266,12 @@ def serve(
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
     allow_remote: bool = False,
+    default_repo: str | None = None,
 ) -> None:
     """Run the UI until interrupted."""
-    server, url = create_server(broker, host=host, port=port, allow_remote=allow_remote)
+    server, url = create_server(
+        broker, host=host, port=port, allow_remote=allow_remote, default_repo=default_repo
+    )
     print(f"Synchri is running at\n\n    {url}\n")
     if host != DEFAULT_HOST:
         print("!! This is NOT loopback-only. Anything that can reach this host can drive it.\n")

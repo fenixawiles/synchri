@@ -4,7 +4,7 @@
 
 *Stop being the clipboard between your coding agents.*
 
-> **Status: v0.1, early prototype.** This is a working broker with a CLI, deterministic turn scheduling, persistent state, and a test suite. It has no provider integrations, no network service, and no UI. Nothing here is affiliated with or endorsed by Anthropic, OpenAI, GitHub, or Google.
+> **Status: v0.1, early prototype.** Synchri is a local app with a deterministic broker, persistent state, a browser interface, and managed local launches for supported agent tools. Nothing here is affiliated with or endorsed by Anthropic, OpenAI, GitHub, or Google.
 
 ---
 
@@ -68,13 +68,25 @@ automatically; the reviewer follows its handoff. Full detail: [`docs/sessions.md
 
 ## Install
 
-Requires Python 3.10+. No runtime dependencies.
+For a normal Mac user, download and open **Synchri.app** from
+[`synchri.com/download`](https://synchri.com/download). It bundles its own
+runtime: no Python, package manager, PATH setup, Synchri account, or API key.
+Choose a repository and the local coding tools you already use, then click
+**Start agents**. Synchri verifies that each managed tool joined and accepted
+the contract before work starts.
+
+The Python package is a developer and automation channel, not the primary
+onboarding flow. It requires Python 3.10+ and has no runtime dependencies:
 
 ```bash
-git clone https://github.com/fenixawiles/synchri
-cd Synchri
-pip install -e .
+pipx install synchri
+synchri ui
 ```
+
+If anything looks off, run `synchri doctor`. It changes nothing; it tells you
+which local agent tools Synchri can manage and which need the external prompt.
+The complete distribution and release model is in
+[`docs/distribution.md`](docs/distribution.md).
 
 ## Quickstart
 

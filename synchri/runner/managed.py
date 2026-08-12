@@ -1,0 +1,276 @@
+"""Run a whole local Synchri session without making the human relay setup.
+
+The registry is intentionally *not* another broker.  Its in-memory state is
+only process supervision: rooms, identities, contracts, messages, and work all
+remain authoritative in the existing SQLite workspace.  If the UI closes, a
+managed run can stop, but nothing is lost and ``resume`` simply opens the same
+durable session again.
+"""
+
+from __future__ import annotations
+
+import shlex
+import sys
+import threading
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+from ..broker import Broker, Credential
+from ..cli import session as session_files
+from ..errors import SynchriError, ValidationError
+from ..session.modes import managed_command, plan_launch_status
+from .agent_command import AgentCommand
+from .conductor import Conductor
+
+if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
+    from ..config import Workspace
+    from ..session.manager import SessionRecord
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+@dataclass
+class ManagedRun:
+    """Ephemeral supervision information exposed to the local UI."""
+
+    session_id: str
+    phase: str = "not_started"
+    detail: str = ""
+    started_at: str | None = None
+    updated_at: str | None = None
+    reason: str | None = None
+    alive: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "phase": self.phase,
+            "detail": self.detail,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+            "reason": self.reason,
+            "alive": self.alive,
+        }
+
+
+class ManagedRunnerRegistry:
+    """Starts and resumes supervised local agent sessions.
+
+    One registry belongs to the opt-in UI process.  Every worker opens its own
+    Broker connection because SQLite connections are thread-affine; that also
+    makes a UI restart just another safe reader/writer of the durable room.
+    """
+
+    def __init__(self, workspace: "Workspace", *, cli_command: str | None = None) -> None:
+        self.workspace = workspace
+        self.cli_command = cli_command or _local_cli_command()
+        self._runs: dict[str, ManagedRun] = {}
+        self._threads: dict[str, threading.Thread] = {}
+        self._lock = threading.Lock()
+
+    def readiness(self, record: "SessionRecord") -> dict:
+        agents = []
+        for plan in record.participants:
+            launch = plan_launch_status(plan)
+            agents.append({"name": plan.name, "runtime": plan.runtime, **launch})
+        return {
+            "available": bool(agents) and all(agent["ready"] for agent in agents),
+            "agents": agents,
+        }
+
+    def status(self, session_id: str) -> dict:
+        with self._lock:
+            run = self._runs.get(session_id)
+            return (run or ManagedRun(session_id=session_id)).to_dict()
+
+    def start(self, record: "SessionRecord") -> dict:
+        readiness = self.readiness(record)
+        if not readiness["available"]:
+            unavailable = [a["name"] for a in readiness["agents"] if not a["ready"]]
+            raise ValidationError(
+                "Synchri cannot launch " + ", ".join(unavailable)
+                + " yet; use their setup prompt or choose installed managed agents"
+            )
+        return self._spawn(record.session_id, "attaching", "Connecting the local agents to this room.")
+
+    def resume(self, record: "SessionRecord") -> dict:
+        """Resume after a human reply reaches a managed agent."""
+        if not self.readiness(record)["available"] or record.status != "active":
+            return self.status(record.session_id)
+        return self._spawn(record.session_id, "resuming", "Your reply reached the agents; continuing the session.")
+
+    def _spawn(self, session_id: str, phase: str, detail: str) -> dict:
+        with self._lock:
+            thread = self._threads.get(session_id)
+            if thread is not None and thread.is_alive():
+                return self._runs[session_id].to_dict()
+            run = ManagedRun(
+                session_id=session_id,
+                phase=phase,
+                detail=detail,
+                started_at=_now(),
+                updated_at=_now(),
+                alive=True,
+            )
+            self._runs[session_id] = run
+            worker = threading.Thread(
+                target=self._worker,
+                args=(session_id, phase == "attaching"),
+                name=f"synchri-managed-{session_id}",
+                daemon=True,
+            )
+            self._threads[session_id] = worker
+            worker.start()
+            return run.to_dict()
+
+    def _set(self, session_id: str, phase: str, detail: str, *, reason: str | None = None) -> None:
+        with self._lock:
+            run = self._runs.setdefault(session_id, ManagedRun(session_id=session_id))
+            run.phase = phase
+            run.detail = detail
+            run.reason = reason
+            run.updated_at = _now()
+            run.alive = phase in {"attaching", "agreeing", "starting", "working", "resuming"}
+
+    def _worker(self, session_id: str, attach: bool) -> None:
+        broker = Broker(self.workspace)
+        try:
+            from ..session.manager import SessionManager
+
+            manager = SessionManager(broker)
+            record = manager.get(session_id)
+            if attach:
+                self._attach_and_agree(broker, manager, record)
+                record = manager.get(session_id)
+                manager.activate(session_id)
+            self._set(session_id, "working", "The agents are working in the isolated workspace.")
+            self._drive(broker, manager, manager.get(session_id))
+        except SynchriError as exc:
+            self._set(session_id, "needs_attention", exc.message, reason=exc.code)
+        except Exception as exc:  # pragma: no cover - defensive UI boundary
+            self._set(session_id, "failed", f"Synchri could not run this session: {exc}", reason="internal")
+        finally:
+            broker.close()
+
+    def _attach_and_agree(self, broker: Broker, manager, record: "SessionRecord") -> None:
+        invites = {
+            invite["participant_name"]: invite for invite in (record.metadata or {}).get("invites", [])
+        }
+        self._set(record.session_id, "attaching", "Giving each managed agent its local room identity.")
+        for plan in record.participants:
+            # A failed sign-in or a declined contract is retryable. The first
+            # attempt has already redeemed this name-bound invite and saved the
+            # local credential, so never try to mint a second identity or make
+            # the human recreate the room.
+            if session_files.load(self.workspace, record.room_id, plan.name):
+                continue
+            invite = invites.get(plan.name)
+            if invite is None:
+                raise ValidationError(f"no invite is available for {plan.name}")
+            joined = broker.join(invite["token"], plan.name, metadata={"managed": True, "runtime": plan.runtime})
+            session_files.save(
+                self.workspace,
+                session_files.SessionRecord(
+                    room_id=joined["room_id"],
+                    participant=joined["name"],
+                    participant_id=joined["participant_id"],
+                    secret=joined["secret"],
+                    kind=joined["kind"],
+                    room_name=joined.get("room_name", ""),
+                ),
+            )
+
+        self._set(record.session_id, "agreeing", "Each agent is reading and agreeing to the session contract.")
+        document = manager.current_contract(record.session_id)
+        for plan in record.participants:
+            result = self._agent(record, plan).invoke(_agreement_prompt(document.for_participant(plan.name)))
+            if not result.ok:
+                detail = (result.stderr or "no response").strip()
+                raise ValidationError(f"{plan.name} could not acknowledge the contract: {detail[:400]}")
+            acknowledgement = manager.acknowledge(record.session_id, plan.name, result.stdout)
+            if not acknowledgement["accepted"]:
+                raise ValidationError(
+                    f"{plan.name} did not accept the contract: {acknowledgement['conflict']}"
+                )
+
+        self._set(record.session_id, "starting", "Agreement confirmed. Starting the Primary Builder.")
+
+    def _drive(self, broker: Broker, manager, record: "SessionRecord") -> None:
+        agents = {plan.name: self._agent(record, plan) for plan in record.participants}
+        credentials = {
+            name: session_files.resolve_credential(self.workspace, record.room_id, name)
+            for name in agents
+        }
+        human = (record.metadata or {}).get("human") or {}
+        observer = Credential(participant=human.get("name"), secret=human.get("secret"))
+        document = manager.current_contract(record.session_id)
+        role_guidance = {
+            plan.name: document.core_text + "\n\n" + document.role_sections.get(plan.name, "")
+            for plan in record.participants
+        }
+
+        conductor = Conductor(
+            broker,
+            record.room_id,
+            agents,
+            credentials,
+            observer,
+            role_guidance=role_guidance,
+        )
+        report = conductor.run()
+        phrases = {
+            "awaiting_human": "The agents need your decision before they can continue.",
+            "room_paused": "The session is paused.",
+            "room_stopped": "The session has ended.",
+            "idle": "The agents have no next handoff. Review their last message.",
+            "unmanaged_speaker": "A human or externally-run participant has the floor.",
+        }
+        self._set(
+            record.session_id,
+            "waiting" if report.reason in {"awaiting_human", "idle", "unmanaged_speaker"} else "stopped",
+            phrases.get(report.reason, f"Managed run ended: {report.reason}."),
+            reason=report.reason,
+        )
+
+    def _agent(self, record: "SessionRecord", plan) -> AgentCommand:
+        command = managed_command(plan)
+        if not command:
+            raise ValidationError(f"no managed command is configured for {plan.name}")
+        agent = AgentCommand.parse(
+            f"{plan.name}={command}",
+            cwd=record.worktree.path if record.worktree else None,
+        )
+        agent.env.update(
+            {
+                "SYNCHRI_HOME": str(self.workspace.home),
+                "SYNCHRI_ROOM": record.room_id,
+                "SYNCHRI_PARTICIPANT": plan.name,
+                "SYNCHRI_CLI": self.cli_command,
+            }
+        )
+        return agent
+
+
+def _agreement_prompt(contract: str) -> str:
+    return "\n".join(
+        [
+            "You are being launched by Synchri as a local coding agent.",
+            "Read this session contract in full. Do not begin work, call tools, or add commentary.",
+            "If you can follow it, output exactly UNDERSTOOD. Otherwise output exactly",
+            "CONFLICT: followed by the specific reason.",
+            "",
+            contract.rstrip(),
+        ]
+    )
+
+
+def _local_cli_command() -> str:
+    """Use a concrete helper path for bundled apps; `synchri` for normal installs."""
+    if getattr(sys, "frozen", False):
+        return shlex.quote(sys.executable)
+    import shutil
+
+    return shutil.which("synchri") or f"{shlex.quote(sys.executable)} -m synchri"

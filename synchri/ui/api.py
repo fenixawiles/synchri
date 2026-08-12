@@ -19,9 +19,10 @@ from ..session.escalation import CATALOG as ESCALATION_CATALOG
 from ..session.extract import describe as describe_gates, extract_gates
 from ..session.gates import Gate
 from ..session.manager import SessionManager
-from ..session.modes import KNOWN_RUNTIMES, ParticipantPlan, Role, list_modes
+from ..session.modes import ParticipantPlan, Role, list_modes, plan_launch_status, runtime_catalog
 from ..session.permissions import PermissionSet
 from ..session.spec import ProductSpec
+from ..runner.managed import ManagedRunnerRegistry
 
 Route = Callable[[dict, dict], dict]
 
@@ -30,10 +31,16 @@ class Api:
     """Routing table for the local UI."""
 
     def __init__(
-        self, broker: Broker, manager: SessionManager, *, default_repo: str | None = None
+        self,
+        broker: Broker,
+        manager: SessionManager,
+        *,
+        default_repo: str | None = None,
+        managed: ManagedRunnerRegistry | None = None,
     ) -> None:
         self.broker = broker
         self.manager = manager
+        self.managed = managed or ManagedRunnerRegistry(broker.workspace)
         # ``synchri ui`` is normally launched from the repository being worked
         # on.  Keeping that small piece of context makes the default path a
         # room launch, not a repository-discovery exercise.  The draft still
@@ -51,6 +58,8 @@ class Api:
             ("POST", "start"): self.start,
             ("POST", "quick-start"): self.quick_start,
             ("GET", "launch"): self.launch,
+            ("POST", "managed/start"): self.start_managed,
+            ("GET", "managed"): self.managed_status,
             ("GET", "sessions"): self.sessions,
             ("GET", "session"): self.session,
             ("GET", "dashboard"): self.dashboard,
@@ -81,7 +90,7 @@ class Api:
         """Everything the app needs on first paint."""
         return {
             "modes": list_modes(),
-            "runtimes": [{"key": k, **v} for k, v in KNOWN_RUNTIMES.items()],
+            "runtimes": runtime_catalog(),
             "roles": [
                 {"key": r.value, "label": r.value.replace("_", " ").title()} for r in Role
             ],
@@ -276,6 +285,26 @@ class Api:
         """Return the only setup handoff a room owner needs to make."""
         return self._launch_payload(self.manager.get(self._session_id(query)))
 
+    def start_managed(self, query: dict, body: dict) -> dict:
+        """Attach, obtain agreement from, and launch detected local agents."""
+        record = self.manager.get(self._session_id(query, body))
+        run = (
+            self.managed.resume(record)
+            if record.status == "active"
+            else self.managed.start(record)
+        )
+        return {
+            "managed": run,
+            "launch": self._launch_payload(record)["launch"],
+        }
+
+    def managed_status(self, query: dict, body: dict) -> dict:
+        record = self.manager.get(self._session_id(query))
+        return {
+            "managed": self.managed.status(record.session_id),
+            "readiness": self.managed.readiness(record),
+        }
+
     def _plans(self, values: list[dict] | None) -> list[ParticipantPlan]:
         if not isinstance(values, list):
             raise ValidationError("add at least one agent")
@@ -307,20 +336,28 @@ class Api:
         acknowledgments = self.manager.acknowledgment_state(record.session_id)
         worktree = record.worktree
         agents = []
+        # The packaged macOS app is also a CLI helper.  Generated external
+        # prompts must use that concrete executable, not assume the provider's
+        # terminal inherited a PATH entry from the user's shell.
+        cli = self.managed.cli_command
         for plan in record.participants:
             invite = invites.get(plan.name)
             if invite is None:  # Defensive: a persisted session must still be viewable.
                 continue
             plan_view = plan.to_dict()
-            join_command = f"cd {shlex.quote(worktree.path)} && {invite['command']}"
-            contract_command = f"synchri session contract --session {record.session_id}"
+            launch_status = plan_launch_status(plan)
+            join_command = (
+                f"cd {shlex.quote(worktree.path)} && {cli} join {invite['token']} "
+                f"--name {shlex.quote(plan.name)}"
+            )
+            contract_command = f"{cli} session contract --session {record.session_id}"
             acknowledge_command = (
-                f"synchri session ack {shlex.quote(plan.name)} --reply UNDERSTOOD "
+                f"{cli} session ack {shlex.quote(plan.name)} --reply UNDERSTOOD "
                 f"--session {record.session_id}"
             )
-            wait_command = f"synchri wait --as {shlex.quote(plan.name)} --watch-messages"
+            wait_command = f"{cli} wait --as {shlex.quote(plan.name)} --watch-messages"
             activity_command = (
-                f"synchri activity --as {shlex.quote(plan.name)} "
+                f"{cli} activity --as {shlex.quote(plan.name)} "
                 "-m \"Inspecting the task and repository.\""
             )
             setup_prompt = "\n".join(
@@ -362,6 +399,9 @@ class Api:
                     "role_label": plan_view["role_label"],
                     "joined": plan.name in present,
                     "acknowledged": plan.name in acknowledgments["accepted"],
+                    "launch_mode": launch_status["mode"],
+                    "managed_ready": launch_status["ready"],
+                    "launch_detail": launch_status["detail"],
                     "join_command": join_command,
                     "setup_prompt": setup_prompt,
                 }
@@ -375,6 +415,10 @@ class Api:
                 "agents": agents,
                 "joined_count": sum(agent["joined"] for agent in agents),
                 "acknowledgments": acknowledgments,
+                "managed": {
+                    "readiness": self.managed.readiness(record),
+                    "run": self.managed.status(record.session_id),
+                },
                 "ready_to_activate": bool(agents)
                 and all(agent["joined"] for agent in agents)
                 and acknowledgments["all_accepted"],
@@ -399,7 +443,14 @@ class Api:
         return self.manager.get(self._session_id(query)).to_dict()
 
     def dashboard(self, query: dict, body: dict) -> dict:
-        return self.manager.dashboard(self._session_id(query))
+        session_id = self._session_id(query)
+        record = self.manager.get(session_id)
+        dashboard = self.manager.dashboard(session_id)
+        dashboard["managed"] = {
+            "readiness": self.managed.readiness(record),
+            "run": self.managed.status(session_id),
+        }
+        return dashboard
 
     def contract(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query)
@@ -455,6 +506,10 @@ class Api:
             ),
         )
         result["routed_to"] = target
+        # A managed conductor yields while the human holds the floor.  Once
+        # this reply returns the floor to a managed participant, pick the
+        # durable session back up without asking the human to restart anything.
+        result["managed"] = self.managed.resume(self.manager.get(record.session_id))
         return result
 
     def _human_reply_target(self, record, requested: str | None = None) -> str | None:

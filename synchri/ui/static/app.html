@@ -255,14 +255,21 @@ function renderQuick() {
   </div>`));
   const agents = document.getElementById("quick-agents");
   q.agents.forEach((agent, index) => {
+    const info = S.boot.runtimes.find(runtime => runtime.key === agent.runtime) || {};
+    const state = info.managed ? "Ready to start locally" : (info.installed ? "Use external terminal" : "Not found on this Mac");
     const row = $(`<div class="grid" style="grid-template-columns:1fr 1fr;align-items:center">
       <input value="${esc(agent.name)}" placeholder="agent name">
       <select>${S.boot.runtimes.map(runtime =>
         `<option value="${runtime.key}" ${runtime.key===agent.runtime?"selected":""}>${esc(runtime.label)}</option>`
-      ).join("")}</select></div>`);
+      ).join("")}</select><div class="small muted" data-runtime-state style="grid-column:1/-1">${esc(state)}</div></div>`);
     const [name, runtime] = row.querySelectorAll("input,select");
     name.oninput = event => q.agents[index].name = event.target.value;
-    runtime.onchange = event => q.agents[index].runtime = event.target.value;
+    runtime.onchange = event => {
+      q.agents[index].runtime = event.target.value;
+      const next = S.boot.runtimes.find(item => item.key === event.target.value) || {};
+      row.querySelector("[data-runtime-state]").textContent = next.managed ? "Ready to start locally"
+        : (next.installed ? "Use external terminal" : "Not found on this Mac");
+    };
     agents.append(row);
   });
   document.getElementById("quick-advanced").onclick = () => newSession();
@@ -307,28 +314,65 @@ async function openLaunch(id) {
 function renderLaunch() {
   const l = S.launch, a = l.acknowledgments;
   app().innerHTML = "";
-  const heading = l.ready_to_activate ? "Everyone is ready" : "Your room is ready";
+  const managed = l.managed || {readiness:{available:false,agents:[]},run:{phase:"not_started"}};
+  const run = managed.run;
+  const allManaged = managed.readiness.available;
+  const heading = run.alive ? "Starting your agents" : (allManaged ? "Ready to start" : "Your room is ready");
   app().append($(`<div class="stack"><div class="between"><div>
     <h2>${heading}</h2>
-    <div class="muted small">${esc(l.joined_count)} of ${esc(l.agents.length)} agents connected ·
-      worktree <span class="mono">${esc(l.worktree_path)}</span></div></div>
-    <button id="refresh">Check connections</button></div>
-    <div class="note">Paste each setup instruction into its agent. Synchri only marks an agent
-      connected after it actually joins the room.</div>
+    <div class="muted small">${esc(l.agents.length)} agent${l.agents.length===1?"":"s"} · isolated worktree ready</div></div>
+    <button id="refresh">Refresh</button></div>
+    <div class="note"><b>${esc(run.phase.replaceAll("_"," "))}</b><div class="small">${esc(run.detail || (allManaged
+      ? "Synchri can run these agents locally."
+      : "Use the prompt only for tools Synchri cannot launch yet."))}</div></div>
   </div>`));
   if (l.clone) app().append($(`<div class="note"><b>Repository cloned</b>
     <div class="small mono">${esc(l.clone.path)}</div></div>`));
   document.getElementById("refresh").onclick = guard(refreshLaunch);
 
+  if (allManaged) {
+    const action = $(`<div class="card stack"><div><b>Run locally</b>
+      <div class="small muted">Synchri will connect the agents, ask each to agree to the contract, then begin the builder automatically.</div>
+      </div><div class="row"><button class="primary" id="managed-start" ${run.alive?"disabled":""}>${run.alive ? "Starting…" : "Start agents"}</button>
+      <button id="external">Use external terminals instead</button></div></div>`);
+    action.querySelector("#managed-start").onclick = guard(startManaged);
+    action.querySelector("#external").onclick = () => renderExternalSetup(l);
+    app().append(action);
+    if (run.alive) pollManagedLaunch();
+    return;
+  }
+  renderExternalSetup(l);
+}
+
+async function startManaged() {
+  await api("managed/start", {session:S.session});
+  await refreshLaunch();
+  pollManagedLaunch();
+}
+
+function pollManagedLaunch() {
+  window.setTimeout(guard(async () => {
+    if (S.view !== "launch" || !S.session) return;
+    const status = await api("managed?session=" + encodeURIComponent(S.session));
+    S.launch.managed = {readiness:status.readiness, run:status.managed};
+    if (status.managed.phase === "working") { await openSession(S.session); return; }
+    renderLaunch();
+  }), 700);
+}
+
+function renderExternalSetup(l) {
+  const a = l.acknowledgments;
+  const external = l.agents.filter(agent => !agent.managed_ready || !l.managed.readiness.available);
+  const note = $(`<div class="note">Synchri cannot launch ${esc(external.map(x=>x.name).join(", "))} from this Mac. Paste the matching prompt below. It will join, read the agreement, and stay connected without status chatter.</div>`);
+  app().append(note);
   for (const agent of l.agents) {
     const status = agent.joined
-      ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">joined — reading agreement</span>`)
-      : `<span class="pill dim">waiting to join</span>`;
+      ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">reading agreement</span>`)
+      : `<span class="pill dim">not connected</span>`;
     const card = $(`<div class="agent-card"><div class="between"><div><b>${esc(agent.name)}</b>
-      <span class="small muted">${esc(agent.role_label)} · ${esc(agent.runtime)}</span></div>${status}</div>
-      <div class="small muted" style="margin-top:.55rem">Paste this into ${esc(agent.name)}:</div>
+      <span class="small muted">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>${status}</div>
       <pre>${esc(agent.setup_prompt)}</pre>
-      <div class="row" style="margin-top:.75rem"><button class="primary">Copy setup instruction</button>
+      <div class="row" style="margin-top:.75rem"><button class="primary">Copy prompt</button>
         <button>Copy join command</button></div></div>`);
     const [setup, join] = card.querySelectorAll("button");
     setup.onclick = guard(async () => { await copyText(agent.setup_prompt); setup.textContent = "Copied"; });
@@ -761,7 +805,7 @@ function renderSession() {
         `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
       ).join("")}</nav>
       <div class="rail-team"><div class="rail-kicker" style="margin-bottom:.35rem">Team</div>${team}</div>
-      <div class="rail-controls">${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${s.status === "active" ? `<button id="c-complete">Complete</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button id="c-stop">Stop</button>` : ""}</div>
+      <div class="rail-controls">${s.status === "active" && d.managed?.readiness?.available && !d.managed?.run?.alive ? `<button id="c-continue">Continue agents</button>` : ""}${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${s.status === "active" ? `<button id="c-complete">Complete</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button id="c-stop">Stop</button>` : ""}</div>
     </aside><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
       <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.repository.branch || "")}</div></div>
       <div class="chat-time">${esc(g.satisfied + "/" + g.required)} gates verified</div></div>
@@ -782,6 +826,12 @@ function renderSession() {
     S.dash = await api("control", { session: S.session, action: "stop" }); renderSession(); });
   layout.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => {
     S.tab = button.dataset.tab; renderSession();
+  });
+  const resumeManaged = document.getElementById("c-continue");
+  if (resumeManaged) resumeManaged.onclick = guard(async () => {
+    await api("managed/start", {session:S.session});
+    S.dash = await api("dashboard?session=" + encodeURIComponent(S.session));
+    renderSession();
   });
   paint("conversation", document.getElementById("conversation-panel"))
     .catch(error => document.getElementById("conversation-panel").innerHTML = `<span class="muted">${esc(error.message)}</span>`);

@@ -8,6 +8,7 @@ new entry in ``POLICIES``, not a redesign of startup.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -297,12 +298,108 @@ class ParticipantPlan:
         }
 
 
-#: Runtimes the wizard offers.  These are labels and default command templates,
-#: not integrations: Synchri still talks to every agent through the CLI.
+#: Runtimes Synchri knows how to find on the local machine.  A managed command
+#: is intentionally an opt-in convenience over the same CLI protocol used by
+#: every other agent: there is no provider account, API key, or cloud relay.
+#:
+#: These commands are the providers' documented non-interactive modes.  They
+#: do not widen provider permissions; a provider that needs sign-in or asks for
+#: approval still reports that truthfully during Synchri's contract step.
 KNOWN_RUNTIMES: dict[str, dict] = {
-    "claude_code": {"label": "Claude Code", "suggested_command": "claude -p {prompt}"},
-    "codex": {"label": "Codex", "suggested_command": "codex exec {prompt}"},
-    "copilot": {"label": "GitHub Copilot CLI", "suggested_command": None},
-    "gemini": {"label": "Gemini CLI", "suggested_command": "gemini -p {prompt}"},
-    "generic": {"label": "Other terminal-capable agent", "suggested_command": None},
+    "claude_code": {
+        "label": "Claude Code",
+        "executable": "claude",
+        "managed_command": "claude -p {prompt}",
+        "suggested_command": "claude -p {prompt}",
+    },
+    "codex": {
+        "label": "Codex",
+        "executable": "codex",
+        "managed_command": "codex exec {prompt}",
+        "suggested_command": "codex exec {prompt}",
+    },
+    "copilot": {
+        "label": "GitHub Copilot CLI",
+        "executable": "copilot",
+        "managed_command": "copilot -sp {prompt}",
+        "suggested_command": "copilot -sp {prompt}",
+    },
+    "gemini": {
+        "label": "Gemini CLI",
+        "executable": "gemini",
+        # Kept in the chooser for external rooms. It does not appear behind
+        # the reliable one-click path until its unattended lifecycle has the
+        # same end-to-end coverage as the three maintained adapters above.
+        "managed_command": None,
+        "suggested_command": "gemini -p {prompt}",
+    },
+    "generic": {
+        "label": "Other terminal-capable agent",
+        "executable": None,
+        "managed_command": None,
+        "suggested_command": None,
+    },
 }
+
+
+def runtime_status(runtime: str) -> dict:
+    """Return an honest, cheap local readiness check for one runtime.
+
+    Finding an executable proves only that Synchri can launch it.  Provider
+    sign-in and an agent's agreement to a particular session are deliberately
+    separate, visible steps; the UI must not turn either into a fake green
+    checkmark.
+    """
+    definition = KNOWN_RUNTIMES.get(runtime, KNOWN_RUNTIMES["generic"])
+    executable = definition.get("executable")
+    path = shutil.which(executable) if executable else None
+    installed = bool(path)
+    managed = bool(path and definition.get("managed_command"))
+    if managed:
+        detail = "Installed on this Mac. Synchri can launch it after it agrees to the session."
+    elif installed:
+        detail = "Installed. Use the ready-to-paste prompt to connect this agent."
+    elif executable:
+        detail = f"{definition['label']} was not found on this Mac."
+    else:
+        detail = "Use a ready-to-paste prompt, or add a managed command in Advanced setup."
+    return {
+        "installed": installed,
+        "managed": managed,
+        "executable": executable,
+        "path": path,
+        "detail": detail,
+    }
+
+
+def runtime_catalog() -> list[dict]:
+    """The UI's runtime chooser plus its real local availability."""
+    return [{"key": key, **value, **runtime_status(key)} for key, value in KNOWN_RUNTIMES.items()]
+
+
+def managed_command(plan: ParticipantPlan) -> str | None:
+    """Resolve a user-supplied command before a maintained default."""
+    if plan.command and plan.command.strip():
+        return plan.command.strip()
+    definition = KNOWN_RUNTIMES.get(plan.runtime, KNOWN_RUNTIMES["generic"])
+    if runtime_status(plan.runtime)["managed"]:
+        return definition.get("managed_command")
+    return None
+
+
+def plan_launch_status(plan: ParticipantPlan) -> dict:
+    """Describe whether this exact participant can be launched by Synchri."""
+    runtime = runtime_status(plan.runtime)
+    command = managed_command(plan)
+    if command:
+        return {
+            "mode": "managed",
+            "ready": True,
+            "command": command,
+            "detail": "Synchri will attach this local agent, obtain its agreement, and start it.",
+        }
+    if runtime["installed"]:
+        detail = "This tool is installed, but Synchri does not yet launch it unattended."
+    else:
+        detail = runtime["detail"]
+    return {"mode": "external", "ready": False, "command": None, "detail": detail}

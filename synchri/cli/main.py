@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from typing import Callable
@@ -33,6 +34,7 @@ from ..runner.conductor import (
     STOP_ROOM_STOPPED,
     STOP_UNMANAGED_SPEAKER,
 )
+from ..session.modes import runtime_catalog
 from . import render, session, session_cli
 
 #: ``wait`` exit codes, so a shell loop can branch without parsing output.
@@ -106,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # -- lifecycle ------------------------------------------------------
     command("workspace", "Initialize the local workspace and show its state.")
+    command("doctor", "Check that Synchri and local coding-agent tools are ready.")
 
     create = command("create-room", "Create a room and its owning human participant.")
     create.add_argument("--name", required=True, help="human-readable room name")
@@ -1086,12 +1089,40 @@ def cmd_ui(args: argparse.Namespace, broker: Broker) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace, broker: Broker) -> int:
+    """A single, no-surprises readiness report for a new local install."""
+    git_path = shutil.which("git")
+    runtimes = runtime_catalog()
+    payload = {
+        "synchri_version": __version__,
+        "workspace": str(broker.workspace.home),
+        "git": {"ready": bool(git_path), "path": git_path},
+        "runtimes": runtimes,
+        "managed_ready": [runtime["key"] for runtime in runtimes if runtime["managed"]],
+    }
+    lines = [f"Synchri {__version__}", f"Workspace  ready  {broker.workspace.home}"]
+    lines.append("Git        ready" if git_path else "Git        missing — install Git before starting a room")
+    lines.extend(["", "Local agents"])
+    for runtime in runtimes:
+        state = "ready" if runtime["managed"] else ("external" if runtime["installed"] else "not found")
+        lines.append(f"  {runtime['label']:<22} {state:<10} {runtime['detail']}")
+    lines.extend(
+        [
+            "",
+            "Next: open Synchri and choose a repository:",
+            "  synchri ui",
+        ]
+    )
+    return _out(args, payload, "\n".join(lines))
+
+
 HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
     "ui": cmd_ui,
     "start": session_cli.cmd_start,
     "session": session_cli.cmd_session,
     "preset": session_cli.cmd_preset,
     "workspace": cmd_start,
+    "doctor": cmd_doctor,
     "create-room": cmd_create_room,
     "rooms": cmd_rooms,
     "join": cmd_join,

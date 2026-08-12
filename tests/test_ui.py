@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -194,7 +195,9 @@ def test_every_session_start_routes_to_the_agent_setup_prompts():
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
     assert "function showLaunch(result)" in source
     assert "showLaunch(r);" in source
-    assert "Copy setup instruction" in source
+    assert "Start agents" in source
+    assert "function renderExternalSetup(l)" in source
+    assert 'api("managed/start", {session:S.session})' in source
     assert "function openLaunch(id)" in source
 
 
@@ -292,6 +295,69 @@ def test_quick_start_returns_paste_ready_agent_setup_and_live_arrival_state(ui, 
     for name in ("codex", "copilot"):
         call(ui, "/api/ack", {"session": session_id, "participant": name, "reply": "UNDERSTOOD"})
     assert call(ui, f"/api/launch?session={session_id}")["launch"]["ready_to_activate"] is True
+
+
+def test_external_prompt_uses_the_packaged_helper_not_the_agents_path(ui, repo):
+    from synchri.runner.managed import ManagedRunnerRegistry
+
+    helper = "/Applications/Synchri.app/Contents/MacOS/Synchri"
+    ui["server"].api.managed = ManagedRunnerRegistry(ui["broker"].workspace, cli_command=helper)
+    result = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Review the repository.",
+        "agents": [{"name": "copilot", "runtime": "generic", "role": "participant"}],
+    })
+    agent = result["launch"]["agents"][0]
+
+    assert f"&& {helper} join " in agent["join_command"]
+    assert helper + " session contract" in agent["setup_prompt"]
+    assert helper + " wait" in agent["setup_prompt"]
+
+
+def test_managed_start_attaches_agrees_and_begins_without_pasted_prompts(ui, repo, tmp_path):
+    """The local default must prove each real transition, not pretend it happened."""
+    import sys
+
+    agent = tmp_path / "managed_agent.py"
+    agent.write_text(
+        "import sys\n"
+        "prompt = sys.argv[1]\n"
+        "if 'output exactly UNDERSTOOD' in prompt:\n"
+        "    print('UNDERSTOOD')\n"
+        "else:\n"
+        "    print('I inspected the worktree and have begun.')\n"
+        "    print('SYNCHRI-PASS')\n",
+        encoding="utf-8",
+    )
+    command = f"{sys.executable} {agent} {{prompt}}"
+    started = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Inspect the repository.",
+        "agents": [{
+            "name": "builder", "runtime": "generic", "role": "primary_builder",
+            "command": command,
+        }],
+    })
+    session_id = started["session"]["session_id"]
+    launch = started["launch"]
+    assert launch["managed"]["readiness"]["available"] is True
+    assert launch["agents"][0]["managed_ready"] is True
+
+    call(ui, "/api/managed/start", {"session": session_id})
+    for _ in range(100):
+        managed = call(ui, f"/api/managed?session={session_id}")["managed"]
+        if managed["phase"] in {"waiting", "failed", "needs_attention"}:
+            break
+        time.sleep(0.03)
+    assert managed["phase"] == "waiting", managed
+    assert managed["reason"] == "idle"
+
+    refreshed = call(ui, f"/api/launch?session={session_id}")["launch"]
+    assert refreshed["agents"][0]["joined"] is True
+    assert refreshed["agents"][0]["acknowledged"] is True
+    conversation = call(ui, f"/api/conversation?session={session_id}")["messages"]
+    assert conversation[0]["metadata"]["source"] == "session_activation"
+    assert conversation[-1]["message_type"] == "pass"
 
 
 def test_quick_start_clones_a_github_reference_before_making_the_room(ui, repo, monkeypatch):

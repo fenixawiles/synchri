@@ -14,6 +14,7 @@ conductor stops nothing about the room's state.
 
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -69,6 +70,7 @@ class Conductor:
         *,
         context_messages: int = 12,
         include_memory: bool = True,
+        role_guidance: dict[str, str] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
     ) -> None:
         if not agents:
@@ -86,6 +88,7 @@ class Conductor:
         self.observer = observer
         self.context_messages = context_messages
         self.include_memory = include_memory
+        self.role_guidance = dict(role_guidance or {})
         self.on_event = on_event or (lambda event, payload: None)
 
     # ------------------------------------------------------------------
@@ -304,13 +307,24 @@ class Conductor:
             parts.append("")
         parts.extend(["--- persistence ---", briefing.memory_note, ""])
 
+        guidance = self.role_guidance.get(name)
+        if guidance:
+            parts.extend(["--- session agreement and your role ---", guidance.rstrip(), ""])
+
+        # ``SYNCHRI_CLI`` is a shell fragment constructed by the managed
+        # launcher (and may be ``'/Applications/…/Synchri'``).  It is only
+        # rendered into an instructional prompt; it is never executed here.
+        activity_command = self.agents[name].env.get("SYNCHRI_CLI", "synchri")
+
         parts.extend(
             [
                 "--- how to reply ---",
                 "Do the work, then print your reply on stdout. Everything you print becomes",
                 "your message in the room, so do not print progress chatter.",
-                "Synchri has already published a short live work note for this turn. Do not",
-                "put private reasoning or tool-by-tool progress in your reply.",
+                "Synchri has already published a short live work note for this turn. During",
+                "meaningful changes, publish a short public semantic update with:",
+                f"  {activity_command} activity --as {shlex.quote(name)} -m \"…\"",
+                "Do not put private reasoning or tool-by-tool progress in your reply.",
                 "",
                 "You may end your output with any of these control lines:",
                 "  SYNCHRI-TO: <participant>        address them directly (blocks everyone else)",
@@ -318,6 +332,10 @@ class Conductor:
                 "  SYNCHRI-PASS                     you have nothing material to add",
                 "  SYNCHRI-STATUS: complete|partial|blocked|failed",
                 "  SYNCHRI-CONFIDENCE: 0.0-1.0",
+                "",
+                "Keep the collaboration moving. When another agent should act next, use the",
+                "direct-address control line above. For a human decision, direct it to human",
+                "and mark the response blocked. Do not end the session yourself.",
             ]
         )
         return "\n".join(parts)

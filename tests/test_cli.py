@@ -54,6 +54,22 @@ def test_workspace_reports_the_workspace_and_no_daemon(cli, workspace):
     assert payload["daemon"] is False
 
 
+def test_doctor_reports_the_machine_readiness_without_starting_anything(cli, monkeypatch):
+    from synchri.session import modes
+
+    def found(executable):
+        return "/usr/local/bin/codex" if executable == "codex" else None
+
+    monkeypatch.setattr(modes.shutil, "which", found)
+    code, out, _ = cli("--json", "doctor")
+    payload = json.loads(out)
+
+    assert code == 0
+    codex = next(item for item in payload["runtimes"] if item["key"] == "codex")
+    assert codex["managed"] is True and codex["installed"] is True
+    assert "codex" in payload["managed_ready"]
+
+
 def test_create_room_writes_a_session_file_with_owner_only_permissions(cli, workspace):
     code, out, _ = cli("--json", "create-room", "--name", "Room")
     created = json.loads(out)

@@ -23,6 +23,10 @@ ENV_ROOM = "SYNCHRI_ROOM"
 ENV_PARTICIPANT = "SYNCHRI_PARTICIPANT"
 ENV_SECRET = "SYNCHRI_SECRET"
 ENV_ROOM_TOKEN = "SYNCHRI_ROOM_TOKEN"
+LEGACY_ENV_ROOM = "AIDAPTER_ROOM"
+LEGACY_ENV_PARTICIPANT = "AIDAPTER_PARTICIPANT"
+LEGACY_ENV_SECRET = "AIDAPTER_SECRET"
+LEGACY_ENV_ROOM_TOKEN = "AIDAPTER_ROOM_TOKEN"
 
 CURRENT_ROOM_FILE = "current_room"
 
@@ -102,7 +106,7 @@ def resolve_room(workspace: Workspace, explicit: str | None, broker=None) -> str
     The repo lookup is what makes a new session resume the right conversation
     without anyone remembering a room id.
     """
-    room_id = explicit or os.environ.get(ENV_ROOM)
+    room_id = explicit or os.environ.get(ENV_ROOM) or os.environ.get(LEGACY_ENV_ROOM)
     if not room_id and broker is not None:
         here = broker.rooms_for_workspace()
         if here:
@@ -124,9 +128,19 @@ def resolve_credential(
     room_token: str | None = None,
 ) -> Credential:
     """Assemble the credential to present to the broker."""
-    participant = participant or os.environ.get(ENV_PARTICIPANT) or None
-    secret = secret or os.environ.get(ENV_SECRET) or None
-    room_token = room_token or os.environ.get(ENV_ROOM_TOKEN) or None
+    participant = (
+        participant
+        or os.environ.get(ENV_PARTICIPANT)
+        or os.environ.get(LEGACY_ENV_PARTICIPANT)
+        or None
+    )
+    secret = secret or os.environ.get(ENV_SECRET) or os.environ.get(LEGACY_ENV_SECRET) or None
+    room_token = (
+        room_token
+        or os.environ.get(ENV_ROOM_TOKEN)
+        or os.environ.get(LEGACY_ENV_ROOM_TOKEN)
+        or None
+    )
 
     if participant and not secret:
         record = load(workspace, room_id, participant)

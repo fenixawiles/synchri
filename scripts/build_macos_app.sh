@@ -20,6 +20,7 @@ PYTHON=${PYTHON:-python3}
   --clean \
   --windowed \
   --name Synchri \
+  --icon "$ROOT/assets/Synchri.icns" \
   --osx-bundle-identifier com.synchri.app \
   --add-data "$ROOT/synchri/ui/static:synchri/ui/static" \
   --paths "$ROOT" \

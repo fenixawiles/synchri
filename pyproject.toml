@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aidapter"
+version = "0.1.0"
+description = "Local interoperability layer that lets coding agents talk to each other through a shared, user-controlled room."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "AIDapter contributors" }]
+keywords = ["agents", "orchestration", "cli", "local-first", "coding-agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+]
+# Zero runtime dependencies: stdlib only, on purpose. A broker that agents are
+# expected to install into arbitrary environments should not drag in a tree.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+aidapter = "aidapter.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/fenixawiles/AIDapter"
+
+[tool.setuptools.packages.find]
+include = ["aidapter*"]
+
+[tool.setuptools.package-data]
+aidapter = ["storage/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]

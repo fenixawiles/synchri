@@ -1,0 +1,724 @@
+"""``aidapter`` command line interface.
+
+The CLI is the integration surface for v0.1: an agent participates in a room
+because it can run shell commands, with no SDK and no provider plumbing.  Every
+command therefore accepts ``--json`` and returns a meaningful exit code, so an
+agent can branch on the outcome without parsing prose.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from typing import Callable
+
+from .. import __version__
+from ..broker import Broker, Credential
+from ..config import DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS, resolve_workspace
+from ..errors import AidapterError, ValidationError
+from ..memory.ledger import SECTIONS
+from ..models.enums import MessageType, ResponseStatus, TurnState
+from ..models.envelope import MessageDraft
+from . import render, session
+
+#: ``wait`` exit codes, so a shell loop can branch without parsing output.
+WAIT_EXIT_CODES = {
+    TurnState.YOUR_TURN.value: 0,
+    TurnState.STOPPED.value: 11,
+    TurnState.AWAITING_HUMAN.value: 12,
+    TurnState.REMOVED.value: 13,
+}
+WAIT_TIMEOUT_EXIT = 10
+
+
+# ----------------------------------------------------------------------
+# argument parsing
+# ----------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="aidapter",
+        description=(
+            "Local interoperability layer for coding agents. "
+            "Stop being the clipboard between your coding agents."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    parser.add_argument("--home", help="workspace directory (default: $AIDAPTER_HOME or ~/.aidapter)")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument("--version", action="version", version=f"aidapter {__version__}")
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+
+    def command(name: str, help_text: str, **kwargs) -> argparse.ArgumentParser:
+        return sub.add_parser(name, help=help_text, description=help_text, **kwargs)
+
+    # -- lifecycle ------------------------------------------------------
+    command("start", "Initialize the local workspace and show its state.")
+
+    create = command("create-room", "Create a room and its owning human participant.")
+    create.add_argument("--name", required=True, help="human-readable room name")
+    create.add_argument("--human-name", default="human", help="name for your own identity")
+    create.add_argument("--goal", help="seed the memory ledger with the room goal")
+    create.add_argument(
+        "--max-agent-turns",
+        type=int,
+        default=DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
+        help="consecutive agent turns allowed before the room waits for you",
+    )
+
+    command("rooms", "List rooms in this workspace.")
+
+    join = command("join", "Join a room using a join token.")
+    join.add_argument("reference", help="room id or full join token")
+    join.add_argument("--name", required=True, help="participant name, e.g. claude or codex")
+    join.add_argument("--kind", choices=["agent", "human"], default="agent")
+    join.add_argument("--token", help="join token, if the reference was a bare room id")
+    join.add_argument("--rejoin", metavar="SECRET", help="re-attach to an existing identity")
+    join.add_argument("--meta", help="JSON object of participant metadata")
+
+    # -- messaging ------------------------------------------------------
+    send = command("send", "Send a message into a room.")
+    _add_room_actor(send, actor_flags=("--from", "--as"))
+    send.add_argument("--to", dest="target", help="address a participant directly (blocking turn)")
+    send.add_argument("--message", "-m", dest="content", default="", help="message body")
+    send.add_argument("--stdin", action="store_true", help="read the body from standard input")
+    send.add_argument(
+        "--type",
+        dest="message_type",
+        choices=[m.value for m in MessageType],
+        default=MessageType.CHAT.value,
+    )
+    send.add_argument("--task", dest="task_id", help="task id this message belongs to")
+    send.add_argument("--goal", help="goal this message serves")
+    send.add_argument("--artifact", action="append", default=[], help="artifact reference (repeatable)")
+    send.add_argument("--constraint", action="append", default=[], help="constraint (repeatable)")
+    send.add_argument("--claim", help="the assertion being made")
+    send.add_argument("--evidence", help="what supports the claim")
+    send.add_argument("--request-type", help="free-form request kind, e.g. review or implement")
+    send.add_argument("--status", dest="response_status", choices=[s.value for s in ResponseStatus])
+    send.add_argument("--confidence", type=float, help="0.0-1.0")
+    send.add_argument("--handoff-to", help="defer to this participant when finished")
+    send.add_argument("--reply-to", help="message id this replies to")
+    send.add_argument("--meta", help="JSON object of extra metadata")
+    send.add_argument("--hold", action="store_true", help="keep the floor for a follow-up message")
+
+    interrupt = command("interrupt", "Human interrupt: cut in and optionally redirect.")
+    _add_room_actor(interrupt)
+    interrupt.add_argument("--message", "-m", dest="content", required=True)
+    interrupt.add_argument("--to", dest="target", help="redirect the room to this participant")
+
+    read = command("read", "Show the room transcript.")
+    _add_room_reader(read)
+    read.add_argument("--since", type=int, default=0, help="only messages after this seq")
+    read.add_argument("--limit", type=int, help="maximum messages to return")
+    read.add_argument("--tail", type=int, help="show only the last N messages")
+    read.add_argument("--follow", "-f", action="store_true", help="stream new messages")
+    read.add_argument("--poll", type=float, default=1.0, help="follow poll interval in seconds")
+
+    watch = command("watch", "Live view of the room for the human: status plus new messages.")
+    _add_room_reader(watch)
+    watch.add_argument("--poll", type=float, default=1.0)
+
+    # -- turns ----------------------------------------------------------
+    turn = command("turn", "Report whether it is your turn right now.")
+    _add_room_actor(turn)
+
+    wait = command("wait", "Block until it is your turn.")
+    _add_room_actor(wait)
+    wait.add_argument("--timeout", type=float, default=300.0)
+    wait.add_argument("--poll", type=float, default=0.5)
+
+    passer = command("pass", "Decline the turn: nothing material to add.")
+    _add_room_actor(passer)
+    passer.add_argument("--reason", help="optional short reason, recorded in the transcript")
+
+    floor = command("request-floor", "Ask for a turn without being addressed.")
+    _add_room_actor(floor)
+    floor.add_argument("--priority", choices=["queued", "optional"], default="queued")
+
+    # -- inspection -----------------------------------------------------
+    status = command("status", "Show room state, participants, and the queue.")
+    _add_room_reader(status)
+
+    participants = command("participants", "List participants.")
+    _add_room_reader(participants)
+
+    events = command("events", "Show the state-transition audit log.")
+    _add_room_reader(events)
+    events.add_argument("--since", type=int, default=0)
+    events.add_argument("--limit", type=int)
+
+    prov = command("provenance", "Show the full provenance record for one message.")
+    _add_room_reader(prov)
+    prov.add_argument("--message", required=True, help="message id")
+
+    export = command("export", "Rebuild transcript.jsonl from authoritative state.")
+    _add_room_reader(export)
+
+    # -- memory ---------------------------------------------------------
+    # Deliberately flat positionals rather than sub-subcommands: argparse
+    # subparsers reset shared flags like --room to their defaults, and a bare
+    # "aidapter memory --room X" should just print the ledger.
+    memory = command(
+        "memory",
+        "Read or update the shared semantic memory ledger.",
+        epilog=(
+            "  aidapter memory --room <id>\n"
+            "  aidapter memory set goal 'ship the fix' --as claude\n"
+            "  aidapter memory add decisions 'keep the runtime contract' --as codex\n"
+            "  aidapter memory remove open_issues 2 --as human\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    memory.add_argument(
+        "action",
+        nargs="?",
+        default="show",
+        choices=["show", "set", "add", "remove"],
+        help="default: show",
+    )
+    memory.add_argument("section", nargs="?", help=f"one of: {', '.join(sorted(SECTIONS))}")
+    memory.add_argument("value", nargs="?", help="entry text, or the entry number for 'remove'")
+    memory.add_argument("--message", dest="message_id", help="message id this entry came from")
+    _add_room_reader(memory)
+
+    # -- human controls -------------------------------------------------
+    for name, help_text in (
+        ("pause-room", "Pause the room: agents stop, you keep control."),
+        ("resume-room", "Resume a paused room."),
+        ("stop-room", "Hard stop. Terminal and authoritative."),
+    ):
+        control = command(name, help_text)
+        _add_room_actor(control)
+
+    remove = command("remove", "Remove a participant from the room (human only).")
+    _add_room_actor(remove)
+    remove.add_argument("--participant", required=True, help="name of the participant to remove")
+
+    config = command("config", "Change room configuration (human only).")
+    _add_room_actor(config)
+    config.add_argument("--max-agent-turns", type=int, required=True)
+
+    return parser
+
+
+def _add_room_actor(parser: argparse.ArgumentParser, actor_flags: tuple[str, ...] = ("--as",)) -> None:
+    parser.add_argument("--room", help="room id (default: $AIDAPTER_ROOM or the last room created)")
+    parser.add_argument(
+        *actor_flags,
+        dest="actor",
+        help="acting participant name (default: $AIDAPTER_PARTICIPANT)",
+    )
+    parser.add_argument("--secret", help="participant secret (default: session file or $AIDAPTER_SECRET)")
+
+
+def _add_room_reader(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--room", help="room id (default: $AIDAPTER_ROOM or the last room created)")
+    parser.add_argument("--as", dest="actor", help="read as this participant")
+    parser.add_argument("--secret", help="participant secret")
+    parser.add_argument("--token", dest="room_token", help="room join token, for observer reads")
+
+
+EPILOG = """\
+typical flow
+  aidapter create-room --name "PR 89 review" --goal "find race conditions"
+  aidapter join <join-token> --name claude
+  aidapter join <join-token> --name codex
+  aidapter send --from claude --to codex --type task \\
+      -m "Adversarially review commit abc123 for race conditions." \\
+      --artifact git:abc123 --constraint "preserve the existing runtime contract"
+  aidapter wait --as codex            # blocks until codex is on point
+  aidapter send --from codex --type response --status complete -m "Findings: ..."
+  aidapter read                       # the human watches
+  aidapter interrupt --as human -m "hold on, check the retry path too" --to codex
+
+exit codes
+  0 ok   2 validation   3 auth   4 not found   5 conflict   6 invalid state   7 not your turn
+  wait: 0 your turn   10 timeout   11 room stopped   12 awaiting human   13 removed
+"""
+
+
+# ----------------------------------------------------------------------
+# entry point
+# ----------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    handler: Callable[[argparse.Namespace, Broker], int] | None = HANDLERS.get(args.command)
+    if handler is None:  # pragma: no cover - argparse rejects unknown commands
+        parser.error(f"unknown command {args.command!r}")
+        return 2
+
+    workspace = resolve_workspace(args.home)
+    broker: Broker | None = None
+    try:
+        broker = Broker(workspace)
+        return handler(args, broker)
+    except AidapterError as exc:
+        _emit_error(args, exc)
+        return exc.exit_code
+    except BrokenPipeError:  # pragma: no cover - e.g. piping into head
+        return 0
+    except KeyboardInterrupt:
+        print("", file=sys.stderr)
+        return 130
+    finally:
+        if broker is not None:
+            broker.close()
+
+
+def _emit_error(args: argparse.Namespace, exc: AidapterError) -> None:
+    if getattr(args, "json", False):
+        print(render.as_json(exc.to_dict()), file=sys.stderr)
+    else:
+        print(f"error [{exc.code}]: {exc.message}", file=sys.stderr)
+
+
+def _out(args: argparse.Namespace, payload: object, text: str) -> int:
+    print(render.as_json(payload) if args.json else text)
+    return 0
+
+
+def _credential(args: argparse.Namespace, broker: Broker, room_id: str) -> Credential:
+    return session.resolve_credential(
+        broker.workspace,
+        room_id,
+        getattr(args, "actor", None),
+        getattr(args, "secret", None),
+        getattr(args, "room_token", None),
+    )
+
+
+def _room(args: argparse.Namespace, broker: Broker) -> str:
+    return session.resolve_room(broker.workspace, getattr(args, "room", None))
+
+
+def _metadata(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"--meta must be valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValidationError("--meta must be a JSON object")
+    return value
+
+
+# ----------------------------------------------------------------------
+# handlers
+# ----------------------------------------------------------------------
+
+
+def cmd_start(args: argparse.Namespace, broker: Broker) -> int:
+    rooms = broker.list_rooms()
+    payload = {
+        "workspace": str(broker.workspace.home),
+        "database": str(broker.workspace.db_path),
+        "rooms": len(rooms),
+        "active_rooms": sum(1 for r in rooms if r["status"] == "active"),
+        "current_room": session.get_current_room(broker.workspace),
+        "daemon": False,
+        "note": (
+            "AIDapter v0.1 has no background process and opens no network socket. "
+            "State lives in the SQLite workspace below and every command is a short-lived "
+            "transaction against it."
+        ),
+    }
+    text = (
+        f"AIDapter {__version__} workspace ready\n"
+        f"  workspace : {payload['workspace']}\n"
+        f"  database  : {payload['database']}\n"
+        f"  rooms     : {payload['rooms']} ({payload['active_rooms']} active)\n"
+        f"  current   : {payload['current_room'] or '(none)'}\n"
+        f"\n{payload['note']}"
+    )
+    return _out(args, payload, text)
+
+
+def cmd_create_room(args: argparse.Namespace, broker: Broker) -> int:
+    result = broker.create_room(
+        args.name,
+        human_name=args.human_name,
+        goal=args.goal,
+        max_consecutive_agent_turns=args.max_agent_turns,
+    )
+    record = session.SessionRecord(
+        room_id=result["room_id"],
+        participant=result["human"]["name"],
+        participant_id=result["human"]["participant_id"],
+        secret=result["human"]["secret"],
+        kind="human",
+        room_name=result["name"],
+        room_token=result["join_token"],
+    )
+    result["session_file"] = session.save(broker.workspace, record)
+    session.set_current_room(broker.workspace, result["room_id"])
+
+    text = (
+        f"Room created: {result['name']}\n"
+        f"  room id    : {result['room_id']}\n"
+        f"  join token : {result['join_token']}\n"
+        f"  you        : {result['human']['name']} ({result['human']['kind']})\n"
+        f"  memory     : {result['memory_path']}\n\n"
+        "Give the join token to each agent (it is shown only once):\n"
+        f"  aidapter join {result['join_token']} --name claude\n"
+        f"  aidapter join {result['join_token']} --name codex"
+    )
+    return _out(args, result, text)
+
+
+def cmd_rooms(args: argparse.Namespace, broker: Broker) -> int:
+    rooms = broker.list_rooms()
+    return _out(args, {"rooms": rooms}, render.rooms_table(rooms))
+
+
+def cmd_join(args: argparse.Namespace, broker: Broker) -> int:
+    result = broker.join(
+        args.reference,
+        args.name,
+        token=args.token,
+        kind=args.kind,
+        rejoin_secret=args.rejoin,
+        metadata=_metadata(args.meta),
+    )
+    record = session.SessionRecord(
+        room_id=result["room_id"],
+        participant=result["name"],
+        participant_id=result["participant_id"],
+        secret=result["secret"],
+        kind=result["kind"],
+        room_name=result.get("room_name", ""),
+    )
+    result["session_file"] = session.save(broker.workspace, record)
+    verb = "Re-attached to" if result.get("rejoined") else "Joined"
+    text = (
+        f"{verb} room {result['room_id']} as {result['name']} ({result['kind']})\n"
+        f"  participant id : {result['participant_id']}\n"
+        f"  secret         : {result['secret']}\n"
+        f"  session file   : {result['session_file']}\n"
+        f"  memory         : {result['memory_path']}\n\n"
+        "Subsequent commands find this secret automatically, e.g.\n"
+        f"  aidapter wait --room {result['room_id']} --as {result['name']}"
+    )
+    return _out(args, result, text)
+
+
+def cmd_send(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    content = args.content
+    if args.stdin:
+        content = sys.stdin.read()
+    draft = MessageDraft(
+        content=content,
+        message_type=args.message_type,
+        target=args.target,
+        goal=args.goal,
+        task_id=args.task_id,
+        artifact_references=list(args.artifact or []),
+        constraints=list(args.constraint or []),
+        claim=args.claim,
+        evidence=args.evidence,
+        request_type=args.request_type,
+        response_status=args.response_status,
+        confidence=args.confidence,
+        handoff_target=args.handoff_to,
+        in_reply_to=args.reply_to,
+        metadata=_metadata(args.meta),
+    )
+    result = broker.send(
+        room_id,
+        credential=_credential(args, broker, room_id),
+        draft=draft,
+        hold_floor=args.hold,
+    )
+    return _out(args, result, _send_summary(result))
+
+
+def _send_summary(result: dict) -> str:
+    message = result["message"]
+    lines = [render.message_line(message), ""]
+    if result.get("interrupted"):
+        lines.append(f"interrupted: {result['interrupted']['participant_name']}'s turn")
+    if result.get("cleared_queue_entries"):
+        lines.append(f"cleared {result['cleared_queue_entries']} queued turn(s)")
+    if result.get("awaiting_human"):
+        lines.append("autonomy limit reached: the room is now waiting for human input")
+    if result.get("floor_held"):
+        lines.append("floor held: send again to continue, or 'aidapter pass' to release")
+    lines.append(f"next speaker: {result.get('next_speaker') or '(nobody)'}")
+    lines.append("queue:")
+    lines.append(render.queue_block(result.get("queue") or []))
+    for warning in result.get("warnings") or []:
+        lines.append(f"warning: {warning}")
+    return "\n".join(lines)
+
+
+def cmd_interrupt(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    draft = MessageDraft(
+        content=args.content,
+        message_type=MessageType.INTERRUPT.value,
+        target=args.target,
+    )
+    result = broker.send(room_id, credential=_credential(args, broker, room_id), draft=draft)
+    return _out(args, result, _send_summary(result))
+
+
+def cmd_read(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    credential = _credential(args, broker, room_id)
+    result = broker.read(
+        room_id, credential=credential, since_seq=args.since, limit=args.limit, tail=args.tail
+    )
+    if not args.follow:
+        return _out(args, result, render.transcript(result["messages"]))
+
+    # In follow mode the backlog is emitted in the same shape as the stream that
+    # follows it: one JSON object per message, or the rendered transcript.
+    if args.json:
+        for message in result["messages"]:
+            print(render.as_json(message))
+    else:
+        print(render.transcript(result["messages"]))
+    since = _max_seq(result["messages"], args.since)
+    return _follow(args, broker, room_id, credential, since, args.poll)
+
+
+def _follow(
+    args: argparse.Namespace,
+    broker: Broker,
+    room_id: str,
+    credential: Credential,
+    since: int,
+    poll: float,
+) -> int:
+    """Stream new messages until the room stops or the user interrupts."""
+    while True:
+        time.sleep(max(0.1, poll))
+        result = broker.read(room_id, credential=credential, since_seq=since)
+        for message in result["messages"]:
+            print(render.as_json(message) if args.json else render.message_line(message) + "\n")
+        since = _max_seq(result["messages"], since)
+        if result["room_status"] == "stopped":
+            print("(room stopped)", file=sys.stderr)
+            return 0
+
+
+def _max_seq(messages: list[dict], fallback: int) -> int:
+    return max([m["seq"] for m in messages], default=fallback)
+
+
+def cmd_watch(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    credential = _credential(args, broker, room_id)
+    status = broker.room_status(room_id, credential=credential)
+    print(render.room_status(status))
+    print("\n--- transcript (live) ---\n")
+    result = broker.read(room_id, credential=credential)
+    print(render.transcript(result["messages"]))
+    return _follow(args, broker, room_id, credential, _max_seq(result["messages"], 0), args.poll)
+
+
+def cmd_turn(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    status = broker.turn_status(room_id, credential=_credential(args, broker, room_id))
+    _out(args, status, render.turn_status(status))
+    return 0
+
+
+def cmd_wait(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    status = broker.wait_for_turn(
+        room_id,
+        credential=_credential(args, broker, room_id),
+        timeout=args.timeout,
+        poll_interval=args.poll,
+    )
+    _out(args, status, render.turn_status(status))
+    if status.get("timed_out"):
+        return WAIT_TIMEOUT_EXIT
+    return WAIT_EXIT_CODES.get(status["state"], 0)
+
+
+def cmd_pass(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    result = broker.pass_turn(
+        room_id, credential=_credential(args, broker, room_id), reason=args.reason
+    )
+    text = (
+        f"{result['message']['sender']} passed"
+        + (" (held the floor)" if result["held_floor"] else " (gave up a queued turn)")
+        + f"\nnext speaker: {result.get('next_speaker') or '(nobody)'}\nqueue:\n"
+        + render.queue_block(result.get("queue") or [])
+    )
+    return _out(args, result, text)
+
+
+def cmd_request_floor(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    result = broker.request_floor(
+        room_id, credential=_credential(args, broker, room_id), priority=args.priority
+    )
+    return _out(
+        args,
+        result,
+        f"queued at {result['priority']} priority\n" + render.queue_block(result["queue"]),
+    )
+
+
+def cmd_status(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    status = broker.room_status(room_id, credential=_credential(args, broker, room_id))
+    return _out(args, status, render.room_status(status))
+
+
+def cmd_participants(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    people = broker.list_participants(room_id, credential=_credential(args, broker, room_id))
+    text = "\n".join(
+        f"{p['name']:<16} {p['kind']:<6} {p['status']:<8} joined {p['joined_at']}" for p in people
+    )
+    return _out(args, {"participants": people}, text or "(no participants)")
+
+
+def cmd_events(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    result = broker.events(
+        room_id, credential=_credential(args, broker, room_id), since_seq=args.since, limit=args.limit
+    )
+    text = "\n".join(
+        f"[#{e['seq']:>4}] {render.short_time(e['created_at'])} {e['event_type']:<26} "
+        f"{e['actor_name'] or '-':<12} {json.dumps(e['payload'], ensure_ascii=False)}"
+        for e in result["events"]
+    )
+    return _out(args, result, text or "(no events)")
+
+
+def cmd_provenance(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    result = broker.provenance(
+        room_id, args.message, credential=_credential(args, broker, room_id)
+    )
+    return _out(args, result, render.as_json(result))
+
+
+def cmd_export(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    result = broker.export(room_id, credential=_credential(args, broker, room_id))
+    return _out(
+        args,
+        result,
+        f"exported {result['message_count']} messages\n"
+        f"  transcript : {result['transcript_path']}\n"
+        f"  memory     : {result['memory_path']}",
+    )
+
+
+def cmd_memory(args: argparse.Namespace, broker: Broker) -> int:
+    action = args.action or "show"
+    room_id = _room(args, broker)
+    credential = _credential(args, broker, room_id)
+
+    if action != "show" and not args.section:
+        raise ValidationError(f"'memory {action}' needs a section, e.g. 'memory {action} goal ...'")
+    if action != "show" and args.value is None:
+        raise ValidationError(f"'memory {action}' needs a value")
+
+    if action == "show":
+        result = broker.memory_show(room_id, credential=credential)
+    elif action == "remove":
+        try:
+            index = int(args.value)
+        except ValueError as exc:
+            raise ValidationError("'memory remove' takes an entry number, e.g. 'remove goal 2'") from exc
+        result = broker.memory_remove(
+            room_id, credential=credential, section=args.section, index=index
+        )
+    else:
+        result = broker.memory_write(
+            room_id,
+            credential=credential,
+            section=args.section,
+            value=args.value,
+            mode=action,
+            message_id=args.message_id,
+        )
+    return _out(args, result, render.memory_block(result))
+
+
+def cmd_pause(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    status = broker.pause_room(room_id, credential=_credential(args, broker, room_id))
+    return _out(args, status, render.room_status(status))
+
+
+def cmd_resume(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    status = broker.resume_room(room_id, credential=_credential(args, broker, room_id))
+    return _out(args, status, render.room_status(status))
+
+
+def cmd_stop(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    status = broker.stop_room(room_id, credential=_credential(args, broker, room_id))
+    return _out(args, status, render.room_status(status))
+
+
+def cmd_remove(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    result = broker.remove_participant(
+        room_id, args.participant, credential=_credential(args, broker, room_id)
+    )
+    return _out(args, result, f"removed {result['removed']} ({result['participant_id']})")
+
+
+def cmd_config(args: argparse.Namespace, broker: Broker) -> int:
+    room_id = _room(args, broker)
+    status = broker.set_room_config(
+        room_id,
+        credential=_credential(args, broker, room_id),
+        max_consecutive_agent_turns=args.max_agent_turns,
+    )
+    return _out(args, status, render.room_status(status))
+
+
+HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
+    "start": cmd_start,
+    "create-room": cmd_create_room,
+    "rooms": cmd_rooms,
+    "join": cmd_join,
+    "send": cmd_send,
+    "interrupt": cmd_interrupt,
+    "read": cmd_read,
+    "watch": cmd_watch,
+    "turn": cmd_turn,
+    "wait": cmd_wait,
+    "pass": cmd_pass,
+    "request-floor": cmd_request_floor,
+    "status": cmd_status,
+    "participants": cmd_participants,
+    "events": cmd_events,
+    "provenance": cmd_provenance,
+    "export": cmd_export,
+    "memory": cmd_memory,
+    "pause-room": cmd_pause,
+    "resume-room": cmd_resume,
+    "stop-room": cmd_stop,
+    "remove": cmd_remove,
+    "config": cmd_config,
+}
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

@@ -340,3 +340,231 @@ def test_presets_can_be_saved_from_the_wizard(ui, repo):
     result = call(ui, "/api/preset", {"draft": "d", "name": "UI Preset"})
     assert result["presets"][0]["name"] == "UI Preset"
     assert "spec" not in result["presets"][0]
+
+
+# ----------------------------------------------------------------------
+# persisted drafts: an unfinished wizard survives, and tabs stay in step
+# ----------------------------------------------------------------------
+
+
+def test_an_unfinished_wizard_survives_a_restart(workspace, repo):
+    """Closing the app must not lose a half-filled wizard."""
+    first = Broker(workspace)
+    try:
+        api = __import__("synchri.ui.api", fromlist=["Api"]).Api(first, SessionManager(first))
+        api.update_draft({}, {"draft": "d", "mode": "long_horizon", "repo_path": str(repo),
+                              "spec": SPEC, "deadline": "6 hours", "name": "half done"})
+    finally:
+        first.close()
+
+    second = Broker(workspace)
+    try:
+        api = __import__("synchri.ui.api", fromlist=["Api"]).Api(second, SessionManager(second))
+        state = api.get_draft({"draft": "d"}, {})
+        assert state["draft"]["mode"] == "long_horizon"
+        assert state["draft"]["repo_path"] == str(repo.resolve())
+        assert state["draft"]["spec"] == SPEC
+        assert state["draft"]["name"] == "half done"
+        # No agents were chosen before the "restart", so the wizard reopens
+        # knowing exactly what is still missing.
+        assert state["ready"] is False
+        assert any("agent" in p for p in state["problems"])
+    finally:
+        second.close()
+
+
+def test_two_tabs_on_one_draft_see_the_same_state(ui, repo):
+    """The second tab must not diverge from the first."""
+    call(ui, "/api/draft/reset", {"draft": "shared"})
+    first = call(ui, "/api/draft", {"draft": "shared", "mode": "long_horizon"})
+    second = call(ui, f"/api/draft?draft=shared")
+    assert second["draft"]["mode"] == "long_horizon"
+    assert second["version"] == first["version"]
+
+    # Tab A edits; tab B sees a new version and the new value.
+    edited = call(ui, "/api/draft", {"draft": "shared", "repo_path": str(repo)})
+    seen = call(ui, "/api/draft?draft=shared")
+    assert seen["version"] == edited["version"] > first["version"]
+    assert seen["draft"]["repo_path"] == str(repo.resolve())
+
+
+def test_drafts_are_isolated_by_id(ui, repo):
+    call(ui, "/api/draft", {"draft": "one", "mode": "long_horizon"})
+    call(ui, "/api/draft", {"draft": "two", "mode": "review_audit"})
+    assert call(ui, "/api/draft?draft=one")["draft"]["mode"] == "long_horizon"
+    assert call(ui, "/api/draft?draft=two")["draft"]["mode"] == "review_audit"
+
+
+def test_starting_a_session_clears_its_draft(ui, repo):
+    _ready_draft(ui, repo)
+    assert call(ui, "/api/draft?draft=d")["draft"]["mode"] == "long_horizon"
+    call(ui, "/api/start", {"draft": "d"})
+    assert call(ui, "/api/draft?draft=d")["draft"]["mode"] is None
+
+
+def test_a_permission_edit_does_not_corrupt_the_draft_id(ui, repo):
+    """Regression: the permissions loop once shadowed the draft key."""
+    call(ui, "/api/draft", {"draft": "perm", "mode": "long_horizon"})
+    call(ui, "/api/draft", {"draft": "perm", "permissions": {"git.push": "allow"}})
+    reloaded = call(ui, "/api/draft?draft=perm")
+    assert reloaded["draft"]["permissions"]["git.push"] == "allow"
+    assert reloaded["draft"]["mode"] == "long_horizon", "the draft was saved under its own id"
+
+
+def test_a_restored_draft_drops_an_expired_deadline(workspace, repo):
+    from synchri.session.draft import SessionDraft
+
+    state = {
+        "mode": "long_horizon",
+        "repo_path": str(repo),
+        "deadline": {"ends_at": "2000-01-01T00:00:00.000Z",
+                     "started_at": "1999-01-01T00:00:00.000Z", "source": "fixed"},
+    }
+    restored = SessionDraft.from_state(state)
+    assert restored.deadline is None, "an expired deadline is not a usable choice"
+    assert restored.mode == "long_horizon"
+
+
+def test_a_restored_draft_tolerates_a_vanished_repository(tmp_path):
+    from synchri.session.draft import SessionDraft
+
+    restored = SessionDraft.from_state(
+        {"mode": "long_horizon", "repo_path": str(tmp_path / "deleted")}
+    )
+    assert restored.repo_path is None, "reopen the step rather than fail to load"
+    assert restored.mode == "long_horizon"
+
+
+def test_draft_ids_are_validated(ui):
+    with pytest.raises(urllib.error.HTTPError):
+        call(ui, "/api/draft", {"draft": "../escape", "mode": "long_horizon"})
+
+
+# ----------------------------------------------------------------------
+# server-sent events: the client stops polling
+# ----------------------------------------------------------------------
+
+
+def read_events(url, token, *, count, timeout=25):
+    """Collect `count` SSE frames, or as many as arrive before the timeout."""
+    request = urllib.request.Request(url)
+    request.add_header("X-Synchri-Token", token)
+    request.add_header("Accept", "text/event-stream")
+    collected, current = [], {}
+    response = urllib.request.urlopen(request, timeout=timeout)
+    try:
+        for raw in response:
+            line = raw.decode().rstrip("\n")
+            if line.startswith("event:"):
+                current["event"] = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                current["data"] = json.loads(line.split(":", 1)[1].strip())
+            elif line == "" and current:
+                collected.append(current)
+                current = {}
+                if len(collected) >= count:
+                    break
+    finally:
+        response.close()
+    return collected
+
+
+def test_the_stream_announces_itself_then_pushes_changes(ui, repo):
+    session_id = _active(ui, repo)
+    url = f"{ui['base']}/api/stream?session={session_id}"
+    received = []
+    error = []
+
+    def listen():
+        try:
+            received.extend(read_events(url, ui["token"], count=2))
+        except Exception as exc:  # pragma: no cover - reported by the assert
+            error.append(exc)
+
+    thread = threading.Thread(target=listen, daemon=True)
+    thread.start()
+    threading.Event().wait(1.0)  # let the stream take its first fingerprint
+
+    # Something the dashboard shows changes.
+    call(ui, "/api/message", {"session": session_id, "content": "a new message"})
+    thread.join(timeout=25)
+
+    assert not error, error
+    assert received[0]["event"] == "ready"
+    assert received[1]["event"] == "changed"
+    assert "conversation" in received[1]["data"]["what"]
+
+
+def test_the_stream_reports_session_changes(ui, repo):
+    session_id = _active(ui, repo)
+    url = f"{ui['base']}/api/stream?session={session_id}"
+    received, error = [], []
+
+    def listen():
+        try:
+            received.extend(read_events(url, ui["token"], count=2))
+        except Exception as exc:  # pragma: no cover
+            error.append(exc)
+
+    thread = threading.Thread(target=listen, daemon=True)
+    thread.start()
+    threading.Event().wait(1.0)
+    # Changing permissions issues a new contract revision, which is a change to
+    # the session record itself. (Pausing changes the *room*, and surfaces as a
+    # conversation change instead.)
+    permissions = call(ui, f"/api/session?session={session_id}")["permissions"]
+    permissions["git.push"] = "allow"
+    call(ui, "/api/control", {"session": session_id, "action": "permissions",
+                              "permissions": permissions})
+    thread.join(timeout=25)
+
+    assert not error, error
+    assert "sessions" in received[1]["data"]["what"]
+
+
+def test_the_stream_reports_a_draft_edited_in_another_tab(ui, repo):
+    """This is what keeps two tabs in step."""
+    url = f"{ui['base']}/api/stream"
+    received, error = [], []
+
+    def listen():
+        try:
+            received.extend(read_events(url, ui["token"], count=2))
+        except Exception as exc:  # pragma: no cover
+            error.append(exc)
+
+    thread = threading.Thread(target=listen, daemon=True)
+    thread.start()
+    threading.Event().wait(1.0)
+    call(ui, "/api/draft", {"draft": "default", "mode": "long_horizon"})
+    thread.join(timeout=25)
+
+    assert not error, error
+    assert "drafts" in received[1]["data"]["what"]
+
+
+def test_the_stream_requires_the_token(ui):
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        read_events(f"{ui['base']}/api/stream", "wrong-token", count=1, timeout=10)
+    assert exc.value.code == 401
+
+
+def test_the_client_uses_eventsource_and_never_polls(ui):
+    with urllib.request.urlopen(ui["url"], timeout=20) as response:
+        page = response.read().decode()
+    assert "new EventSource(" in page
+    assert "setInterval" not in page, "the dashboard must be push-driven, not polled"
+
+
+def test_a_quiet_stream_stays_open(ui, repo):
+    """No change means no event -- but the connection must not be dropped."""
+    _active(ui, repo)
+    request = urllib.request.Request(f"{ui['base']}/api/stream")
+    request.add_header("X-Synchri-Token", ui["token"])
+    response = urllib.request.urlopen(request, timeout=10)
+    try:
+        first = response.readline().decode()
+        assert first.startswith("event: ready")
+        assert not response.closed
+    finally:
+        response.close()

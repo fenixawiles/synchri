@@ -281,6 +281,50 @@ class SessionDraft:
             "ready": self.is_ready,
         }
 
+    # -- persistence ---------------------------------------------------
+
+    def to_state(self) -> dict:
+        """The complete draft, including the parts a preset deliberately omits.
+
+        A preset is a reusable template; this is one specific unfinished wizard,
+        so it keeps the spec, the deadline, and the repository too.
+        """
+        return {
+            **self.to_preset(),
+            "repo_path": self.repo_path,
+            "base_branch": self.base_branch,
+            "worktree_name": self.worktree_name,
+            "worktree_parent": self.worktree_parent,
+            "spec": self.spec.to_dict() if self.spec else None,
+            "deadline": self.deadline.to_dict() if self.deadline else None,
+            "name": self.name,
+        }
+
+    @classmethod
+    def from_state(cls, state: dict) -> "SessionDraft":
+        """Rebuild an unfinished wizard.
+
+        Tolerant on purpose: a repository that has since been deleted, or a
+        deadline that has since passed, should reopen the wizard with that step
+        blank rather than fail to load at all.
+        """
+        draft = cls.from_preset(state or {})
+        if state.get("repo_path"):
+            try:
+                draft.set_repository(state["repo_path"], state.get("base_branch"))
+            except ValidationError:
+                draft.repo_path = None
+        draft.worktree_name = state.get("worktree_name")
+        draft.worktree_parent = state.get("worktree_parent")
+        draft.name = state.get("name")
+        if state.get("spec"):
+            draft.spec = ProductSpec.from_dict(state["spec"])
+        if state.get("deadline"):
+            restored = Deadline.from_dict(state["deadline"])
+            # An expired deadline is not a usable choice; make the user re-pick.
+            draft.deadline = restored if restored and not restored.is_expired() else None
+        return draft
+
     def to_preset(self) -> dict:
         """Reusable configuration only. No spec, no deadline, no worktree, no ids."""
         return {

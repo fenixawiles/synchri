@@ -130,13 +130,15 @@ function flash(message) {
 }
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
 
-const S = { view: "home", boot: null, draft: null, step: "mode", session: null, tab: "conversation", dash: null, repos: null };
+const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
+            tab:"conversation", dash:null, repos:null, es:null };
 const app = () => document.getElementById("app");
 
 /* ------------------------------------------------------------------ home */
 async function home() {
-  S.view = "home";
+  S.view = "home"; S.session = null;
   S.boot = await api("bootstrap");
+  listen();
   document.getElementById("ctx").textContent = S.boot.workspace;
   const list = S.boot.sessions;
   app().innerHTML = "";
@@ -171,11 +173,25 @@ async function home() {
 }
 
 /* ---------------------------------------------------------------- wizard */
-async function newSession() {
+async function newSession(resume) {
   S.view = "wizard"; S.step = "mode";
-  S.draft = await api("draft/reset", { draft: "default" });
+  S.draft = resume ? await api("draft?draft=default")
+                   : await api("draft/reset", { draft: "default" });
   if (!S.boot) S.boot = await api("bootstrap");
+  // Reopening an unfinished wizard should land on the first thing still needed.
+  if (resume && S.draft.draft.mode) {
+    const steps = S.draft.steps.map(x => x.key);
+    S.step = steps.find(k => k !== "review" && S.draft.problems.length &&
+                              S.draft.problems.some(() => true) && !stepSatisfied(k)) || "review";
+  }
   renderWizard();
+}
+
+function stepSatisfied(key) {
+  const d = S.draft.draft;
+  return ({ mode: !!d.mode, repository: !!d.repo_path, worktree: true,
+            agents: d.agents.length > 0, permissions: true,
+            spec: !!d.spec, deadline: !!d.deadline, review: true })[key] ?? true;
 }
 
 async function patch(body) {
@@ -446,12 +462,33 @@ async function openSession(id) {
   S.dash = await api("dashboard?session=" + encodeURIComponent(id));
   if (S.dash.session.status === "awaiting_ack") S.tab = "contract";
   renderSession();
-  clearInterval(openSession.t);
-  openSession.t = setInterval(async () => {
-    if (S.view !== "session") return clearInterval(openSession.t);
-    try { S.dash = await api("dashboard?session=" + encodeURIComponent(S.session)); renderSession(); }
-    catch (e) { /* transient */ }
-  }, 4000);
+  listen();
+}
+
+/* The server watches and pushes; the client never polls. EventSource
+   reconnects by itself, so a dropped connection self-heals. */
+function listen() {
+  if (S.es) { S.es.close(); S.es = null; }
+  const q = S.session ? "?session=" + encodeURIComponent(S.session) : "";
+  const es = new EventSource("/api/stream" + q);
+  S.es = es;
+  es.addEventListener("changed", async (e) => {
+    const what = JSON.parse(e.data).what || [];
+    try {
+      if (S.view === "session") {
+        S.dash = await api("dashboard?session=" + encodeURIComponent(S.session));
+        renderSession();
+      } else if (S.view === "home" && what.includes("sessions")) {
+        await home();
+      } else if (S.view === "wizard" && what.includes("drafts")) {
+        // Another tab edited this draft. Adopt it rather than diverge.
+        const fresh = await api("draft?draft=default");
+        if (fresh.version !== S.draft.version) { S.draft = fresh; renderWizard(); }
+      }
+    } catch (err) { /* transient; the next event will catch us up */ }
+  });
+  es.addEventListener("closing", () => { es.close(); S.es = null; setTimeout(listen, 500); });
+  es.onerror = () => { /* EventSource retries on its own */ };
 }
 
 const TABS = ["conversation","gates","tests","changes","commits","worktree","memory","raw","contract"];

@@ -34,6 +34,7 @@ from ..broker import Broker
 from ..errors import SynchriError
 from ..session.manager import SessionManager
 from .api import Api
+from .stream import events as stream_events
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -149,6 +150,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(_UNAUTHORIZED, HTTPStatus.UNAUTHORIZED)
             return
 
+        if parsed.path == "/api/stream":
+            self._stream(query.get("session", [None])[0])
+            return
         if parsed.path.startswith("/api/"):
             self._dispatch("GET", parsed.path[5:], query, {})
             return
@@ -174,6 +178,23 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": {"code": "not_found", "message": parsed.path}}, HTTPStatus.NOT_FOUND)
             return
         self._dispatch("POST", parsed.path[5:], query, body)
+
+    def _stream(self, session_id: str | None) -> None:
+        """Hold the connection open and push changes as they happen."""
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Connection", "keep-alive")
+        # Proxies that buffer would defeat the point of streaming.
+        self.send_header("X-Accel-Buffering", "no")
+        self._security_headers()
+        self.end_headers()
+        try:
+            for chunk in stream_events(self.server.api.broker.workspace, session_id):
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the tab closed; the generator's finally still runs
 
     def _dispatch(self, method: str, route: str, query: dict, body: dict) -> None:
         handler = self.server.api.route(method, route)

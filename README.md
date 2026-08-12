@@ -295,6 +295,7 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 - **Attached agents must cooperate.** Nothing forces a self-driving agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates. `synchri run` sidesteps this by driving the turn loop itself.
 - **Conducted agents must be non-interactive.** `run` needs a prompt-in / answer-on-stdout invocation. An agent that only works as an interactive REPL has to be driven in attached mode instead.
 - **Single machine.** No remote rooms, no multi-user rooms, no authentication beyond local secrets.
+- **The dashboard stream is per-tab.** Each open tab holds a thread and a SQLite connection — fine locally, not a fan-out design.
 - **The ledger is append-oriented.** Agents add entries; nothing summarizes or garbage-collects them except a rolling cap on handoffs.
 - **Room rediscovery is per working tree.** Two clones of the same repo at different paths are different rooms.
 - **Agent-side persistence is advisory.** The briefing tells each agent to save its own context; nothing enforces that it does.

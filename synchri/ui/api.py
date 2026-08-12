@@ -12,7 +12,7 @@ from typing import Callable
 
 from ..broker import Broker, Credential
 from ..errors import NotFoundError, ValidationError
-from ..session import discovery, presets as presets_module
+from ..session import discovery, drafts as drafts_module, presets as presets_module
 from ..session.draft import SessionDraft
 from ..session.escalation import CATALOG as ESCALATION_CATALOG
 from ..session.extract import describe as describe_gates, extract_gates
@@ -31,9 +31,9 @@ class Api:
     def __init__(self, broker: Broker, manager: SessionManager) -> None:
         self.broker = broker
         self.manager = manager
-        #: Wizard drafts live in memory, keyed per browser session. They hold no
-        #: authority: nothing exists on disk until "Start session".
-        self.drafts: dict[str, SessionDraft] = {}
+        #: Wizard drafts are persisted, so closing the app does not lose an
+        #: unfinished wizard and two tabs on one draft stay in step. They hold
+        #: no authority: nothing is created until "Start session".
         self._routes: dict[tuple[str, str], Route] = {
             ("GET", "bootstrap"): self.bootstrap,
             ("GET", "repositories"): self.repositories,
@@ -79,30 +79,36 @@ class Api:
             "presets": presets_module.list_presets(self.broker.workspace),
             "sessions": [s.to_dict() for s in self.manager.list_sessions()],
             "workspace": str(self.broker.workspace.home),
+            "open_drafts": drafts_module.versions(self.broker.conn),
         }
 
     def repositories(self, query: dict, body: dict) -> dict:
         return discovery.repositories(include_github=query.get("github") != "0")
 
     def _draft(self, key: str) -> SessionDraft:
-        return self.drafts.setdefault(key or "default", SessionDraft())
+        stored = drafts_module.load(self.broker.conn, key or "default")
+        return SessionDraft.from_state(stored[0]) if stored else SessionDraft()
+
+    def _persist(self, key: str, draft: SessionDraft) -> int:
+        return drafts_module.save(self.broker.conn, key or "default", draft.to_state())
 
     def get_draft(self, query: dict, body: dict) -> dict:
-        return self._draft_payload(self._draft(query.get("draft", "default")))
+        key = query.get("draft", "default")
+        return self._draft_payload(self._draft(key), key)
 
     def reset_draft(self, query: dict, body: dict) -> dict:
         key = body.get("draft", "default")
-        self.drafts[key] = SessionDraft()
-        return self._draft_payload(self.drafts[key])
+        drafts_module.delete(self.broker.conn, key)
+        return self._draft_payload(SessionDraft(), key)
 
     def update_draft(self, query: dict, body: dict) -> dict:
         """Apply one wizard step. Validation lives in the draft, not here."""
-        draft = self._draft(body.get("draft", "default"))
+        key = body.get("draft", "default")
+        draft = self._draft(key)
         if body.get("preset"):
             draft = SessionDraft.from_preset(
                 presets_module.load(self.broker.workspace, body["preset"])
             )
-            self.drafts[body.get("draft", "default")] = draft
         if body.get("mode"):
             draft.set_mode(body["mode"])
         if body.get("repo_path"):
@@ -123,8 +129,8 @@ class Api:
                     for a in body["agents"]
                 ]
             )
-        for key, decision in (body.get("permissions") or {}).items():
-            draft.set_permission(key, decision)
+        for capability, decision in (body.get("permissions") or {}).items():
+            draft.set_permission(capability, decision)
         if body.get("spec") is not None:
             if body["spec"].strip():
                 draft.set_spec(body["spec"])
@@ -136,9 +142,15 @@ class Api:
             draft.set_deadline_at(body["deadline_at"])
         if body.get("name"):
             draft.name = body["name"]
-        return self._draft_payload(draft)
+        version = self._persist(key, draft)
+        return self._draft_payload(draft, key, version)
 
-    def _draft_payload(self, draft: SessionDraft) -> dict:
+    def _draft_payload(
+        self, draft: SessionDraft, key: str = "default", version: int | None = None
+    ) -> dict:
+        if version is None:
+            stored = drafts_module.load(self.broker.conn, key)
+            version = stored[1] if stored else 0
         gates = extract_gates(draft.spec.canonical_text()) if draft.spec else []
         return {
             "draft": {
@@ -159,10 +171,13 @@ class Api:
             "problems": draft.blocking_problems() if draft.mode else ["choose a mode"],
             "ready": draft.is_ready,
             "repo_status": draft.repo_status().to_dict() if draft.repo_path else None,
+            "draft_id": key,
+            "version": version,
         }
 
     def start(self, query: dict, body: dict) -> dict:
-        draft = self._draft(body.get("draft", "default"))
+        key = body.get("draft", "default")
+        draft = self._draft(key)
         if not draft.is_ready:
             raise ValidationError("; ".join(draft.blocking_problems()))
         record = self.manager.create(
@@ -181,7 +196,7 @@ class Api:
         document = self.manager.issue_contract(record.session_id, reason="initial contract")
         if body.get("save_preset"):
             presets_module.save(self.broker.workspace, body["save_preset"], draft.to_preset())
-        self.drafts.pop(body.get("draft", "default"), None)
+        drafts_module.delete(self.broker.conn, key)
         return {
             "session": self.manager.get(record.session_id).to_dict(),
             "contract": document.to_dict(),

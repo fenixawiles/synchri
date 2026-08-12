@@ -294,3 +294,14 @@ CREATE TABLE IF NOT EXISTS session_escalations (
 
 CREATE INDEX IF NOT EXISTS session_escalations_open
     ON session_escalations(session_id, resolved_at);
+
+-- Unfinished wizard configurations. Persisted so closing the app (or the tab)
+-- does not lose a half-filled wizard, and so two tabs on the same draft see the
+-- same state. A draft holds no authority: nothing exists until "Start session".
+CREATE TABLE IF NOT EXISTS ui_drafts (
+    draft_id   TEXT PRIMARY KEY,
+    payload    TEXT NOT NULL,
+    version    INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);

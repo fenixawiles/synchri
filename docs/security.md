@@ -26,7 +26,8 @@ or a malicious agent that simply refuses to cooperate with the protocol.
 
 - Room ids, participant ids, message ids: `secrets.token_urlsafe(12)` — 96 bits, prefixed
   by type. Nothing sequential, nothing derived from a timestamp or a counter.
-- Room join tokens and participant secrets: `secrets.token_urlsafe(32)` — 256 bits.
+- Observer tokens, invite tokens, and participant secrets: `secrets.token_urlsafe(32)`
+  — 256 bits each, and all three are distinct values.
 - Only `sha256(salt + "." + secret)` is stored, with a distinct 128-bit salt per record.
   Plaintext is returned once, at creation or join, and never persisted by the broker.
   A test asserts the plaintext never appears in the database file.
@@ -35,6 +36,26 @@ or a malicious agent that simply refuses to cooperate with the protocol.
 secrets expensive. These secrets are 256 bits of CSPRNG output — there is nothing to
 guess. A slow KDF would add latency to every CLI call, including every `wait` poll, and
 buy nothing. This is a deliberate decision, not an oversight.
+
+### Joining is a separate, expiring capability
+
+Reading a room and entering it are different powers, and v0.1 keeps them apart:
+
+- The **observer token** authorizes reads (`read`, `watch`, `status`, `invites`). It can
+  never create a participant.
+- An **invite** authorizes exactly one join. It is bound to a single participant name,
+  is single-use, and carries an expiry (default one hour; `--invite-ttl 0` for none).
+
+An invite stops working the moment any of these becomes true: it has been redeemed, it
+has been revoked, it has expired, a newer invite for the same name superseded it, or the
+room was stopped. The last one matters most in practice — **ending the room ends every
+outstanding grant to enter it**, so a token sitting in terminal scrollback is inert.
+
+Expiry is *derived from the clock*, not a background job: an invite with a past
+`expires_at` reports as expired and is refused, with nothing needing to have run.
+
+`aidapter invites` lists status but can never show a token — only the salted hash is
+stored, so the plaintext genuinely exists once, at mint time.
 
 ### Room scoping
 
@@ -91,15 +112,18 @@ Stated so they are decisions rather than surprises:
 1. **Session files hold plaintext secrets** at `0600` under the workspace. Anything
    running as you can read them — but anything running as you can read the database too.
    This is a usability trade-off inside the stated threat model.
-2. **The room owner's session file also stores the room join token**, so the human can
-   run observer reads without flags. Agent session files deliberately do not.
-3. **Cooperative protocol.** The broker refuses out-of-turn *writes*, but it cannot make
+2. **The room owner's session file stores the observer token**, so the human can run
+   reads without flags. That token cannot join the room, and agent session files do not
+   carry it at all.
+3. **Invite expiry uses wall-clock time.** Moving the system clock backwards would
+   extend an invite's life. Inside the stated threat model that is not interesting.
+4. **Cooperative protocol.** The broker refuses out-of-turn *writes*, but it cannot make
    an agent poll, honor a handoff, or tell the truth about what it did.
-4. **No rate limiting.** A looping agent can fill a transcript. The autonomy budget
+5. **No rate limiting.** A looping agent can fill a transcript. The autonomy budget
    bounds turns, not message size or disk usage.
-5. **No encryption at rest.** Room contents sit in a plain SQLite file and plain text
+6. **No encryption at rest.** Room contents sit in a plain SQLite file and plain text
    files.
-6. **No audit of reads.** Writes are audited in `events`; reads are not.
+7. **No audit of reads.** Writes are audited in `events`; reads are not.
 
 ## Reporting
 

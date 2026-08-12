@@ -181,7 +181,7 @@ def test_memory_writes_require_a_participant_identity(room):
     with pytest.raises(AuthError):
         room.broker.memory_write(
             room.room_id,
-            credential=Credential(room_token=room.join_token),
+            credential=Credential(room_token=room.observer_token),
             section="decisions",
             value="anonymous decision",
             mode="add",

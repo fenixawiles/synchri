@@ -92,12 +92,26 @@ def get_current_room(workspace: Workspace) -> str | None:
     return value or None
 
 
-def resolve_room(workspace: Workspace, explicit: str | None) -> str:
-    """Room id from the flag, then ``AIDAPTER_ROOM``, then the last room created."""
-    room_id = explicit or os.environ.get(ENV_ROOM) or get_current_room(workspace)
+def resolve_room(workspace: Workspace, explicit: str | None, broker=None) -> str:
+    """Work out which room a command is about.
+
+    Order: the ``--room`` flag, then ``$AIDAPTER_ROOM``, then the most recent
+    **active room bound to the repository you are standing in**, then the last
+    room created in this workspace.
+
+    The repo lookup is what makes a new session resume the right conversation
+    without anyone remembering a room id.
+    """
+    room_id = explicit or os.environ.get(ENV_ROOM)
+    if not room_id and broker is not None:
+        here = broker.rooms_for_workspace()
+        if here:
+            room_id = here[0]["room_id"]
+    room_id = room_id or get_current_room(workspace)
     if not room_id:
         raise ValidationError(
-            "no room specified: pass --room, set AIDAPTER_ROOM, or create a room first"
+            "no room specified: pass --room, set AIDAPTER_ROOM, run inside a repository "
+            "that has an active room, or create a room first"
         )
     return room_id.strip()
 

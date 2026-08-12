@@ -1,7 +1,8 @@
 """Domain models: enums, entities, and the message envelope."""
 
-from .entities import Event, Participant, QueueEntry, Room, Task, Turn
+from .entities import Event, Invite, Participant, QueueEntry, Room, Task, Turn
 from .enums import (
+    InviteStatus,
     MessageType,
     ParticipantKind,
     ParticipantStatus,
@@ -18,6 +19,8 @@ from .envelope import MessageDraft, MessageEnvelope
 
 __all__ = [
     "Event",
+    "Invite",
+    "InviteStatus",
     "MessageDraft",
     "MessageEnvelope",
     "MessageType",

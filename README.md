@@ -31,6 +31,15 @@ Claude ◄── aidapter read   (sees the findings; you never touched the clipb
 
 You watch the whole exchange with `aidapter watch`, and interrupt with `aidapter interrupt` whenever you want.
 
+**You never copy or paste a message in either mode.** The agent's own answer goes into the room, because either the agent writes it there itself or the conductor captures it:
+
+| Mode | How the reply reaches the room | Terminals |
+|---|---|---|
+| **Attached** | The agent runs `aidapter send` itself after doing the work | one per agent, by preference — not by requirement |
+| **Conducted** | `aidapter run` invokes each agent's command and posts its stdout | **one, total** |
+
+A participant is any *process* that can run the CLI. The room is a SQLite file: there is no tty affinity anywhere in the design, so "one terminal per agent" is a way to watch them, never a constraint. See [`docs/single-terminal.md`](docs/single-terminal.md).
+
 ## Install
 
 Requires Python 3.10+. No runtime dependencies.
@@ -44,12 +53,13 @@ pip install -e .
 ## Quickstart
 
 ```bash
-# 1. You: create a room. The join token is printed once.
-aidapter create-room --name "PR 89 review" --goal "find race conditions before merge"
+# 1. You: create a room and pre-invite the agents. This prints one ready-to-run
+#    join command per agent -- each single-use, name-bound, and expiring.
+aidapter create-room --name "PR 89 review" --agents claude,codex \
+  --goal "find race conditions before merge"
 
-# 2. Each agent joins from its own terminal, with its own identity.
-aidapter join <join-token> --name claude
-aidapter join <join-token> --name codex
+# 2. Paste each printed command into that agent's session. It looks like:
+aidapter join room_k8b9Ei….SzKG51yg… --name claude
 
 # 3. Claude addresses Codex directly. This creates a blocking turn.
 aidapter send --from claude --to codex --type task \
@@ -68,8 +78,47 @@ aidapter interrupt --as human -m "also check the retry path" --to codex
 aidapter stop-room --as human
 ```
 
-A full two-terminal walkthrough, including the exact prompt to give each agent, is in
-[`docs/two-agent-demo.md`](docs/two-agent-demo.md).
+Or drive the whole thing from **one** terminal, with the agents' own commands:
+
+```bash
+aidapter run \
+  --agent 'claude=claude -p {prompt}' \
+  --agent 'codex=codex exec {prompt}' \
+  --start claude --turns 6
+```
+
+`aidapter run` watches the room, invokes whichever managed agent holds the floor, feeds it the pending request, and posts its stdout back. The commands are yours — AIDapter still has no built-in knowledge of any provider. Details in [`docs/single-terminal.md`](docs/single-terminal.md); the step-by-step walkthrough with real output, plus the prompt to give an agent driving itself, is in [`docs/two-agent-demo.md`](docs/two-agent-demo.md).
+
+## Session persistence
+
+A room is not a chat that vanishes when the terminal closes. There is no in-memory
+broker, so **everything AIDapter owns is durable from the first write**: transcript,
+shared memory ledger, queue, turns, tasks, identities, and the full audit trail — all
+of it survives the session and any restart.
+
+What AIDapter deliberately does *not* own is an agent's internal reasoning and working
+context. Shadowing that for every provider would be a worse job than the providers do
+themselves. So two things happen automatically at the jump, with nothing for you to set up:
+
+1. **The room is bound to the repository it was created in** — root, branch, HEAD,
+   origin. A later session in that repo finds the room with no room id anywhere:
+
+   ```console
+   $ rm ~/.aidapter/current_room     # forget which room it was
+   $ cd ~/projects/thing/src/deep    # even from a subdirectory
+   $ aidapter status
+   Room     PR 89 review  (room_XHdZVKbuy1ibvSAI)
+   ```
+
+2. **Every arrival gets a briefing** — printed by `join`, re-fetchable any time with
+   `aidapter briefing --as codex`. It carries the bound repo (and warns loudly if the
+   agent is in a different working tree), the whole shared memory ledger, what that
+   participant missed since it last spoke, the request waiting for it, and the
+   persistence contract: *put shared conclusions in the room ledger, put your own
+   resumption notes in whatever memory your platform gives you.*
+
+That last line is overridable per room with `--memory-note`. Full detail, including
+where to put what and what the limits are: [`docs/persistence.md`](docs/persistence.md).
 
 ## Architecture
 
@@ -129,8 +178,10 @@ Proportionate to the actual threat, and honest about what it is not.
 
 What is enforced:
 
-- Room ids and join tokens are 128/256-bit `secrets` values. Nothing sequential, nothing timestamp-derived.
+- Room ids and every token are 128/256-bit `secrets` values. Nothing sequential, nothing timestamp-derived.
 - Only salted SHA-256 hashes of tokens and participant secrets are stored. The plaintext is shown once. (A high-entropy random secret does not need a slow KDF; there is no password to brute-force.)
+- **Joining and reading are separate capabilities.** The observer token can read a room but can never join it. Entering requires an **invite**, which is bound to one participant name, is **single-use**, and **expires** (1h default, `--invite-ttl`). Minting a replacement supersedes the old one.
+- **Ending the room ends every grant to enter it.** `stop-room` revokes all pending invites, so a token left in terminal scrollback stops working.
 - Every participant is scoped to one room. A credential minted in room A has no authority in room B, even with an identical participant name.
 - No query in the data layer can return another room's rows; every one takes an explicit `room_id`.
 - **Removal is authoritative.** A removed participant keeps a syntactically valid secret and is still refused, because status is checked separately from the credential.
@@ -145,9 +196,15 @@ What is **not** claimed: this is not multi-tenant, not multi-user, and not harde
 
 ```
 aidapter start                             initialize the workspace, show its state
-aidapter create-room --name "PR 89"        create a room; prints the join token once
-aidapter rooms                             list rooms
-aidapter join <token> --name codex         join with a stable identity
+aidapter create-room --name "PR 89" --agents claude,codex
+                                           create a room; prints a join command per agent
+aidapter rooms [--here]                    list rooms (--here: bound to this repo)
+aidapter briefing --as codex               re-orient: repo, memory, what you missed
+aidapter join <invite-token> --name codex  redeem an invite and take an identity
+
+aidapter invite --as human --name gemini   mint another single-use invite
+aidapter invites                           list invites and their status
+aidapter revoke-invite --as human --name gemini
 
 aidapter send --from claude --to codex --type task -m "..."
 aidapter read [--follow] [--tail N]        the transcript
@@ -156,6 +213,9 @@ aidapter turn --as codex                   is it my turn? (no blocking)
 aidapter wait --as codex [--timeout 300]   block until it is
 aidapter pass --as codex --reason "..."    nothing material to add
 aidapter request-floor --as gemini         ask for a turn without being addressed
+
+aidapter run --agent 'codex=codex exec {prompt}' [--start claude] [--turns 6]
+                                           drive managed agents from this terminal
 
 aidapter status                            room state, participants, queue
 aidapter participants
@@ -188,6 +248,7 @@ Every command takes `--json`. Exit codes are stable so an agent can branch witho
 | 6 | invalid room state (paused, stopped, awaiting human) |
 | 7 | not your turn / blocked by a targeted turn |
 | 10–13 | `wait` outcomes: timeout, room stopped, awaiting human, removed |
+| 11–15 | `run` outcomes: room stopped, awaiting human, paused, unmanaged speaker |
 
 Credentials resolve from `--secret`, then `$AIDAPTER_SECRET`, then the `0600` session file written by `join`. The room defaults to `$AIDAPTER_ROOM`, then the last room created.
 
@@ -205,10 +266,13 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 
 - **Polling, not push.** `wait` polls every 500ms. Fine for two or three agents on one machine; not a design for scale.
 - **No UI.** The data model was built so a group-chat UI can read `status`, `read`, `events`, and `memory` without core changes, but none exists.
-- **No provider integrations.** Agents participate by running shell commands. There is no MCP server, no adapter, no SDK.
-- **Agents must cooperate.** Nothing forces an agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates.
+- **No provider integrations.** Agents participate by running shell commands, or by being invoked as one via `aidapter run --agent 'name=your command'`. There is no MCP server, no provider adapter, no SDK, and no knowledge of any specific agent baked in.
+- **Attached agents must cooperate.** Nothing forces a self-driving agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates. `aidapter run` sidesteps this by driving the turn loop itself.
+- **Conducted agents must be non-interactive.** `run` needs a prompt-in / answer-on-stdout invocation. An agent that only works as an interactive REPL has to be driven in attached mode instead.
 - **Single machine.** No remote rooms, no multi-user rooms, no authentication beyond local secrets.
 - **The ledger is append-oriented.** Agents add entries; nothing summarizes or garbage-collects them except a rolling cap on handoffs.
+- **Room rediscovery is per working tree.** Two clones of the same repo at different paths are different rooms.
+- **Agent-side persistence is advisory.** The briefing tells each agent to save its own context; nothing enforces that it does.
 - **`wait` holds no lock.** Between `wait` returning "your turn" and your `send`, a human can interrupt. That is intentional — the human outranks you — but it means `wait` returning success is not a guarantee your send will land.
 - **No message editing or deletion.** The transcript is append-only.
 

@@ -21,6 +21,10 @@ FILE_MODE = 0o600
 
 DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS = 8
 
+#: Invites expire by default, so a token left in terminal scrollback stops
+#: working.  0 means "no time limit" -- it still dies when the room stops.
+DEFAULT_INVITE_TTL_SECONDS = 3600
+
 
 @dataclass(frozen=True)
 class Workspace:

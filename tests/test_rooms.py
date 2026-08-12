@@ -7,10 +7,10 @@ import sqlite3
 
 import pytest
 
-from aidapter.broker import Broker, Credential
-from aidapter.errors import AuthError, NotFoundError, StateError, ValidationError
-from aidapter.models.envelope import MessageDraft
-from aidapter.security import tokens
+from synchri.broker import Broker, Credential
+from synchri.errors import AuthError, NotFoundError, StateError, ValidationError
+from synchri.models.envelope import MessageDraft
+from synchri.security import tokens
 
 from helpers import make_room
 

@@ -1,7 +1,7 @@
 # Queue semantics
 
-The queue is the part of AIDapter that has to be exactly right. This document is the
-normative description; `aidapter/queue/scheduler.py` is the implementation and
+The queue is the part of Synchri that has to be exactly right. This document is the
+normative description; `synchri/queue/scheduler.py` is the implementation and
 `tests/test_queue.py` is the enforcement.
 
 ## Priority buckets
@@ -15,8 +15,8 @@ first-come-first-served with no dependence on wall-clock time or process schedul
 | 0 | `HUMAN` | Reserved. Humans never actually queue — they bypass it (see below). |
 | 1 | `DIRECT_ADDRESS` | Someone sent you a message with `--to <you>`. |
 | 2 | `HANDOFF` | Someone finished a turn with `--handoff-to <you>`. |
-| 3 | `QUEUED` | You ran `aidapter request-floor`. |
-| 4 | `OPTIONAL` | You ran `aidapter request-floor --priority optional`. |
+| 3 | `QUEUED` | You ran `synchri request-floor`. |
+| 4 | `OPTIONAL` | You ran `synchri request-floor --priority optional`. |
 
 A participant holds **at most one live queue entry**, enforced by a partial unique index
 in the schema. Being addressed again while already waiting *promotes* the existing entry
@@ -74,7 +74,7 @@ already pending, it outranks the handoff — that is what the priority table mea
 
 ## PASS
 
-`aidapter pass` is a real, attributed message of type `pass` in the transcript. A room
+`synchri pass` is a real, attributed message of type `pass` in the transcript. A room
 should be able to distinguish "nothing material to add" from "still working".
 
 - Passing **while holding the floor** ends the turn as `passed`, closes any associated
@@ -110,7 +110,7 @@ state, not a process flag.
 
 Each completed agent turn — message or pass — increments `consecutive_agent_turns`. On
 reaching `max_consecutive_agent_turns` (default 8, `--max-agent-turns` at creation,
-`aidapter config` later) the room sets `awaiting_human`:
+`synchri config` later) the room sets `awaiting_human`:
 
 - agents are refused with `awaiting_human` (exit 6)
 - `wait` returns immediately with state `awaiting_human` (exit 12)

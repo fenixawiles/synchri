@@ -168,7 +168,7 @@ def turn_status(status: dict) -> str:
 
 def rooms_table(rooms: list[dict]) -> str:
     if not rooms:
-        return "(no rooms yet — run 'aidapter create-room --name \"...\"')"
+        return "(no rooms yet — run 'synchri create-room --name \"...\"')"
     lines = [f"{'ROOM ID':<24} {'STATUS':<8} {'PARTICIPANTS':<28} NAME"]
     for room in rooms:
         people = ", ".join(room.get("participants") or []) or "-"

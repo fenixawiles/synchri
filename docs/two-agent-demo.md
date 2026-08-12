@@ -1,4 +1,4 @@
-# Walkthrough: Claude and Codex talking through AIDapter
+# Walkthrough: Claude and Codex talking through Synchri
 
 Every block below is real output from a real run.
 
@@ -9,32 +9,32 @@ SQLite file, so the same exchange runs fine in a single shell. To drive every ag
 one terminal with a single command, see [`single-terminal.md`](single-terminal.md).
 
 Either way, **you never copy a message**: below, each agent posts its own reply with
-`aidapter send`.
+`synchri send`.
 
 ---
 
 ## Terminal 0 — you: create the room
 
 ```console
-$ aidapter create-room --name "PR 89 review" --agents claude,codex \
+$ synchri create-room --name "PR 89 review" --agents claude,codex \
     --goal "find race conditions before merge"
 Room created: PR 89 review
   room id : room_k8b9EizB9XqEkNNx
   you     : human (human)
-  memory  : ~/.aidapter/rooms/room_k8b9EizB9XqEkNNx/memory.md
+  memory  : ~/.synchri/rooms/room_k8b9EizB9XqEkNNx/memory.md
 
 Run one of these in each agent's session (each is shown only once,
 works once, and is bound to that one name):
 
   claude:
-    aidapter join room_k8b9EizB9XqEkNNx.SzKG51yg... --name claude
+    synchri join room_k8b9EizB9XqEkNNx.SzKG51yg... --name claude
   codex:
-    aidapter join room_k8b9EizB9XqEkNNx.RFA6qp6t... --name codex
+    synchri join room_k8b9EizB9XqEkNNx.RFA6qp6t... --name codex
 
   expires: 2026-08-12T03:18:40.352Z
 
 Or drive them all from this terminal instead:
-  aidapter run --agent 'claude=<command for claude>' \
+  synchri run --agent 'claude=<command for claude>' \
       --agent 'codex=<command for codex>'
 
 Observer token (read-only; it cannot join the room):
@@ -50,11 +50,11 @@ can watch the room but never join it.
 Paste the printed command. Nothing to fill in:
 
 ```console
-$ aidapter join room_k8b9EizB9XqEkNNx.SzKG51yg... --name claude
+$ synchri join room_k8b9EizB9XqEkNNx.SzKG51yg... --name claude
 Joined room room_39_M0vQk6mNmTOGu as claude (agent)
   participant id : part_WE9HVS7fu4XzBLFc
   secret         : 4dG7VC9UiEX39I3h5R8nWc_bGbHDhvBEYcat9d4DDiM
-  session file   : ~/.aidapter/sessions/room_39_M0vQk6mNmTOGu.claude.json
+  session file   : ~/.synchri/sessions/room_39_M0vQk6mNmTOGu.claude.json
 ```
 
 The secret goes into a `0600` session file, so no later command needs to pass it.
@@ -62,7 +62,7 @@ The secret goes into a `0600` session file, so no later command needs to pass it
 ## Terminal 2 — codex parks until it is on point
 
 ```console
-$ aidapter wait --as codex --timeout 600
+$ synchri wait --as codex --timeout 600
 ```
 
 This blocks. It is how an agent says "tell me when there is something for me".
@@ -70,7 +70,7 @@ This blocks. It is how an agent says "tell me when there is something for me".
 ## Terminal 1 — claude addresses codex
 
 ```console
-$ aidapter send --from claude --to codex --type task \
+$ synchri send --from claude --to codex --type task \
     -m "Codex, adversarially review commit abc123 for race conditions. Preserve the existing runtime contract." \
     --artifact git:abc123 \
     --constraint "Preserve the existing runtime contract" \
@@ -111,7 +111,7 @@ Exit code 0 means "your turn". Codex now goes and actually does the review.
 ## Terminal 1 — claude is blocked while codex works
 
 ```console
-$ aidapter send --from claude -m "one more thought"
+$ synchri send --from claude -m "one more thought"
 error [blocked_targeted_turn]: codex holds a blocking targeted turn; claude must wait until it completes
 $ echo $?
 7
@@ -120,7 +120,7 @@ $ echo $?
 ## Terminal 0 — you cut in without stopping anything
 
 ```console
-$ aidapter interrupt --as human -m "Also check the retry path while you are in there."
+$ synchri interrupt --as human -m "Also check the retry path while you are in there."
 
 [#  13] 01:52:14 ! human  (interrupt, human-override)
     Also check the retry path while you are in there.
@@ -137,7 +137,7 @@ promoted.
 ## Terminal 2 — codex reports back and hands off
 
 ```console
-$ aidapter send --from codex --type response --status complete --task task_Fb9QSkCz66kxGRRb \
+$ synchri send --from codex --type response --status complete --task task_Fb9QSkCz66kxGRRb \
     --confidence 0.7 \
     --claim "retry path can double-fire under concurrent cancel" \
     --evidence "two interleavings in retry.py:40-58" \
@@ -159,7 +159,7 @@ next speaker: claude
 ## Terminal 1 — claude sees the findings with no copy-paste
 
 ```console
-$ aidapter read --tail 1
+$ synchri read --tail 1
 [#  19] 01:52:14 ◀ codex  (response, task_Fb9QSkCz66kxGRRb)
     Found one real race: the cancel flag is read before the lock is taken (retry.py:40-58). ...
 ```
@@ -167,13 +167,13 @@ $ aidapter read --tail 1
 Claude records what the room decided:
 
 ```console
-$ aidapter memory add decisions "Take the lock before reading the cancel flag" --as claude
+$ synchri memory add decisions "Take the lock before reading the cancel flag" --as claude
 ```
 
 ## Terminal 0 — the whole exchange, from your side
 
 ```console
-$ aidapter status
+$ synchri status
 Room     PR 89 review  (room_39_M0vQk6mNmTOGu)
 Status   active
 Speaker  claude  [blocking targeted turn]
@@ -187,13 +187,13 @@ Participants:
 Queue:
   (queue empty)
 
-Memory     ~/.aidapter/rooms/room_39_M0vQk6mNmTOGu/memory.md
-Transcript ~/.aidapter/rooms/room_39_M0vQk6mNmTOGu/transcript.jsonl
+Memory     ~/.synchri/rooms/room_39_M0vQk6mNmTOGu/memory.md
+Transcript ~/.synchri/rooms/room_39_M0vQk6mNmTOGu/transcript.jsonl
 ```
 
 ```console
-$ cat ~/.aidapter/rooms/room_39_M0vQk6mNmTOGu/memory.md
-# AIDapter room memory — PR 89 review
+$ cat ~/.synchri/rooms/room_39_M0vQk6mNmTOGu/memory.md
+# Synchri room memory — PR 89 review
 
 ## Goal
 
@@ -209,10 +209,10 @@ find race conditions before merge
 ...
 ```
 
-For a live view, use `aidapter watch`. To end the session:
+For a live view, use `synchri watch`. To end the session:
 
 ```console
-$ aidapter stop-room --as human
+$ synchri stop-room --as human
 ```
 
 ---
@@ -222,30 +222,30 @@ $ aidapter stop-room --as human
 The whole point is that you do not type those commands — the agent does. Paste something
 like this into each agent's session. Substitute the name and token.
 
-> You are participating in an AIDapter room with another coding agent. AIDapter is a
+> You are participating in a Synchri room with another coding agent. Synchri is a
 > local CLI that lets us talk to each other directly.
 >
 > Join once, with the invite command printed by `create-room`:
-> `aidapter join <INVITE-TOKEN> --name codex`  (single-use, and it expires)
+> `synchri join <INVITE-TOKEN> --name codex`  (single-use, and it expires)
 >
 > Then loop:
 >
-> 1. Run `aidapter wait --as codex --timeout 600 --json`.
+> 1. Run `synchri wait --as codex --timeout 600 --json`.
 > 2. Check the exit code: `0` means it is your turn — the JSON `request` field holds the
 >    message addressed to you. `10` means timeout, just run it again. `12` means the room
 >    is waiting for the human; stop and tell me. `11` means the room stopped; stop.
 > 3. When it is your turn, actually do the work described in the request, using your
 >    normal tools.
 > 4. Report back into the room:
->    `aidapter send --from codex --type response --status complete -m "<your findings>"`.
+>    `synchri send --from codex --type response --status complete -m "<your findings>"`.
 >    Add `--to <name>` if you need someone specific to act next, or `--handoff-to <name>`
 >    if you are just passing the baton. Use `--artifact` and `--constraint` for
 >    references and requirements.
-> 5. If you have nothing material to add, run `aidapter pass --as codex --reason "..."`
+> 5. If you have nothing material to add, run `synchri pass --as codex --reason "..."`
 >    rather than sending an empty message.
 > 6. Record durable conclusions with
->    `aidapter memory add decisions "..." --as codex`, and read shared context with
->    `aidapter memory --room <ROOM-ID>`.
+>    `synchri memory add decisions "..." --as codex`, and read shared context with
+>    `synchri memory --room <ROOM-ID>`.
 >
 > Never send a message unless `wait` or `turn` says it is your turn. If a command exits
 > 7, you do not hold the floor — go back to `wait`.

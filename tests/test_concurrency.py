@@ -15,9 +15,9 @@ import threading
 
 import pytest
 
-from aidapter.broker import Broker
-from aidapter.errors import AidapterError
-from aidapter.models.envelope import MessageDraft
+from synchri.broker import Broker
+from synchri.errors import SynchriError
+from synchri.models.envelope import MessageDraft
 
 from helpers import make_room
 
@@ -27,13 +27,13 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _run_cli(workspace, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     env = {
         **os.environ,
-        "AIDAPTER_HOME": str(workspace.home),
+        "SYNCHRI_HOME": str(workspace.home),
         "PYTHONPATH": REPO_ROOT,
     }
-    for name in ("AIDAPTER_ROOM", "AIDAPTER_PARTICIPANT", "AIDAPTER_SECRET", "AIDAPTER_ROOM_TOKEN"):
+    for name in ("SYNCHRI_ROOM", "SYNCHRI_PARTICIPANT", "SYNCHRI_SECRET", "SYNCHRI_ROOM_TOKEN"):
         env.pop(name, None)
     result = subprocess.run(
-        [sys.executable, "-m", "aidapter", *args],
+        [sys.executable, "-m", "synchri", *args],
         capture_output=True,
         text=True,
         env=env,
@@ -41,7 +41,7 @@ def _run_cli(workspace, *args: str, check: bool = True) -> subprocess.CompletedP
     )
     if check and result.returncode != 0:
         raise AssertionError(
-            f"aidapter {' '.join(args)} failed ({result.returncode}):\n{result.stderr}"
+            f"synchri {' '.join(args)} failed ({result.returncode}):\n{result.stderr}"
         )
     return result
 
@@ -89,7 +89,7 @@ def test_only_one_agent_wins_a_contested_floor(workspace):
                     hold_floor=True,
                 )
                 outcome = "spoke"
-            except AidapterError as exc:
+            except SynchriError as exc:
                 outcome = exc.code
             with lock:
                 outcomes[name] = outcome
@@ -135,7 +135,7 @@ def test_concurrent_sequence_numbers_never_collide(workspace):
                         credential=human,
                         draft=MessageDraft(content=f"w{index}-{round_index}"),
                     )
-                except AidapterError:
+                except SynchriError:
                     pass
 
     threads = [threading.Thread(target=writer, args=(i,)) for i in range(threads_count)]
@@ -240,15 +240,15 @@ def test_two_separate_processes_share_one_room(workspace):
 
 
 def test_wait_in_one_process_unblocks_when_another_process_addresses_it(workspace):
-    """``aidapter wait`` is how an agent parks until it is on point."""
+    """``synchri wait`` is how an agent parks until it is on point."""
     created = _create_room(workspace, "Wait test")
     room_id = created["room_id"]
     _join_all(workspace, created)
 
-    env = {**os.environ, "AIDAPTER_HOME": str(workspace.home), "PYTHONPATH": REPO_ROOT}
+    env = {**os.environ, "SYNCHRI_HOME": str(workspace.home), "PYTHONPATH": REPO_ROOT}
     waiter = subprocess.Popen(
         [
-            sys.executable, "-m", "aidapter", "--json", "wait",
+            sys.executable, "-m", "synchri", "--json", "wait",
             "--room", room_id, "--as", "codex", "--timeout", "30", "--poll", "0.1",
         ],
         stdout=subprocess.PIPE,
@@ -289,10 +289,10 @@ def test_hard_stop_from_another_process_ends_a_wait(workspace):
     room_id = created["room_id"]
     _join_all(workspace, created)
 
-    env = {**os.environ, "AIDAPTER_HOME": str(workspace.home), "PYTHONPATH": REPO_ROOT}
+    env = {**os.environ, "SYNCHRI_HOME": str(workspace.home), "PYTHONPATH": REPO_ROOT}
     waiter = subprocess.Popen(
         [
-            sys.executable, "-m", "aidapter", "--json", "wait",
+            sys.executable, "-m", "synchri", "--json", "wait",
             "--room", room_id, "--as", "codex", "--timeout", "30", "--poll", "0.1",
         ],
         stdout=subprocess.PIPE,

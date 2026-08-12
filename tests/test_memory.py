@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from aidapter.errors import AuthError, ValidationError
-from aidapter.memory import ledger as ledger_module
+from synchri.errors import AuthError, ValidationError
+from synchri.memory import ledger as ledger_module
 
 
 def test_memory_file_is_created_with_the_room(room, workspace):
@@ -48,7 +48,7 @@ def test_entries_carry_provenance(room):
 
 
 def test_memory_survives_a_broker_restart(workspace):
-    from aidapter.broker import Broker
+    from synchri.broker import Broker
 
     from helpers import make_room
 
@@ -176,7 +176,7 @@ def test_add_on_a_value_section_is_rejected(room):
 
 
 def test_memory_writes_require_a_participant_identity(room):
-    from aidapter.broker import Credential
+    from synchri.broker import Credential
 
     with pytest.raises(AuthError):
         room.broker.memory_write(

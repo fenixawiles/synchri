@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from aidapter.errors import StateError, TurnError
-from aidapter.models.envelope import MessageDraft
+from synchri.errors import StateError, TurnError
+from synchri.models.envelope import MessageDraft
 
 from helpers import make_room
 

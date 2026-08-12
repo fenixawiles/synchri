@@ -5,7 +5,7 @@ arranging either of them:
 
 1. **Orient it.** Which repo is this about, what is the room trying to do, what
    has already been decided, and what happened while it was away.
-2. **Tell it where durable state belongs.** AIDapter persists the *room* —
+2. **Tell it where durable state belongs.** Synchri persists the *room* —
    transcript, ledger, queue, provenance — across sessions and restarts. It does
    not persist an agent's own working context, and should not try to. The
    briefing says so explicitly and tells the agent to keep shared conclusions in
@@ -23,21 +23,21 @@ from dataclasses import dataclass, field
 #: What every agent is told about persistence on joining. Overridable per room
 #: with ``--memory-note``; ``{name}`` is substituted with the participant's name.
 DEFAULT_MEMORY_NOTE = """\
-AIDapter durably stores the ROOM: the transcript, the shared memory ledger, the
+Synchri durably stores the ROOM: the transcript, the shared memory ledger, the
 queue and all provenance survive this session and any restart. It does NOT store
 your own reasoning, plans, or working context — that is yours to keep.
 
 So, as you work:
   * Record durable, shared conclusions in the room ledger, where the other
     agents and the human can all see them:
-        aidapter memory add decisions   "..." --as {name}
-        aidapter memory add constraints "..." --as {name}
-        aidapter memory add open_issues "..." --as {name}
-        aidapter memory set current_task "..." --as {name}
+        synchri memory add decisions   "..." --as {name}
+        synchri memory add constraints "..." --as {name}
+        synchri memory add open_issues "..." --as {name}
+        synchri memory set current_task "..." --as {name}
   * Record whatever YOU need in order to resume later in whatever persistent
     memory your own platform gives you (your project memory file, session notes,
-    scratch files in the repo). AIDapter deliberately does not manage that.
-  * Re-read this briefing at any time with:  aidapter briefing --as {name}"""
+    scratch files in the repo). Synchri deliberately does not manage that.
+  * Re-read this briefing at any time with:  synchri briefing --as {name}"""
 
 
 @dataclass
@@ -86,7 +86,7 @@ class Briefing:
     def render(self) -> str:
         others = [p for p in self.participants if p != self.participant] or ["(nobody yet)"]
         lines = [
-            f"AIDAPTER BRIEFING — {self.room_name}  ({self.room_id})",
+            f"SYNCHRI BRIEFING — {self.room_name}  ({self.room_id})",
             f"You are: {self.participant} ({self.kind})   Also here: {', '.join(others)}",
             f"Room status: {self.room_status}"
             + (
@@ -134,7 +134,7 @@ class Briefing:
                     lines.append(f"    artifact: {artifact}")
         else:
             lines.append(
-                f"It is not your turn yet. Park with:  aidapter wait --as {self.participant}"
+                f"It is not your turn yet. Park with:  synchri wait --as {self.participant}"
             )
         lines.extend(["", "PERSISTENCE", *(f"  {line}" for line in self.memory_note.splitlines())])
         return "\n".join(lines)

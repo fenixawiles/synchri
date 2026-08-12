@@ -1,4 +1,4 @@
-"""``aidapter`` command line interface.
+"""``synchri`` command line interface.
 
 The CLI is the integration surface for v0.1: an agent participates in a room
 because it can run shell commands, with no SDK and no provider plumbing.  Every
@@ -21,7 +21,7 @@ from ..config import (
     DEFAULT_MAX_CONSECUTIVE_AGENT_TURNS,
     resolve_workspace,
 )
-from ..errors import AidapterError, ValidationError
+from ..errors import SynchriError, ValidationError
 from ..memory.ledger import SECTIONS
 from ..models.enums import MessageType, ResponseStatus, TurnState
 from ..models.envelope import MessageDraft
@@ -68,7 +68,7 @@ RUN_REASON_HELP = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="aidapter",
+        prog="synchri",
         description=(
             "Local interoperability layer for coding agents. "
             "Stop being the clipboard between your coding agents."
@@ -76,9 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=EPILOG,
     )
-    parser.add_argument("--home", help="workspace directory (default: $AIDAPTER_HOME or ~/.aidapter)")
+    parser.add_argument("--home", help="workspace directory (default: $SYNCHRI_HOME or ~/.synchri)")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
-    parser.add_argument("--version", action="version", version=f"aidapter {__version__}")
+    parser.add_argument("--version", action="version", version=f"synchri {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     def command(name: str, help_text: str, **kwargs) -> argparse.ArgumentParser:
@@ -227,17 +227,17 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         "Drive several agents' turns from this one terminal.",
         epilog=(
-            "  aidapter run --agent 'claude=claude -p {prompt}' \\\n"
+            "  synchri run --agent 'claude=claude -p {prompt}' \\\n"
             "               --agent 'codex=codex exec {prompt}' \\\n"
             "               --start claude --turns 6\n\n"
-            "Each --agent is a command YOU supply; AIDapter has no built-in knowledge\n"
+            "Each --agent is a command YOU supply; Synchri has no built-in knowledge\n"
             "of any provider. The prompt is substituted for {prompt}, or piped to the\n"
             "command's stdin when the placeholder is absent. Commands run without a\n"
             "shell, so prompt text is never interpreted as shell syntax.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    run.add_argument("--room", help="room id (default: $AIDAPTER_ROOM or the last room created)")
+    run.add_argument("--room", help="room id (default: $SYNCHRI_ROOM or the last room created)")
     run.add_argument("--token", dest="room_token", help="room join token, for observer reads")
     run.add_argument(
         "--agent",
@@ -280,15 +280,15 @@ def build_parser() -> argparse.ArgumentParser:
     # -- memory ---------------------------------------------------------
     # Deliberately flat positionals rather than sub-subcommands: argparse
     # subparsers reset shared flags like --room to their defaults, and a bare
-    # "aidapter memory --room X" should just print the ledger.
+    # "synchri memory --room X" should just print the ledger.
     memory = command(
         "memory",
         "Read or update the shared semantic memory ledger.",
         epilog=(
-            "  aidapter memory --room <id>\n"
-            "  aidapter memory set goal 'ship the fix' --as claude\n"
-            "  aidapter memory add decisions 'keep the runtime contract' --as codex\n"
-            "  aidapter memory remove open_issues 2 --as human\n"
+            "  synchri memory --room <id>\n"
+            "  synchri memory set goal 'ship the fix' --as claude\n"
+            "  synchri memory add decisions 'keep the runtime contract' --as codex\n"
+            "  synchri memory remove open_issues 2 --as human\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -325,17 +325,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_room_actor(parser: argparse.ArgumentParser, actor_flags: tuple[str, ...] = ("--as",)) -> None:
-    parser.add_argument("--room", help="room id (default: $AIDAPTER_ROOM or the last room created)")
+    parser.add_argument("--room", help="room id (default: $SYNCHRI_ROOM or the last room created)")
     parser.add_argument(
         *actor_flags,
         dest="actor",
-        help="acting participant name (default: $AIDAPTER_PARTICIPANT)",
+        help="acting participant name (default: $SYNCHRI_PARTICIPANT)",
     )
-    parser.add_argument("--secret", help="participant secret (default: session file or $AIDAPTER_SECRET)")
+    parser.add_argument("--secret", help="participant secret (default: session file or $SYNCHRI_SECRET)")
 
 
 def _add_room_reader(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--room", help="room id (default: $AIDAPTER_ROOM or the last room created)")
+    parser.add_argument("--room", help="room id (default: $SYNCHRI_ROOM or the last room created)")
     parser.add_argument("--as", dest="actor", help="read as this participant")
     parser.add_argument("--secret", help="participant secret")
     parser.add_argument("--token", dest="room_token", help="room join token, for observer reads")
@@ -343,16 +343,16 @@ def _add_room_reader(parser: argparse.ArgumentParser) -> None:
 
 EPILOG = """\
 typical flow
-  aidapter create-room --name "PR 89 review" --agents claude,codex
+  synchri create-room --name "PR 89 review" --agents claude,codex
   # paste the printed command into each agent's session; each is single-use
-  aidapter join <invite-token> --name claude
-  aidapter send --from claude --to codex --type task \\
+  synchri join <invite-token> --name claude
+  synchri send --from claude --to codex --type task \\
       -m "Adversarially review commit abc123 for race conditions." \\
       --artifact git:abc123 --constraint "preserve the existing runtime contract"
-  aidapter wait --as codex            # blocks until codex is on point
-  aidapter send --from codex --type response --status complete -m "Findings: ..."
-  aidapter read                       # the human watches
-  aidapter interrupt --as human -m "hold on, check the retry path too" --to codex
+  synchri wait --as codex            # blocks until codex is on point
+  synchri send --from codex --type response --status complete -m "Findings: ..."
+  synchri read                       # the human watches
+  synchri interrupt --as human -m "hold on, check the retry path too" --to codex
 
 exit codes
   0 ok   2 validation   3 auth   4 not found   5 conflict   6 invalid state   7 not your turn
@@ -382,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         broker = Broker(workspace)
         return handler(args, broker)
-    except AidapterError as exc:
+    except SynchriError as exc:
         _emit_error(args, exc)
         return exc.exit_code
     except BrokenPipeError:  # pragma: no cover - e.g. piping into head
@@ -395,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
             broker.close()
 
 
-def _emit_error(args: argparse.Namespace, exc: AidapterError) -> None:
+def _emit_error(args: argparse.Namespace, exc: SynchriError) -> None:
     if getattr(args, "json", False):
         print(render.as_json(exc.to_dict()), file=sys.stderr)
     else:
@@ -448,13 +448,13 @@ def cmd_start(args: argparse.Namespace, broker: Broker) -> int:
         "current_room": session.get_current_room(broker.workspace),
         "daemon": False,
         "note": (
-            "AIDapter v0.1 has no background process and opens no network socket. "
+            "Synchri v0.1 has no background process and opens no network socket. "
             "State lives in the SQLite workspace below and every command is a short-lived "
             "transaction against it."
         ),
     }
     text = (
-        f"AIDapter {__version__} workspace ready\n"
+        f"Synchri {__version__} workspace ready\n"
         f"  workspace : {payload['workspace']}\n"
         f"  database  : {payload['database']}\n"
         f"  rooms     : {payload['rooms']} ({payload['active_rooms']} active)\n"
@@ -499,7 +499,7 @@ def _room_created_summary(result: dict) -> str:
         + (f" [{repo.get('branch')}]" if repo.get("branch") else " (not a git repository)"),
         f"  memory  : {result['memory_path']}",
         "",
-        "This room is bound to that working tree: running aidapter there again finds",
+        "This room is bound to that working tree: running synchri there again finds",
         "it without a room id.",
         "",
     ]
@@ -520,12 +520,12 @@ def _room_created_summary(result: dict) -> str:
             [
                 "",
                 "Or drive them all from this terminal instead:",
-                f"  aidapter run {managed}",
+                f"  synchri run {managed}",
             ]
         )
     else:
         lines.append("Invite an agent with:")
-        lines.append(f"  aidapter invite --room {result['room_id']} --name codex")
+        lines.append(f"  synchri invite --room {result['room_id']} --name codex")
     lines.extend(
         [
             "",
@@ -610,7 +610,7 @@ def cmd_join(args: argparse.Namespace, broker: Broker) -> int:
         f"  secret         : {result['secret']}\n"
         f"  session file   : {result['session_file']}\n\n"
         "Subsequent commands find this secret automatically, e.g.\n"
-        f"  aidapter wait --as {result['name']}\n"
+        f"  synchri wait --as {result['name']}\n"
         "\n" + "=" * 72 + "\n"
     )
     briefing = result.get("briefing") or {}
@@ -658,7 +658,7 @@ def _send_summary(result: dict) -> str:
     if result.get("awaiting_human"):
         lines.append("autonomy limit reached: the room is now waiting for human input")
     if result.get("floor_held"):
-        lines.append("floor held: send again to continue, or 'aidapter pass' to release")
+        lines.append("floor held: send again to continue, or 'synchri pass' to release")
     lines.append(f"next speaker: {result.get('next_speaker') or '(nobody)'}")
     lines.append("queue:")
     lines.append(render.queue_block(result.get("queue") or []))

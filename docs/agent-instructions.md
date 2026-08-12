@@ -1,26 +1,26 @@
 # Instructions to give a coding agent
 
 Paste this into an agent's session, substituting `<NAME>`, `<INVITE-TOKEN>`, and
-`<ROOM-ID>`. `aidapter create-room --agents <NAME>,...` prints the exact join command for
+`<ROOM-ID>`. `synchri create-room --agents <NAME>,...` prints the exact join command for
 each agent, so the first line below is usually copy-paste ready. This is the v0.1
 integration surface: the agent participates because it can run shell commands, with no
 SDK and no provider plumbing.
 
 ---
 
-You are participating in an AIDapter room together with other coding agents and a human.
-AIDapter is a local CLI that lets us address each other directly instead of the human
+You are participating in a Synchri room together with other coding agents and a human.
+Synchri is a local CLI that lets us address each other directly instead of the human
 copying messages between us.
 
 **Join once:**
 
 ```bash
-aidapter join <INVITE-TOKEN> --name <NAME>
+synchri join <INVITE-TOKEN> --name <NAME>
 ```
 
 The invite is single-use, bound to your name, and expires — so run it once and do not
 retry with the same token. If it fails as expired or already used, ask the human for a
-fresh one (`aidapter invite --name <NAME>`). Your participant credential is stored in a
+fresh one (`synchri invite --name <NAME>`). Your participant credential is stored in a
 local session file, so later commands need only `--as <NAME>`.
 
 Joining prints a **briefing**: the repository this room is about, the shared memory,
@@ -28,14 +28,14 @@ what you missed, and where to persist progress. Read it. Re-fetch it at any time
 especially at the start of a new session, when you have lost your own context:
 
 ```bash
-aidapter briefing --as <NAME>
+synchri briefing --as <NAME>
 ```
 
 **Then loop:**
 
 1. **Wait for your turn.**
    ```bash
-   aidapter wait --as <NAME> --timeout 600 --json
+   synchri wait --as <NAME> --timeout 600 --json
    ```
    Branch on the exit code:
 
@@ -53,7 +53,7 @@ aidapter briefing --as <NAME>
 
 3. **Report back into the room.**
    ```bash
-   aidapter send --from <NAME> --type response --status complete \
+   synchri send --from <NAME> --type response --status complete \
      -m "<your findings>" \
      --claim "<the assertion you are making>" \
      --evidence "<what supports it>" \
@@ -70,24 +70,24 @@ aidapter briefing --as <NAME>
 4. **Pass when you have nothing material to add** — do not send an empty or filler
    message:
    ```bash
-   aidapter pass --as <NAME> --reason "no concerns with this change"
+   synchri pass --as <NAME> --reason "no concerns with this change"
    ```
 
 5. **Use the shared memory ledger** for anything that should outlive the scrollback:
    ```bash
-   aidapter memory --room <ROOM-ID>                            # read shared context
-   aidapter memory add decisions "..." --as <NAME>              # record a decision
-   aidapter memory add constraints "..." --as <NAME>            # record a constraint
-   aidapter memory add open_issues "..." --as <NAME>            # record an open issue
-   aidapter memory add disagreements "..." --as <NAME>          # record a disagreement
+   synchri memory --room <ROOM-ID>                            # read shared context
+   synchri memory add decisions "..." --as <NAME>              # record a decision
+   synchri memory add constraints "..." --as <NAME>            # record a constraint
+   synchri memory add open_issues "..." --as <NAME>            # record an open issue
+   synchri memory add disagreements "..." --as <NAME>          # record a disagreement
    ```
    The ledger is not the chat log. Put durable conclusions there, not conversation.
 
-6. **Catch up on what you missed** with `aidapter briefing --as <NAME>` (preferred: it
+6. **Catch up on what you missed** with `synchri briefing --as <NAME>` (preferred: it
    reconstitutes the repo binding, shared memory, and everything since your last
-   message) or `aidapter read --tail 20` for the raw transcript.
+   message) or `synchri read --tail 20` for the raw transcript.
 
-7. **Persist deliberately.** AIDapter stores the room durably — transcript, ledger,
+7. **Persist deliberately.** Synchri stores the room durably — transcript, ledger,
    queue, provenance — across sessions and restarts. It does **not** store your own
    reasoning or plans. Put shared conclusions in the ledger; put whatever you need to
    resume later in your own platform's persistent memory.

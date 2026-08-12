@@ -12,8 +12,8 @@ import json
 
 import pytest
 
-from aidapter.errors import NotFoundError, ValidationError
-from aidapter.models.envelope import MAX_CONTENT_CHARS, MessageDraft
+from synchri.errors import NotFoundError, ValidationError
+from synchri.models.envelope import MAX_CONTENT_CHARS, MessageDraft
 
 
 def test_envelope_carries_every_provenance_field(room):

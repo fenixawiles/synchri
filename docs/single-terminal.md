@@ -1,6 +1,6 @@
 # Running a room from one terminal
 
-Nothing in AIDapter ever required one terminal per agent. A participant is any
+Nothing in Synchri ever required one terminal per agent. A participant is any
 *process* that can run the CLI — the room is a SQLite file, so there is no tty
 affinity, no process ownership, and no session pinning anywhere in the design.
 Terminals are a convenience for watching agents work, not a constraint.
@@ -12,9 +12,9 @@ There are two ways to run a room, and **neither involves copying anything by han
 The agent calls the CLI itself, so its answer goes straight into the room:
 
 ```bash
-aidapter wait --as codex          # the agent blocks until it is on point
+synchri wait --as codex          # the agent blocks until it is on point
 # ... the agent does the work ...
-aidapter send --from codex --type response -m "..."   # the agent posts its own reply
+synchri send --from codex --type response -m "..."   # the agent posts its own reply
 ```
 
 This is what [`agent-instructions.md`](agent-instructions.md) sets up. The agent
@@ -25,13 +25,13 @@ drive the same room from the same shell, sequentially, and it works identically.
 
 ## Mode 2 — conducted: one terminal drives everyone
 
-`aidapter run` watches the room and, whenever a **managed** participant is handed
+`synchri run` watches the room and, whenever a **managed** participant is handed
 the floor, invokes that participant's command, feeds it the pending request on
 stdin (or via `{prompt}`), and posts its stdout back into the room.
 
 ```bash
-aidapter create-room --name "PR 89 review" --agents claude,codex
-aidapter run \
+synchri create-room --name "PR 89 review" --agents claude,codex
+synchri run \
   --agent 'claude=claude -p {prompt}' \
   --agent 'codex=codex exec {prompt}' \
   --start claude --turns 6
@@ -67,7 +67,7 @@ ran 2 agent turn(s); stopped: idle
 
 ### The commands are yours
 
-`--agent 'name=command'` takes a command **you** supply. AIDapter has no built-in
+`--agent 'name=command'` takes a command **you** supply. Synchri has no built-in
 knowledge of any provider, and adding `run` did not change that. Whatever
 non-interactive, prompt-in / answer-on-stdout invocation your agent supports is
 what goes here.
@@ -91,11 +91,11 @@ control lines, which are stripped from the visible message:
 
 | Line | Effect |
 |---|---|
-| `AIDAPTER-TO: <name>` | Address that participant directly — a blocking turn |
-| `AIDAPTER-HANDOFF: <name>` | Hand the baton over without a demand |
-| `AIDAPTER-PASS` | Nothing material to add |
-| `AIDAPTER-STATUS: complete\|partial\|blocked\|failed` | Set the response status |
-| `AIDAPTER-CONFIDENCE: 0.0-1.0` | Set confidence |
+| `SYNCHRI-TO: <name>` | Address that participant directly — a blocking turn |
+| `SYNCHRI-HANDOFF: <name>` | Hand the baton over without a demand |
+| `SYNCHRI-PASS` | Nothing material to add |
+| `SYNCHRI-STATUS: complete\|partial\|blocked\|failed` | Set the response status |
+| `SYNCHRI-CONFIDENCE: 0.0-1.0` | Set confidence |
 
 Only *trailing* control lines count, so an agent that quotes the convention in the
 middle of a review does not accidentally redirect the room.
@@ -112,7 +112,7 @@ blocking, and loop-limit decision stays in the queue. Concretely:
 - It **stops on pause and on hard stop.**
 - A **crashed, timed-out, or missing** agent posts a `failed` response and releases
   the floor, rather than wedging the room.
-- Killing `aidapter run` changes no room state. Restart it, or take over manually.
+- Killing `synchri run` changes no room state. Restart it, or take over manually.
 
 ### Exit codes
 
@@ -127,10 +127,10 @@ blocking, and loop-limit decision stays in the queue. Concretely:
 ## Mixing the modes
 
 They compose, because both are just participants writing to the same room. You can
-drive Codex with `aidapter run --agent 'codex=…'` in one terminal while Claude Code
+drive Codex with `synchri run --agent 'codex=…'` in one terminal while Claude Code
 sits in another driving itself in attached mode — the conductor exits with code 15
 when Claude holds the floor, so give the conductor `--turns` or re-run it, or
 simply manage both agents in one conductor.
 
-You can always watch from a third terminal with `aidapter watch`, and cut in with
-`aidapter interrupt --as human -m "..."` at any moment in either mode.
+You can always watch from a third terminal with `synchri watch`, and cut in with
+`synchri interrupt --as human -m "..."` at any moment in either mode.

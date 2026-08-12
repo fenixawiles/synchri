@@ -1,6 +1,6 @@
 """Local session files.
 
-An agent driving AIDapter through a shell cannot realistically thread a secret
+An agent driving Synchri through a shell cannot realistically thread a secret
 through every command, so ``join`` records it in a 0600 file under the
 workspace and later commands pick it up automatically.
 
@@ -19,10 +19,10 @@ from ..broker import Credential
 from ..config import Workspace, write_private
 from ..errors import ValidationError
 
-ENV_ROOM = "AIDAPTER_ROOM"
-ENV_PARTICIPANT = "AIDAPTER_PARTICIPANT"
-ENV_SECRET = "AIDAPTER_SECRET"
-ENV_ROOM_TOKEN = "AIDAPTER_ROOM_TOKEN"
+ENV_ROOM = "SYNCHRI_ROOM"
+ENV_PARTICIPANT = "SYNCHRI_PARTICIPANT"
+ENV_SECRET = "SYNCHRI_SECRET"
+ENV_ROOM_TOKEN = "SYNCHRI_ROOM_TOKEN"
 
 CURRENT_ROOM_FILE = "current_room"
 
@@ -95,7 +95,7 @@ def get_current_room(workspace: Workspace) -> str | None:
 def resolve_room(workspace: Workspace, explicit: str | None, broker=None) -> str:
     """Work out which room a command is about.
 
-    Order: the ``--room`` flag, then ``$AIDAPTER_ROOM``, then the most recent
+    Order: the ``--room`` flag, then ``$SYNCHRI_ROOM``, then the most recent
     **active room bound to the repository you are standing in**, then the last
     room created in this workspace.
 
@@ -110,7 +110,7 @@ def resolve_room(workspace: Workspace, explicit: str | None, broker=None) -> str
     room_id = room_id or get_current_room(workspace)
     if not room_id:
         raise ValidationError(
-            "no room specified: pass --room, set AIDAPTER_ROOM, run inside a repository "
+            "no room specified: pass --room, set SYNCHRI_ROOM, run inside a repository "
             "that has an active room, or create a room first"
         )
     return room_id.strip()

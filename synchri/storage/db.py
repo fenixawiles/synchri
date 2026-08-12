@@ -1,6 +1,6 @@
 """SQLite connection management and schema bootstrap.
 
-AIDapter has no daemon.  Mutual exclusion between concurrently running CLI
+Synchri has no daemon.  Mutual exclusion between concurrently running CLI
 processes comes from SQLite itself: every state-changing operation runs inside
 a ``BEGIN IMMEDIATE`` transaction, which takes the database write lock up front
 rather than mid-transaction.  That makes "read the queue, decide, write the
@@ -24,7 +24,7 @@ DEFAULT_BUSY_TIMEOUT_MS = 10_000
 
 
 def connect(db_path: Path, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS) -> sqlite3.Connection:
-    """Open a connection with the pragmas AIDapter relies on."""
+    """Open a connection with the pragmas Synchri relies on."""
     db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     existed = db_path.exists()
     conn = sqlite3.connect(

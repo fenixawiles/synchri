@@ -1,6 +1,6 @@
 """Drive a whole room from a single terminal.
 
-Nothing about AIDapter ever required one terminal per agent — a participant is
+Nothing about Synchri ever required one terminal per agent — a participant is
 whatever process can run the CLI.  The conductor makes the single-terminal case
 practical: it watches the room, and whenever a *managed* participant is handed
 the floor, it invokes that participant's command, feeds it the pending request,
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from ..broker import Broker, Credential
-from ..errors import AidapterError, ValidationError
+from ..errors import SynchriError, ValidationError
 from ..models.enums import MessageType, ResponseStatus, RoomStatus, TurnState
 from ..models.envelope import MessageDraft
 from .agent_command import AgentCommand, parse_directives
@@ -35,7 +35,7 @@ STOP_UNMANAGED_SPEAKER = "unmanaged_speaker"
 
 @dataclass
 class ConductorReport:
-    """What happened during one `aidapter run`."""
+    """What happened during one `synchri run`."""
 
     room_id: str
     reason: str
@@ -77,7 +77,7 @@ class Conductor:
         if missing:
             raise ValidationError(
                 f"no credential available for managed agent(s) {', '.join(missing)}; "
-                "run 'aidapter join' for each one first"
+                "run 'synchri join' for each one first"
             )
         self.broker = broker
         self.room_id = room_id
@@ -224,7 +224,7 @@ class Conductor:
                 "next_speaker": sent.get("next_speaker"),
                 "warnings": warnings,
             }
-        except AidapterError as exc:
+        except SynchriError as exc:
             # The room refused the post (interrupted, stopped, bad target...).
             # Report it; the loop re-reads room state and decides what is next.
             warnings.append(f"{name}: {exc.code}: {exc.message}")
@@ -242,7 +242,7 @@ class Conductor:
         ]
 
         parts: list[str] = [
-            f"You are '{name}' in the AIDapter room \"{room['room']['name']}\".",
+            f"You are '{name}' in the Synchri room \"{room['room']['name']}\".",
             f"Other participants: {', '.join(others) if others else '(none)'}.",
             "",
         ]
@@ -297,11 +297,11 @@ class Conductor:
                 "your message in the room, so do not print progress chatter.",
                 "",
                 "You may end your output with any of these control lines:",
-                "  AIDAPTER-TO: <participant>        address them directly (blocks everyone else)",
-                "  AIDAPTER-HANDOFF: <participant>   hand the baton over without a demand",
-                "  AIDAPTER-PASS                     you have nothing material to add",
-                "  AIDAPTER-STATUS: complete|partial|blocked|failed",
-                "  AIDAPTER-CONFIDENCE: 0.0-1.0",
+                "  SYNCHRI-TO: <participant>        address them directly (blocks everyone else)",
+                "  SYNCHRI-HANDOFF: <participant>   hand the baton over without a demand",
+                "  SYNCHRI-PASS                     you have nothing material to add",
+                "  SYNCHRI-STATUS: complete|partial|blocked|failed",
+                "  SYNCHRI-CONFIDENCE: 0.0-1.0",
             ]
         )
         return "\n".join(parts)

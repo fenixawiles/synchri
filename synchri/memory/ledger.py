@@ -96,7 +96,7 @@ class Ledger:
     room_id: str
     room_name: str = ""
     sections: dict[str, list[str]] = field(default_factory=dict)
-    #: Sections a human added that AIDapter does not know about, kept verbatim.
+    #: Sections a human added that Synchri does not know about, kept verbatim.
     extra: dict[str, list[str]] = field(default_factory=dict)
 
     def get_value(self, section: str) -> str:
@@ -123,7 +123,7 @@ def default_ledger(room_id: str, room_name: str) -> Ledger:
 def render(ledger: Ledger) -> str:
     """Serialize a ledger back to Markdown."""
     out: list[str] = [
-        f"# AIDapter room memory — {ledger.room_name or ledger.room_id}",
+        f"# Synchri room memory — {ledger.room_name or ledger.room_id}",
         "",
         f"<!-- room_id: {ledger.room_id} -->",
         "<!-- Shared semantic memory. Humans and agents may edit this file directly.",

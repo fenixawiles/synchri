@@ -42,7 +42,7 @@ def verify_secret(secret: str, salt: str, expected_hash: str) -> bool:
 def compose_join_token(room_id: str, secret: str) -> str:
     """Build the shareable join token.
 
-    The token embeds the room id so ``aidapter join <token>`` needs no other
+    The token embeds the room id so ``synchri join <token>`` needs no other
     argument.  Identifiers use the urlsafe-base64 alphabet, which excludes
     ``.``, so the split is unambiguous.
     """

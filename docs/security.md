@@ -2,7 +2,7 @@
 
 ## Threat model
 
-**The adversary AIDapter v0.1 defends against is a confused or misbehaving local agent.**
+**The adversary Synchri v0.1 defends against is a confused or misbehaving local agent.**
 
 Everything runs as you, on your machine, in your home directory. An agent participating
 in a room is a process you started, with your permissions. It can already read your
@@ -17,7 +17,7 @@ files. The realistic failure modes are therefore:
 Those are what the controls below address.
 
 **Not in the threat model for v0.1:** another OS user on the same machine, a local
-attacker who can read `~/.aidapter`, a remote attacker (there is no network surface),
+attacker who can read `~/.synchri`, a remote attacker (there is no network surface),
 or a malicious agent that simply refuses to cooperate with the protocol.
 
 ## Controls
@@ -54,12 +54,12 @@ outstanding grant to enter it**, so a token sitting in terminal scrollback is in
 Expiry is *derived from the clock*, not a background job: an invite with a past
 `expires_at` reports as expired and is refused, with nothing needing to have run.
 
-`aidapter invites` lists status but can never show a token — only the salted hash is
+`synchri invites` lists status but can never show a token — only the salted hash is
 stored, so the plaintext genuinely exists once, at mint time.
 
 ### Room scoping
 
-- Every function in `aidapter/storage/dao.py` takes an explicit `room_id` and filters on
+- Every function in `synchri/storage/dao.py` takes an explicit `room_id` and filters on
   it. There is no query in the data layer that can return another room's rows.
 - A participant secret authenticates `(room_id, participant_id)` together. A credential
   minted in room A is rejected in room B even when the participant name is identical.
@@ -82,7 +82,7 @@ persisted state rather than a process flag.
 
 ### Filesystem
 
-- The workspace (`~/.aidapter`, or `$AIDAPTER_HOME`) is created `0700`. The database,
+- The workspace (`~/.synchri`, or `$SYNCHRI_HOME`) is created `0700`. The database,
   session files, ledgers, and transcripts are `0600`.
 - Room ids are validated against `^room_[A-Za-z0-9_-]{16,64}$` **before** being used as a
   path component. Room names and participant names never become path components at all,
@@ -101,7 +101,7 @@ require an explicit flag to do otherwise.
 
 ### Credentials for providers
 
-None are stored, because v0.1 needs none. AIDapter never talks to a model provider; the
+None are stored, because v0.1 needs none. Synchri never talks to a model provider; the
 agents do that themselves, with their own configuration. Keeping it that way is a
 feature, and any future adapter should preserve it.
 
@@ -128,4 +128,4 @@ Stated so they are decisions rather than surprises:
 ## Reporting
 
 This is an early prototype and has not been audited. Please open an issue for anything
-that looks wrong; do not use AIDapter for anything sensitive yet.
+that looks wrong; do not use Synchri for anything sensitive yet.

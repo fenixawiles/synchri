@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import pytest
 
-from aidapter.broker import Broker, Credential
-from aidapter.errors import (
-    AidapterError,
+from synchri.broker import Broker, Credential
+from synchri.errors import (
+    SynchriError,
     AuthError,
     ConflictError,
     NotFoundError,
     StateError,
     ValidationError,
 )
-from aidapter.storage import dao
+from synchri.storage import dao
 
 from helpers import make_room
 
@@ -42,7 +42,7 @@ def test_create_room_mints_one_invite_per_named_agent(broker):
     names = [i["participant_name"] for i in created["invites"]]
     assert names == ["claude", "codex"]
     for invite in created["invites"]:
-        assert invite["command"] == f"aidapter join {invite['token']} --name {invite['participant_name']}"
+        assert invite["command"] == f"synchri join {invite['token']} --name {invite['participant_name']}"
         assert invite["token"].startswith(created["room_id"] + ".")
         assert invite["expires_at"] is not None
 
@@ -106,7 +106,7 @@ def test_an_invite_is_single_use(broker):
     token = created["invites"][0]["token"]
     broker.join(token, "codex")
 
-    with pytest.raises(AidapterError) as exc:
+    with pytest.raises(SynchriError) as exc:
         broker.join(token, "codex")
     # Re-presenting it for the same name trips the duplicate-participant check
     # first; either way the token buys nothing a second time.

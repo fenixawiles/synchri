@@ -1,7 +1,7 @@
 """Workspace layout and filesystem permissions.
 
-Everything AIDapter persists lives under a single workspace directory,
-``~/.aidapter`` by default, overridable with ``AIDAPTER_HOME``.  The directory
+Everything Synchri persists lives under a single workspace directory,
+``~/.synchri`` by default, overridable with ``SYNCHRI_HOME``.  The directory
 and every file inside it are created owner-only (0700 / 0600): the workspace
 holds room join tokens and participant secrets.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 from .errors import ValidationError
 from .ids import is_valid_id
 
-ENV_HOME = "AIDAPTER_HOME"
+ENV_HOME = "SYNCHRI_HOME"
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
@@ -28,13 +28,13 @@ DEFAULT_INVITE_TTL_SECONDS = 3600
 
 @dataclass(frozen=True)
 class Workspace:
-    """Resolved paths for one AIDapter workspace."""
+    """Resolved paths for one Synchri workspace."""
 
     home: Path
 
     @property
     def db_path(self) -> Path:
-        return self.home / "aidapter.db"
+        return self.home / "synchri.db"
 
     @property
     def rooms_dir(self) -> Path:
@@ -90,8 +90,8 @@ def _harden(path: Path) -> None:
 
 
 def resolve_workspace(home: str | os.PathLike | None = None) -> Workspace:
-    """Resolve the workspace from an explicit path, ``AIDAPTER_HOME``, or the default."""
-    raw = home or os.environ.get(ENV_HOME) or (Path.home() / ".aidapter")
+    """Resolve the workspace from an explicit path, ``SYNCHRI_HOME``, or the default."""
+    raw = home or os.environ.get(ENV_HOME) or (Path.home() / ".synchri")
     return Workspace(Path(raw).expanduser().resolve())
 
 

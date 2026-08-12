@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from aidapter.config import resolve_workspace
-from aidapter.errors import ValidationError
-from aidapter.ids import is_valid_id, new_id, new_secret
-from aidapter.security import tokens
+from synchri.config import resolve_workspace
+from synchri.errors import ValidationError
+from synchri.ids import is_valid_id, new_id, new_secret
+from synchri.security import tokens
 
 
 def test_generated_ids_are_prefixed_and_high_entropy():
@@ -98,7 +98,7 @@ def test_room_name_is_never_used_as_a_path_component(broker, workspace):
 
 
 def test_credential_repr_does_not_leak_the_secret():
-    from aidapter.broker import Credential
+    from synchri.broker import Credential
 
     text = repr(Credential(participant="claude", secret="super-secret-value"))
     assert "super-secret-value" not in text

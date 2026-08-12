@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from aidapter.broker import Credential
-from aidapter.errors import AuthError, ConflictError, NotFoundError, ValidationError
-from aidapter.models.envelope import MessageDraft
+from synchri.broker import Credential
+from synchri.errors import AuthError, ConflictError, NotFoundError, ValidationError
+from synchri.models.envelope import MessageDraft
 
 from helpers import make_room
 

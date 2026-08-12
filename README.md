@@ -1,6 +1,6 @@
-# AIDapter
+# Synchri
 
-**AIDapter is an open-source local interoperability layer that lets coding agents communicate through a shared, user-controlled room instead of requiring the user to manually relay messages between them.**
+**Synchri is an open-source local interoperability layer that lets coding agents communicate through a shared, user-controlled room instead of requiring the user to manually relay messages between them.**
 
 *Stop being the clipboard between your coding agents.*
 
@@ -12,31 +12,31 @@
 
 You are running Claude Code in one terminal and Codex in another. Claude finishes a change and you want Codex to review it adversarially. Today you copy Claude's message, paste it into Codex, wait, copy the findings back, and paste them into Claude. You are the transport layer.
 
-The insight AIDapter exploits is that these agents already share a runtime surface: **your machine and your shell.** An agent that can run `git status` can run `aidapter send`. That is enough to let them talk to each other directly, with you watching and able to cut in at any moment.
+The insight Synchri exploits is that these agents already share a runtime surface: **your machine and your shell.** An agent that can run `git status` can run `synchri send`. That is enough to let them talk to each other directly, with you watching and able to cut in at any moment.
 
 ```
-Claude ──► aidapter send --to codex --type task -m "Review commit abc123 for race conditions."
+Claude ──► synchri send --to codex --type task -m "Review commit abc123 for race conditions."
                     │
                     ▼
              ┌──────────────┐
-             │  AIDapter    │   deterministic queue · persistent state · provenance
+             │  Synchri    │   deterministic queue · persistent state · provenance
              │  room        │
              └──────────────┘
                     │
-Codex  ◄── aidapter wait   (blocks until it is on point, then returns the request)
-Codex  ──► aidapter send --type response --status complete -m "Two interleavings look unsafe: ..."
+Codex  ◄── synchri wait   (blocks until it is on point, then returns the request)
+Codex  ──► synchri send --type response --status complete -m "Two interleavings look unsafe: ..."
                     │
-Claude ◄── aidapter read   (sees the findings; you never touched the clipboard)
+Claude ◄── synchri read   (sees the findings; you never touched the clipboard)
 ```
 
-You watch the whole exchange with `aidapter watch`, and interrupt with `aidapter interrupt` whenever you want.
+You watch the whole exchange with `synchri watch`, and interrupt with `synchri interrupt` whenever you want.
 
 **You never copy or paste a message in either mode.** The agent's own answer goes into the room, because either the agent writes it there itself or the conductor captures it:
 
 | Mode | How the reply reaches the room | Terminals |
 |---|---|---|
-| **Attached** | The agent runs `aidapter send` itself after doing the work | one per agent, by preference — not by requirement |
-| **Conducted** | `aidapter run` invokes each agent's command and posts its stdout | **one, total** |
+| **Attached** | The agent runs `synchri send` itself after doing the work | one per agent, by preference — not by requirement |
+| **Conducted** | `synchri run` invokes each agent's command and posts its stdout | **one, total** |
 
 A participant is any *process* that can run the CLI. The room is a SQLite file: there is no tty affinity anywhere in the design, so "one terminal per agent" is a way to watch them, never a constraint. See [`docs/single-terminal.md`](docs/single-terminal.md).
 
@@ -45,8 +45,8 @@ A participant is any *process* that can run the CLI. The room is a SQLite file: 
 Requires Python 3.10+. No runtime dependencies.
 
 ```bash
-git clone https://github.com/fenixawiles/AIDapter
-cd AIDapter
+git clone https://github.com/fenixawiles/synchri
+cd Synchri
 pip install -e .
 ```
 
@@ -55,48 +55,48 @@ pip install -e .
 ```bash
 # 1. You: create a room and pre-invite the agents. This prints one ready-to-run
 #    join command per agent -- each single-use, name-bound, and expiring.
-aidapter create-room --name "PR 89 review" --agents claude,codex \
+synchri create-room --name "PR 89 review" --agents claude,codex \
   --goal "find race conditions before merge"
 
 # 2. Paste each printed command into that agent's session. It looks like:
-aidapter join room_k8b9Ei….SzKG51yg… --name claude
+synchri join room_k8b9Ei….SzKG51yg… --name claude
 
 # 3. Claude addresses Codex directly. This creates a blocking turn.
-aidapter send --from claude --to codex --type task \
+synchri send --from claude --to codex --type task \
   -m "Adversarially review commit abc123 for race conditions." \
   --artifact git:abc123 \
   --constraint "Preserve the existing runtime contract"
 
 # 4. Codex parks until it is on point, does the work, and answers into the room.
-aidapter wait --as codex
-aidapter send --from codex --type response --status complete \
+synchri wait --as codex
+synchri send --from codex --type response --status complete \
   -m "Two interleavings look unsafe: ..." --confidence 0.7
 
 # 5. You watch and can cut in at any time.
-aidapter watch
-aidapter interrupt --as human -m "also check the retry path" --to codex
-aidapter stop-room --as human
+synchri watch
+synchri interrupt --as human -m "also check the retry path" --to codex
+synchri stop-room --as human
 ```
 
 Or drive the whole thing from **one** terminal, with the agents' own commands:
 
 ```bash
-aidapter run \
+synchri run \
   --agent 'claude=claude -p {prompt}' \
   --agent 'codex=codex exec {prompt}' \
   --start claude --turns 6
 ```
 
-`aidapter run` watches the room, invokes whichever managed agent holds the floor, feeds it the pending request, and posts its stdout back. The commands are yours — AIDapter still has no built-in knowledge of any provider. Details in [`docs/single-terminal.md`](docs/single-terminal.md); the step-by-step walkthrough with real output, plus the prompt to give an agent driving itself, is in [`docs/two-agent-demo.md`](docs/two-agent-demo.md).
+`synchri run` watches the room, invokes whichever managed agent holds the floor, feeds it the pending request, and posts its stdout back. The commands are yours — Synchri still has no built-in knowledge of any provider. Details in [`docs/single-terminal.md`](docs/single-terminal.md); the step-by-step walkthrough with real output, plus the prompt to give an agent driving itself, is in [`docs/two-agent-demo.md`](docs/two-agent-demo.md).
 
 ## Session persistence
 
 A room is not a chat that vanishes when the terminal closes. There is no in-memory
-broker, so **everything AIDapter owns is durable from the first write**: transcript,
+broker, so **everything Synchri owns is durable from the first write**: transcript,
 shared memory ledger, queue, turns, tasks, identities, and the full audit trail — all
 of it survives the session and any restart.
 
-What AIDapter deliberately does *not* own is an agent's internal reasoning and working
+What Synchri deliberately does *not* own is an agent's internal reasoning and working
 context. Shadowing that for every provider would be a worse job than the providers do
 themselves. So two things happen automatically at the jump, with nothing for you to set up:
 
@@ -104,14 +104,14 @@ themselves. So two things happen automatically at the jump, with nothing for you
    origin. A later session in that repo finds the room with no room id anywhere:
 
    ```console
-   $ rm ~/.aidapter/current_room     # forget which room it was
+   $ rm ~/.synchri/current_room     # forget which room it was
    $ cd ~/projects/thing/src/deep    # even from a subdirectory
-   $ aidapter status
+   $ synchri status
    Room     PR 89 review  (room_XHdZVKbuy1ibvSAI)
    ```
 
 2. **Every arrival gets a briefing** — printed by `join`, re-fetchable any time with
-   `aidapter briefing --as codex`. It carries the bound repo (and warns loudly if the
+   `synchri briefing --as codex`. It carries the bound repo (and warns loudly if the
    agent is in a different working tree), the whole shared memory ledger, what that
    participant missed since it last spoke, the request waiting for it, and the
    persistence contract: *put shared conclusions in the room ledger, put your own
@@ -122,11 +122,11 @@ where to put what and what the limits are: [`docs/persistence.md`](docs/persiste
 
 ## Architecture
 
-AIDapter keeps three kinds of state deliberately separate, because collapsing them is how this class of system rots.
+Synchri keeps three kinds of state deliberately separate, because collapsing them is how this class of system rots.
 
 | Layer | Where it lives | What it is | Authority |
 |---|---|---|---|
-| **Orchestration state** | SQLite (`~/.aidapter/aidapter.db`) | rooms, participants, queue, turns, tasks, audit events | authoritative machine state |
+| **Orchestration state** | SQLite (`~/.synchri/synchri.db`) | rooms, participants, queue, turns, tasks, audit events | authoritative machine state |
 | **Semantic memory** | `rooms/<room_id>/memory.md` | goal, current task, decisions, constraints, open issues, handoffs, artifacts, disagreements | durable shared understanding; human-editable |
 | **Transcript** | `messages` table, mirrored to `rooms/<room_id>/transcript.jsonl` | the chronological conversation | the record of what was said |
 
@@ -134,12 +134,12 @@ The Markdown ledger is **not** queue state. The queue never reads it. It exists 
 
 ### There is no daemon
 
-`aidapter start` initializes the workspace and prints its state. It does **not** launch a background process and does **not** open a socket. The broker is a library over a WAL-mode SQLite file: every command opens the database, runs one `BEGIN IMMEDIATE` transaction, commits, and exits.
+`synchri start` initializes the workspace and prints its state. It does **not** launch a background process and does **not** open a socket. The broker is a library over a WAL-mode SQLite file: every command opens the database, runs one `BEGIN IMMEDIATE` transaction, commits, and exits.
 
 This is a real trade-off, made deliberately:
 
 - **Gained:** no orphaned processes, no port to bind, no restart-recovery path, no state that only exists in RAM. SQLite's write lock provides exactly the mutual exclusion a broker loop would — two agents cannot both become the active speaker, and this is tested with real concurrent processes.
-- **Given up:** no server push. Agents poll with `aidapter wait`, which costs a cheap read every 500ms.
+- **Given up:** no server push. Agents poll with `synchri wait`, which costs a cheap read every 500ms.
 
 The core is transport-agnostic. A future HTTP/WebSocket façade or MCP adapter wraps the same `Broker` class without redesigning anything.
 
@@ -154,8 +154,8 @@ Priority order, lowest number first:
 | 0 | Human intervention | a human message — bypasses the queue entirely |
 | 1 | Explicitly addressed participant | `--to <name>` |
 | 2 | Model-to-model handoff target | `--handoff-to <name>` |
-| 3 | Existing queued participants | `aidapter request-floor` |
-| 4 | Optional, has not yet responded | `aidapter request-floor --priority optional` |
+| 3 | Existing queued participants | `synchri request-floor` |
+| 4 | Optional, has not yet responded | `synchri request-floor --priority optional` |
 
 Rules:
 
@@ -195,45 +195,45 @@ What is **not** claimed: this is not multi-tenant, not multi-user, and not harde
 ## CLI
 
 ```
-aidapter start                             initialize the workspace, show its state
-aidapter create-room --name "PR 89" --agents claude,codex
+synchri start                             initialize the workspace, show its state
+synchri create-room --name "PR 89" --agents claude,codex
                                            create a room; prints a join command per agent
-aidapter rooms [--here]                    list rooms (--here: bound to this repo)
-aidapter briefing --as codex               re-orient: repo, memory, what you missed
-aidapter join <invite-token> --name codex  redeem an invite and take an identity
+synchri rooms [--here]                    list rooms (--here: bound to this repo)
+synchri briefing --as codex               re-orient: repo, memory, what you missed
+synchri join <invite-token> --name codex  redeem an invite and take an identity
 
-aidapter invite --as human --name gemini   mint another single-use invite
-aidapter invites                           list invites and their status
-aidapter revoke-invite --as human --name gemini
+synchri invite --as human --name gemini   mint another single-use invite
+synchri invites                           list invites and their status
+synchri revoke-invite --as human --name gemini
 
-aidapter send --from claude --to codex --type task -m "..."
-aidapter read [--follow] [--tail N]        the transcript
-aidapter watch                             live human view: status + transcript
-aidapter turn --as codex                   is it my turn? (no blocking)
-aidapter wait --as codex [--timeout 300]   block until it is
-aidapter pass --as codex --reason "..."    nothing material to add
-aidapter request-floor --as gemini         ask for a turn without being addressed
+synchri send --from claude --to codex --type task -m "..."
+synchri read [--follow] [--tail N]        the transcript
+synchri watch                             live human view: status + transcript
+synchri turn --as codex                   is it my turn? (no blocking)
+synchri wait --as codex [--timeout 300]   block until it is
+synchri pass --as codex --reason "..."    nothing material to add
+synchri request-floor --as gemini         ask for a turn without being addressed
 
-aidapter run --agent 'codex=codex exec {prompt}' [--start claude] [--turns 6]
+synchri run --agent 'codex=codex exec {prompt}' [--start claude] [--turns 6]
                                            drive managed agents from this terminal
 
-aidapter status                            room state, participants, queue
-aidapter participants
-aidapter events                            the state-transition audit log
-aidapter provenance --message <id>         full provenance for one message
-aidapter export                            rebuild transcript.jsonl from the database
+synchri status                            room state, participants, queue
+synchri participants
+synchri events                            the state-transition audit log
+synchri provenance --message <id>         full provenance for one message
+synchri export                            rebuild transcript.jsonl from the database
 
-aidapter memory                            print the shared ledger
-aidapter memory set goal "..." --as claude
-aidapter memory add decisions "..." --as codex
-aidapter memory remove open_issues 2 --as human
+synchri memory                            print the shared ledger
+synchri memory set goal "..." --as claude
+synchri memory add decisions "..." --as codex
+synchri memory remove open_issues 2 --as human
 
-aidapter interrupt --as human -m "..." [--to codex]
-aidapter pause-room --as human
-aidapter resume-room --as human
-aidapter stop-room --as human
-aidapter remove --as human --participant codex
-aidapter config --as human --max-agent-turns 12
+synchri interrupt --as human -m "..." [--to codex]
+synchri pause-room --as human
+synchri resume-room --as human
+synchri stop-room --as human
+synchri remove --as human --participant codex
+synchri config --as human --max-agent-turns 12
 ```
 
 Every command takes `--json`. Exit codes are stable so an agent can branch without parsing prose:
@@ -250,7 +250,7 @@ Every command takes `--json`. Exit codes are stable so an agent can branch witho
 | 10–13 | `wait` outcomes: timeout, room stopped, awaiting human, removed |
 | 11–15 | `run` outcomes: room stopped, awaiting human, paused, unmanaged speaker |
 
-Credentials resolve from `--secret`, then `$AIDAPTER_SECRET`, then the `0600` session file written by `join`. The room defaults to `$AIDAPTER_ROOM`, then the last room created.
+Credentials resolve from `--secret`, then `$SYNCHRI_SECRET`, then the `0600` session file written by `join`. The room defaults to `$SYNCHRI_ROOM`, then the last room created.
 
 ## Message model
 
@@ -266,8 +266,8 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 
 - **Polling, not push.** `wait` polls every 500ms. Fine for two or three agents on one machine; not a design for scale.
 - **No UI.** The data model was built so a group-chat UI can read `status`, `read`, `events`, and `memory` without core changes, but none exists.
-- **No provider integrations.** Agents participate by running shell commands, or by being invoked as one via `aidapter run --agent 'name=your command'`. There is no MCP server, no provider adapter, no SDK, and no knowledge of any specific agent baked in.
-- **Attached agents must cooperate.** Nothing forces a self-driving agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates. `aidapter run` sidesteps this by driving the turn loop itself.
+- **No provider integrations.** Agents participate by running shell commands, or by being invoked as one via `synchri run --agent 'name=your command'`. There is no MCP server, no provider adapter, no SDK, and no knowledge of any specific agent baked in.
+- **Attached agents must cooperate.** Nothing forces a self-driving agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates. `synchri run` sidesteps this by driving the turn loop itself.
 - **Conducted agents must be non-interactive.** `run` needs a prompt-in / answer-on-stdout invocation. An agent that only works as an interactive REPL has to be driven in attached mode instead.
 - **Single machine.** No remote rooms, no multi-user rooms, no authentication beyond local secrets.
 - **The ledger is append-oriented.** Agents add entries; nothing summarizes or garbage-collects them except a rolling cap on handoffs.
@@ -281,7 +281,7 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 Deliberately not built yet, and not to be started without an explicit decision:
 
 1. **MCP server wrapper** — expose `send` / `wait` / `read` / `memory` as MCP tools so agents that speak MCP skip the shell.
-2. **Provider-specific adapters** — thin shims that teach a particular agent harness the AIDapter conventions.
+2. **Provider-specific adapters** — thin shims that teach a particular agent harness the Synchri conventions.
 3. **Read-only HTTP/WebSocket observer** on `127.0.0.1`, for a group-chat UI.
 4. **Richer artifact references** — resolve `git:abc123` into a real diff the room can display.
 

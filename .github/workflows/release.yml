@@ -68,6 +68,8 @@ jobs:
         env:
           SYNCHRI_ARCH: arm64
           CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      - name: Smoke-test the packaged app
+        run: sh scripts/smoke_macos_app.sh release/macos/dist/Synchri.app
       - name: Notarize and staple the signed app
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -95,14 +97,23 @@ jobs:
     needs: [python-package, mac-app]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
-      - env:
+      - name: Publish or replace release assets
+        env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: gh release create "$TAG" release-assets/* --generate-notes --verify-tag
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG" release-assets/* --generate-notes --verify-tag
+          fi
 
   publish-pypi:
     if: github.event_name == 'workflow_dispatch' && inputs.publish_pypi

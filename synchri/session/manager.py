@@ -39,7 +39,7 @@ from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
 from .gates import Gate, summarize
-from .modes import ModePolicy, ParticipantPlan, policy_for, resolve_role
+from .modes import ModePolicy, ParticipantPlan, collaboration_pair, policy_for, resolve_role
 from .permissions import Decision, PermissionDenied, PermissionSet
 from .spec import ProductSpec
 from . import extract as extract_module
@@ -511,39 +511,43 @@ class SessionManager:
         """Give the first actual turn to the builder when a session activates."""
         if not record.room_id:
             raise StateError("the session has no room", code="no_room")
-        builder = next(
-            (plan for plan in record.participants if plan.role == "primary_builder"),
-            record.participants[0] if record.participants else None,
-        )
-        if builder is None:
+        lead, reviewer = collaboration_pair(record.participants)
+        if lead is None:
             raise StateError("the session has no participants", code="no_participants")
-        reviewer = next(
-            (plan for plan in record.participants if plan.role == "adversarial_reviewer"), None
-        )
         review_line = (
-            f"Then hand your opening approach and first implementation checkpoint to {reviewer.name} "
+            f"Then hand your opening findings and first evidence checkpoint to {reviewer.name} "
             "for adversarial review."
             if reviewer
-            else "Then continue with the first implementation checkpoint."
+            else "Then continue with the first evidence checkpoint."
         )
-        spec_line = (
-            "Read the canonical product specification and the authorized worktree."
-            if record.spec
-            else "Inspect the authorized worktree and establish the concrete first objective."
-        )
+        if record.mode == "review_audit":
+            opening = (
+                "Begin the audit. Read the target, the canonical criteria, and the authorized "
+                "worktree. Publish the first evidence-backed review approach: scope, likely risks, "
+                "inspection order, and the first checks you will run. Do not implement product changes "
+                "unless the human explicitly authorizes a fix. "
+                + review_line
+            )
+        else:
+            spec_line = (
+                "Read the canonical product specification and the authorized worktree."
+                if record.spec
+                else "Inspect the authorized worktree and establish the concrete first objective."
+            )
+            opening = (
+                f"Begin working on the specification. {spec_line} Publish your opening build approach: "
+                "current repository facts, implementation order, first change, and risks. "
+                "Do not stop at the proposal—start the first coherent unit of work. "
+                + review_line
+            )
         self.broker.send(
             record.room_id,
             credential=self._human_credential(record),
             draft=MessageDraft(
                 message_type="task",
-                target=builder.name,
+                target=lead.name,
                 metadata={"source": "session_activation"},
-                content=(
-                    f"Begin working on the specification. {spec_line} Publish your opening build approach: "
-                    "current repository facts, implementation order, first change, and risks. "
-                    "Do not stop at the proposal—start the first coherent unit of work. "
-                    + review_line
-                ),
+                content=opening,
             ),
         )
 

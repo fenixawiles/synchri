@@ -541,6 +541,30 @@ def test_activation_starts_the_builder_with_an_opening_task(manager, repo, agent
     assert manager.dashboard(record.session_id)["current_actor"] == "claude"
 
 
+def test_audit_activation_starts_the_auditor_not_a_builder(manager, repo):
+    record = manager.create(
+        name="Audit",
+        mode="review_audit",
+        repo_root=str(repo),
+        participants=[
+            ParticipantPlan("codex", "codex", "auditor"),
+            ParticipantPlan("claude", "claude_code", "adversarial_reviewer"),
+        ],
+        spec=ProductSpec(text="Audit the authentication boundary."),
+    )
+    manager.issue_contract(record.session_id)
+    accept_all(manager, record)
+
+    manager.activate(record.session_id)
+
+    opening = manager.broker.read(
+        record.room_id, credential=manager._human_credential(record)
+    )["messages"][-1]
+    assert opening["target"] == "codex"
+    assert "Begin the audit" in opening["content"]
+    assert "Do not implement product changes" in opening["content"]
+
+
 # ----------------------------------------------------------------------
 # configuration changes
 # ----------------------------------------------------------------------

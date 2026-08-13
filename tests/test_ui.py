@@ -508,6 +508,61 @@ def test_human_reply_returns_to_the_agent_waiting_on_permission(ui, repo):
     assert result["next_speaker"] == "claude"
 
 
+def test_resolved_permission_request_does_not_capture_later_human_direction(ui, repo):
+    session_id, credentials = _active_with_credentials(ui, repo)
+    session = call(ui, f"/api/session?session={session_id}")
+    ui["broker"].send(
+        session["room_id"],
+        credential=credentials["claude"],
+        draft=MessageDraft(
+            content="I need approval.",
+            message_type="response",
+            response_status="blocked",
+            target="human",
+        ),
+    )
+    call(ui, "/api/message", {"session": session_id, "content": "Approved."})
+    ui["broker"].pass_turn(
+        session["room_id"], credential=credentials["claude"], reason="approval applied"
+    )
+
+    result = call(ui, "/api/message", {"session": session_id, "content": "Now prioritize auth."})
+
+    assert result["routed_to"] == "claude"
+    assert result["message"]["metadata"]["human_direction"]["reviewer"] == "codex"
+
+
+def test_new_human_direction_starts_with_builder_even_when_reviewer_has_the_floor(ui, repo):
+    session_id, credentials = _active_with_credentials(ui, repo)
+    session = call(ui, f"/api/session?session={session_id}")
+
+    # Move the conversation to the reviewer. A fresh human direction must not
+    # accidentally go to whoever happened to be working at that moment.
+    ui["broker"].send(
+        session["room_id"],
+        credential=credentials["claude"],
+        draft=MessageDraft(content="Please review.", message_type="task", target="codex"),
+    )
+    result = call(ui, "/api/message", {"session": session_id, "content": "Prioritize auth."})
+
+    assert result["routed_to"] == "claude"
+    direction = result["message"]["metadata"]["human_direction"]
+    assert direction == {"lead": "claude", "reviewer": "codex"}
+    assert result["next_speaker"] == "claude"
+
+
+def test_an_explicit_human_recipient_keeps_control_of_the_route(ui, repo):
+    session_id = _active(ui, repo)
+    result = call(
+        ui,
+        "/api/message",
+        {"session": session_id, "content": "Review this directly.", "target": "codex"},
+    )
+
+    assert result["routed_to"] == "codex"
+    assert "human_direction" not in result["message"]["metadata"]
+
+
 def test_tests_and_changes_tabs_read_real_state(ui, repo):
     from pathlib import Path
 

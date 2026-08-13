@@ -19,7 +19,14 @@ from ..session.escalation import CATALOG as ESCALATION_CATALOG
 from ..session.extract import describe as describe_gates, extract_gates
 from ..session.gates import Gate
 from ..session.manager import SessionManager
-from ..session.modes import ParticipantPlan, Role, list_modes, plan_launch_status, runtime_catalog
+from ..session.modes import (
+    ParticipantPlan,
+    Role,
+    collaboration_pair,
+    list_modes,
+    plan_launch_status,
+    runtime_catalog,
+)
 from ..session.permissions import PermissionSet
 from ..session.spec import ProductSpec
 from ..runner.managed import ManagedRunnerRegistry
@@ -495,7 +502,17 @@ class Api:
         from ..models.envelope import MessageDraft
 
         record = self.manager.get(self._session_id(query, body))
-        target = self._human_reply_target(record, body.get("target"))
+        target, enforce_review = self._human_reply_route(record, body.get("target"))
+        lead, reviewer = collaboration_pair(record.participants)
+        metadata = {"source": "human_input"}
+        if enforce_review and lead and reviewer:
+            # The conductor reads this durable marker after the lead posts a
+            # completed response, then gives the reviewer the next turn. This
+            # is an orchestration rule, not a hope that a model remembers it.
+            metadata["human_direction"] = {
+                "lead": lead.name,
+                "reviewer": reviewer.name,
+            }
         result = self.broker.send(
             record.room_id,
             credential=self._human(record),
@@ -503,6 +520,7 @@ class Api:
                 content=body.get("content", ""),
                 message_type="interrupt" if body.get("interrupt") else "chat",
                 target=target,
+                metadata=metadata,
             ),
         )
         result["routed_to"] = target
@@ -512,38 +530,32 @@ class Api:
         result["managed"] = self.managed.resume(self.manager.get(record.session_id))
         return result
 
-    def _human_reply_target(self, record, requested: str | None = None) -> str | None:
+    def _human_reply_route(self, record, requested: str | None = None) -> tuple[str | None, bool]:
         """Resolve who should receive the next human message from the app.
 
         A direct recipient chosen by the human wins.  Otherwise, reply to the
-        agent currently on point.  A permission question normally ends that
-        agent's turn and directs a blocked response to ``human``; in that
-        shape, recover the most recent blocked agent before falling back to the
-        primary builder for a new direction.
+        agent that is genuinely waiting on a decision. A new human direction
+        always starts with the conversation lead, even if a reviewer happened
+        to have the floor when the human spoke; the managed conductor then
+        gives the designated reviewer the next turn.
         """
         if requested:
-            return requested
+            return requested, False
 
         agent_names = {plan.name for plan in record.participants}
-        room = self.broker.room_status(record.room_id, credential=self._human(record))
-        if room.get("active_speaker") in agent_names:
-            return room["active_speaker"]
-
-        messages = self.broker.read(
-            record.room_id, credential=self._human(record), tail=30
-        )["messages"]
-        for message in reversed(messages):
+        human = self._human(record)
+        room = self.broker.room_status(record.room_id, credential=human)
+        if room.get("active_speaker") == human.participant:
+            pending = self.broker.turn_status(record.room_id, credential=human).get("request") or {}
             if (
-                message.get("sender") in agent_names
-                and message.get("response_status") == "blocked"
-                and message.get("target") == "human"
+                pending.get("sender") in agent_names
+                and pending.get("response_status") == "blocked"
+                and pending.get("target") == human.participant
             ):
-                return message["sender"]
+                return pending["sender"], False
 
-        return next(
-            (plan.name for plan in record.participants if plan.role == "primary_builder"),
-            next(iter(agent_names), None),
-        )
+        lead, reviewer = collaboration_pair(record.participants)
+        return (lead.name if lead else next(iter(agent_names), None)), bool(lead and reviewer)
 
     def gates(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query)

@@ -298,6 +298,37 @@ class ParticipantPlan:
         }
 
 
+def collaboration_pair(
+    participants: list[ParticipantPlan],
+) -> tuple[ParticipantPlan | None, ParticipantPlan | None]:
+    """Return the conversation lead and its adversarial reviewer, if present.
+
+    This makes the intended ordering explicit rather than depending on the
+    order in which the user happened to add agents to a session.  Development
+    sessions lead with the Primary Builder; audit sessions lead with the
+    Auditor.  The reviewer is the designated second voice for either shape.
+    """
+    lead = next(
+        (
+            plan
+            for role in (Role.PRIMARY_BUILDER.value, Role.AUDITOR.value)
+            for plan in participants
+            if plan.role == role
+        ),
+        participants[0] if participants else None,
+    )
+    reviewer = next(
+        (
+            plan
+            for plan in participants
+            if plan.role == Role.ADVERSARIAL_REVIEWER.value
+            and plan.name != getattr(lead, "name", None)
+        ),
+        None,
+    )
+    return lead, reviewer
+
+
 #: Runtimes Synchri knows how to find on the local machine.  A managed command
 #: is intentionally an opt-in convenience over the same CLI protocol used by
 #: every other agent: there is no provider account, API key, or cloud relay.

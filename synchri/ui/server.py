@@ -19,6 +19,7 @@ Security posture for a local UI, all enforced below:
 
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import secrets
@@ -252,9 +253,20 @@ def create_server(
         )
     resolved_token = token or secrets.token_urlsafe(32)
     api = Api(broker, SessionManager(broker), default_repo=default_repo)
-    server = SynchriUIServer(
-        (host, port), Handler, api=api, token=resolved_token, allow_remote=allow_remote
-    )
+    try:
+        server = SynchriUIServer(
+            (host, port), Handler, api=api, token=resolved_token, allow_remote=allow_remote
+        )
+    except OSError as exc:
+        # A desktop launch must not vanish just because a previous Synchri
+        # window—or another local program—already owns the friendly default.
+        # Fall back to an OS-selected loopback port; explicit non-default ports
+        # remain deliberate and report their conflict to the caller.
+        if host != DEFAULT_HOST or port != DEFAULT_PORT or exc.errno != errno.EADDRINUSE:
+            raise
+        server = SynchriUIServer(
+            (host, 0), Handler, api=api, token=resolved_token, allow_remote=allow_remote
+        )
     bound_port = server.server_address[1]
     return server, f"http://{host}:{bound_port}/?token={resolved_token}"
 

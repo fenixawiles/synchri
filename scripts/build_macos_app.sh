@@ -23,6 +23,7 @@ PYTHON=${PYTHON:-python3}
   --icon "$ROOT/assets/Synchri.icns" \
   --osx-bundle-identifier com.synchri.app \
   --add-data "$ROOT/synchri/ui/static:synchri/ui/static" \
+  --add-data "$ROOT/synchri/storage/schema.sql:synchri/storage" \
   --paths "$ROOT" \
   --distpath "$DIST" \
   --workpath "$BUILD" \

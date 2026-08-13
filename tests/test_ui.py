@@ -8,6 +8,7 @@ do anything the manager would refuse — the UI holds no rules of its own.
 from __future__ import annotations
 
 import json
+import errno
 import subprocess
 import threading
 import time
@@ -21,7 +22,7 @@ from synchri.errors import SynchriError
 from synchri.models.envelope import MessageDraft
 from synchri.session.manager import SessionManager
 from synchri.session.modes import ParticipantPlan
-from synchri.ui.server import create_server
+from synchri.ui.server import SynchriUIServer, create_server
 
 SPEC = "Build it.\n\n## Acceptance\n- AUTH-01 login works"
 
@@ -94,6 +95,28 @@ def test_binding_a_public_address_is_refused(workspace):
             create_server(broker, host="0.0.0.0", port=0)
         assert exc.value.code == "refused_bind"
         assert "--allow-remote" in exc.value.message
+    finally:
+        broker.close()
+
+
+def test_default_port_conflict_falls_back_to_an_available_loopback_port(workspace, monkeypatch):
+    original_init = SynchriUIServer.__init__
+    attempts = []
+
+    def busy_once(server, address, *args, **kwargs):
+        attempts.append(address)
+        if len(attempts) == 1:
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+        return original_init(server, address, *args, **kwargs)
+
+    monkeypatch.setattr(SynchriUIServer, "__init__", busy_once)
+    broker = Broker(workspace)
+    try:
+        server, url = create_server(broker)
+        assert attempts == [("127.0.0.1", 8765), ("127.0.0.1", 0)]
+        assert server.server_address[1] != 8765
+        assert url.startswith("http://127.0.0.1:")
+        server.server_close()
     finally:
         broker.close()
 

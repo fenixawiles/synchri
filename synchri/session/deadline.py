@@ -57,6 +57,9 @@ class Deadline:
     ends_at: str
     started_at: str
     source: str
+    #: Set for duration-based timeboxes. It makes the user-selected duration
+    #: reusable and lets activation start the clock without guessing from text.
+    duration_seconds: int | None = None
 
     @classmethod
     def from_duration(cls, text: str, *, now: datetime | None = None) -> "Deadline":
@@ -66,6 +69,7 @@ class Deadline:
             ends_at=_stamp(start + timedelta(seconds=seconds)),
             started_at=_stamp(start),
             source=f"duration: {text.strip()}",
+            duration_seconds=seconds,
         )
 
     @classmethod
@@ -84,6 +88,26 @@ class Deadline:
         if parsed <= start:
             raise ValidationError("that deadline is already in the past")
         return cls(ends_at=_stamp(parsed), started_at=_stamp(start), source=f"fixed: {value}")
+
+    def start_when_collaboration_begins(self, *, now: datetime | None = None) -> "Deadline":
+        """Return a fresh duration timebox at activation.
+
+        Choosing "two hours" during setup is a pacing preference, not consent
+        to spend setup, contract review, or a coffee break on the timer. Fixed
+        timestamps stay fixed because that is what the user explicitly chose.
+        """
+        seconds = self.duration_seconds
+        if seconds is None and self.source.startswith("duration:"):
+            seconds = parse_duration(self.source.split(":", 1)[1])
+        if not seconds:
+            return self
+        start = now or datetime.now(timezone.utc)
+        return Deadline(
+            ends_at=_stamp(start + timedelta(seconds=seconds)),
+            started_at=_stamp(start),
+            source=self.source,
+            duration_seconds=seconds,
+        )
 
     # -- state ---------------------------------------------------------
 
@@ -128,6 +152,7 @@ class Deadline:
             "ends_at": self.ends_at,
             "started_at": self.started_at,
             "source": self.source,
+            "duration_seconds": self.duration_seconds,
             "description": self.describe(),
         }
 
@@ -135,10 +160,17 @@ class Deadline:
     def from_dict(cls, data: dict | None) -> "Deadline | None":
         if not data or not data.get("ends_at"):
             return None
+        duration_seconds = data.get("duration_seconds")
+        if duration_seconds is None and str(data.get("source") or "").startswith("duration:"):
+            try:
+                duration_seconds = parse_duration(str(data["source"]).split(":", 1)[1])
+            except ValidationError:
+                duration_seconds = None
         return cls(
             ends_at=data["ends_at"],
             started_at=data.get("started_at") or data["ends_at"],
             source=data.get("source") or "fixed",
+            duration_seconds=int(duration_seconds) if duration_seconds else None,
         )
 
 

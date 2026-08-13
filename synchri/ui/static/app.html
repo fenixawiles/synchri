@@ -6,7 +6,7 @@
 :root{
   --bg:#fbfbfa; --panel:#fff; --line:#ebe9e5; --ink:#1c1b19; --dim:#6b6862;
   --accent:#2f6f4f; --accent-soft:#e8f2ec; --warn:#8a5a00; --warn-soft:#fdf3e0;
-  --bad:#a3352a; --bad-soft:#fbeceb; --radius:14px;
+  --bad:#a3352a; --bad-soft:#fbeceb; --radius:18px;
   --sans:"SF Pro Text","Avenir Next",Inter,ui-sans-serif,system-ui,sans-serif;
   --mono:"SF Mono",Berkeley Mono,JetBrains Mono,ui-monospace,SFMono-Regular,Menlo,monospace;
 }
@@ -19,23 +19,23 @@
 body{margin:0;background:var(--bg);color:var(--ink);
   font:15px/1.6 var(--sans)}
 h1,h2,h3{margin:0;font-weight:640;letter-spacing:-.01em}
-button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);
+button{font:inherit;cursor:pointer;border-radius:12px;border:1px solid var(--line);
   background:var(--panel);color:var(--ink);padding:.5rem .9rem}
-button:hover{border-color:var(--dim)}
+button:hover{border-color:var(--dim);transform:translateY(-1px)}
+button{transition:border-color .18s ease,background-color .18s ease,transform .18s ease,box-shadow .18s ease}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 button.primary:disabled{opacity:.45;cursor:not-allowed}
 button.ghost{background:none;border-color:transparent;color:var(--dim);padding:.35rem .6rem}
-input,textarea,select{font:inherit;width:100%;padding:.55rem .7rem;border-radius:10px;
+input,textarea,select{font:inherit;width:100%;padding:.6rem .75rem;border-radius:12px;
   border:1px solid var(--line);background:var(--panel);color:var(--ink)}
-textarea{min-height:14rem;resize:vertical;font-family:var(--mono);
-  font-size:13.5px}
+textarea{min-height:14rem;resize:vertical;font-family:var(--sans);font-size:14px}
 code,pre,.mono{font-family:var(--mono);font-size:13px}
 pre{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
   border-radius:var(--radius);padding:1rem;margin:0}
 a{color:var(--accent)}
 .wrap{max-width:76rem;margin:0 auto;padding:2rem 2rem 5rem}
 .wrap.session-app{max-width:none;margin:0;padding:0}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.25rem}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.25rem;box-shadow:0 1px 2px rgba(25,30,27,.025)}
 .muted{color:var(--dim)}
 .small{font-size:13px}
 .row{display:flex;gap:.75rem;align-items:center}
@@ -75,26 +75,27 @@ header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;ali
 .seg button.on{background:var(--accent);color:#fff;font-weight:600}
 .seg button.on.risky{background:var(--bad)}
 .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:.7rem 1rem;
-  border-radius:0 10px 10px 0}
+  border-radius:0 14px 14px 0}
 .note.warn{border-color:var(--warn);background:var(--warn-soft)}
 .note.bad{border-color:var(--bad);background:var(--bad-soft)}
 .quick textarea{min-height:7rem}
 .agent-card{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--panel)}
 .agent-card pre{margin-top:.75rem;white-space:pre-wrap;word-break:break-word}
+.workflow-list{display:grid;gap:.7rem;margin-top:1.15rem}.workflow-card{display:flex;align-items:center;justify-content:space-between;gap:1rem}.workflow-card .row{flex:none}.workflow-menu{position:relative}.workflow-menu summary{list-style:none;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:.34rem .55rem;line-height:1}.workflow-menu summary::-webkit-details-marker{display:none}.workflow-menu > div{position:absolute;right:0;top:calc(100% + .35rem);z-index:4;width:10rem;padding:.35rem;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 28px rgba(25,30,27,.12)}.workflow-menu button{display:block;width:100%;text-align:left;border:0;background:none;padding:.42rem .5rem;font-size:13px}.workflow-menu button.danger{color:var(--bad)}.workflow-editor{max-width:52rem}.workflow-editor .perm{padding:.6rem 0}.reassurance{color:var(--accent);font-size:13px}.success{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;max-width:38rem;z-index:50;border-color:var(--accent)!important}
 /* focused session view: a fixed rail and a contained, breathing chat surface */
 .session-layout{display:grid;grid-template-columns:15.5rem minmax(0,1fr);height:calc(100vh - 58px);min-height:34rem;background:var(--panel);overflow:hidden}
 .session-rail{position:sticky;top:0;height:calc(100vh - 58px);padding:1.35rem 1rem;border-right:1px solid var(--line);background:#fafaf8;display:flex;flex-direction:column;gap:1.15rem;overflow-y:auto}
 .rail-kicker{font-size:11px;font-weight:700;letter-spacing:.09em;color:var(--dim);text-transform:uppercase}.rail-title{font-size:15px;font-weight:680;line-height:1.3}.rail-status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:.4rem}.rail-status i{width:.45rem;height:.45rem;border-radius:50%;background:var(--line);display:inline-block}.rail-status i.live{background:var(--accent)}
-.rail-clock{font-size:12px;color:var(--dim);margin-top:-.6rem}.rail-nav{display:grid;gap:.15rem}.rail-nav button{text-align:left;border:0;background:transparent;padding:.48rem .55rem;border-radius:6px;color:var(--dim);font-size:13px}.rail-nav button:hover{background:var(--bg);color:var(--ink)}.rail-nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
+.rail-clock{font-size:12px;color:var(--dim);margin-top:-.6rem}.rail-progress{display:grid;gap:.35rem;padding:.7rem .6rem;background:var(--bg);border-radius:10px}.rail-progress-line{display:flex;justify-content:space-between;gap:.5rem;font-size:11px;color:var(--dim)}.rail-progress-track{height:4px;background:var(--line);border-radius:99px;overflow:hidden}.rail-progress-track i{display:block;height:100%;background:var(--accent);border-radius:inherit;transition:width .25s ease}.rail-nav{display:grid;gap:.15rem}.rail-nav button{text-align:left;border:0;background:transparent;padding:.48rem .55rem;border-radius:6px;color:var(--dim);font-size:13px}.rail-nav button:hover{background:var(--bg);color:var(--ink)}.rail-nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
 .rail-team{border-top:1px solid var(--line);padding-top:.85rem;margin-top:auto}.team-line{display:flex;align-items:center;justify-content:space-between;gap:.45rem;font-size:12px;padding:.16rem 0}.presence{display:inline-flex;align-items:center;gap:.42rem;min-width:0}.presence i{width:.46rem;height:.46rem;border-radius:50%;background:var(--line);display:inline-block;flex:none}.presence i.live{background:var(--accent)}
-.rail-controls{display:flex;gap:.4rem;border-top:1px solid var(--line);padding-top:.85rem}.rail-controls button{font-size:12px;padding:.35rem .5rem}
-.conversation-shell{min-width:0;min-height:0;height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--panel)}.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.2rem clamp(2rem,4vw,5rem) 1rem;border-bottom:1px solid var(--line)}.chat-title{font-size:17px;font-weight:680}.chat-subtitle{font-size:12px;color:var(--dim);margin-top:.1rem}.chat-time{font-size:12px;color:var(--dim);white-space:nowrap}
+.rail-controls{display:grid;grid-template-columns:1fr 1fr;gap:.45rem;border-top:1px solid var(--line);padding-top:.85rem}.rail-controls button{font-size:12px;padding:.45rem .55rem;text-align:left}.rail-controls .control-complete{grid-column:1/-1;background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:700}.rail-controls .control-stop{color:var(--bad)}
+.conversation-shell{position:relative;min-width:0;min-height:0;height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--panel)}.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.2rem clamp(2rem,4vw,5rem) 1rem;border-bottom:1px solid var(--line)}.chat-title{font-size:17px;font-weight:680}.chat-subtitle{font-size:12px;color:var(--dim);margin-top:.1rem}.chat-time{font-size:12px;color:var(--dim);white-space:nowrap}
 .conversation-feed{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto auto;overflow:hidden}.message-list{min-height:0;overflow-y:auto;padding:1rem clamp(2rem,4vw,5rem) .6rem;scroll-behavior:smooth}.message-list .msg{padding:1rem 0;border-bottom:0;max-width:62rem}.conversation-feed .msg .who{font-size:11px;letter-spacing:.075em;font-weight:750;color:var(--dim)}.conversation-feed .msg .body{white-space:normal;margin-top:.28rem;line-height:1.62}.msg.you .who{color:var(--accent)}.msg.system .body{color:var(--dim);font-size:13px}.handoff{margin:.52rem 0 0;font-size:10px;font-weight:750;letter-spacing:.08em;color:var(--accent)}.response-state{margin-top:.45rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
-.live-work{margin:0;padding:.3rem clamp(2rem,4vw,5rem) .45rem;max-width:none;background:transparent}.live-work-label{font-size:10px;font-weight:750;letter-spacing:.09em;color:var(--accent);margin-bottom:.18rem}.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.55rem;align-items:baseline;font-size:13px;padding:.08rem 0;max-width:62rem}.live-note b{font-size:11px;letter-spacing:.06em}.live-note .dot{color:var(--accent)}
-.rich{max-width:62rem}.rich h3,.rich h4{font-size:14px;margin:.65rem 0 .2rem}.rich h4{font-size:13px}.rich p{margin:.45rem 0}.rich .rich-list{margin:.42rem 0;padding-left:1.1rem}.rich .rich-list div{margin:.16rem 0}.rich code{font-size:.88em;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:.1rem .28rem}.rich .rich-code{margin:.65rem 0;padding:.75rem .85rem;border:1px solid var(--line);background:#f7f7f5;border-radius:7px;overflow:auto;line-height:1.5}.rich .rich-code code{padding:0;border:0;background:transparent}.rich a{color:var(--accent);text-decoration-thickness:1px}.live-note .rich{display:inline}.live-note .rich p{display:inline;margin:0}.live-note .rich .rich-code{display:block}
+.live-work{margin:0;padding:.3rem clamp(2rem,4vw,5rem) .45rem;max-width:none;background:transparent}.live-work-label{font-size:10px;font-weight:750;letter-spacing:.09em;color:var(--accent);margin-bottom:.18rem}.live-work summary{cursor:pointer;list-style:none}.live-work summary::-webkit-details-marker{display:none}.live-work summary::after{content:"Show trail";margin-left:.5rem;color:var(--dim);font-size:10px;font-weight:500;letter-spacing:0}.live-work[open] summary::after{content:"Hide trail"}.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.55rem;align-items:baseline;font-size:13px;padding:.08rem 0;max-width:62rem}.live-note b{font-size:11px;letter-spacing:.06em}.live-note .dot{color:var(--accent)}
+.rich{max-width:62rem}.rich h3,.rich h4{font-size:14px;margin:.65rem 0 .2rem}.rich h4{font-size:13px}.rich p{margin:.45rem 0}.rich .rich-list{margin:.42rem 0;padding-left:1.1rem}.rich .rich-list div{margin:.16rem 0}.rich .rich-quote{margin:.6rem 0;padding:.15rem 0 .15rem .8rem;border-left:2px solid var(--line);color:var(--dim)}.rich code{font-size:.88em;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:.1rem .28rem}.rich .rich-code{margin:.65rem 0;padding:.75rem .85rem;border:1px solid var(--line);background:#f7f7f5;border-radius:7px;overflow:auto;line-height:1.5}.rich .rich-code code{padding:0;border:0;background:transparent}.rich a{color:var(--accent);text-decoration-thickness:1px}.live-note .rich{display:inline}.live-note .rich p{display:inline;margin:0}.live-note .rich .rich-code{display:block}
 .chat-compose{display:flex;gap:.55rem;margin:0;padding:.7rem clamp(2rem,4vw,5rem) 1.7rem;max-width:none}.chat-compose input{min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:.55rem .05rem;background:transparent;max-width:62rem}.chat-compose input:focus{outline:none;border-color:var(--accent)}.chat-compose button{padding:.45rem .8rem}
-.details-panel{margin:0;padding:1rem clamp(2rem,4vw,5rem) 1.5rem;border-top:1px solid var(--line);background:#fcfcfb;max-height:45vh;overflow:auto}.detail-heading{font-size:11px;letter-spacing:.08em;color:var(--dim);font-weight:750;margin-bottom:.7rem}
-@media(max-width:760px){.wrap{padding-left:1rem;padding-right:1rem}.wrap.session-app{padding:0}.session-layout{grid-template-columns:1fr;height:auto;min-height:calc(100vh - 58px)}.session-rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:.6rem}.rail-nav{grid-column:1/-1;display:flex;overflow:auto}.rail-nav button{white-space:nowrap}.rail-team,.rail-controls{display:none}.conversation-shell{min-height:32rem}.message-list{padding-left:1rem;padding-right:1rem}.live-work,.chat-compose{padding-left:1rem;padding-right:1rem}.chat-header{padding-left:1rem;padding-right:1rem}}
+.details-panel{position:absolute;inset:1rem clamp(1rem,3vw,3rem);z-index:5;margin:0;padding:1.2rem clamp(1.25rem,3vw,2.5rem);border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);box-shadow:0 18px 50px rgba(25,30,27,.16);overflow:auto}.detail-heading{font-size:11px;letter-spacing:.08em;color:var(--dim);font-weight:750;margin-bottom:.7rem}.detail-close{float:right;border:0;background:transparent;color:var(--dim);padding:.1rem .3rem}
+@media(max-width:760px){.wrap{padding-left:1rem;padding-right:1rem}.wrap.session-app{padding:0}.session-layout{grid-template-columns:1fr;height:auto;min-height:calc(100vh - 58px)}.session-rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:.6rem}.rail-nav{grid-column:1/-1;display:flex;overflow:auto}.rail-nav button{white-space:nowrap}.rail-team,.rail-controls{display:none}.conversation-shell{min-height:32rem}.message-list{padding-left:1rem;padding-right:1rem}.live-work,.chat-compose{padding-left:1rem;padding-right:1rem}.chat-header{padding-left:1rem;padding-right:1rem}.details-panel{inset:1rem;border-radius:14px}}
 .msg{border-bottom:1px solid var(--line);padding:.7rem 0}
 .msg:last-child{border-bottom:none}
 .msg .who{font-weight:640}
@@ -110,7 +111,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)
   <div class="row">
     <span id="ctx" class="small muted"></span>
     <button class="ghost" id="nav-home">Sessions</button>
-    <button id="nav-new">Start a room</button>
+    <button id="nav-new">Run a workflow</button>
   </div>
 </div></header>
 
@@ -142,9 +143,21 @@ function rich(value) {
     if (block) return blocks[Number(block[1])];
     if (/^###\s+/.test(line)) return `<h4>${line.replace(/^###\s+/, "")}</h4>`;
     if (/^##\s+/.test(line)) return `<h3>${line.replace(/^##\s+/, "")}</h3>`;
+    if (/^>\s?/.test(line)) return `<div class="rich-quote">${line.replace(/^>\s?/, "")}</div>`;
+    if (/^\d+[.)]\s+/.test(line)) return `<div class="rich-list">${line.replace(/^(\d+[.)])\s+/, "$1 ")}</div>`;
     if (/^[-*]\s+/.test(line)) return `<div class="rich-list">${line.replace(/^[-*]\s+/, "• ")}</div>`;
     return line ? `<p>${line}</p>` : "";
   }).join("")}</div>`;
+}
+
+function richInline(value) {
+  let text = esc(value);
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, label, url) => `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`);
+  text = text.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  return text.replace(/\n+/g, " ");
 }
 
 async function api(path, body) {
@@ -164,11 +177,19 @@ function flash(message) {
   box.innerHTML = `<b>Could not do that</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
   clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 7000);
 }
+function confirmNotice(message) {
+  const box = document.getElementById("err");
+  box.className = "err card success"; box.style.borderColor = "var(--accent)";
+  box.innerHTML = `<b>Saved</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
+  clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 4200);
+}
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
-            agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null };
+            agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null,
+            workflowName:"", workflowOriginal:"", workflowAgents:null,
+            workflowPermissions:null, workflowDeadline:"" };
 const app = () => document.getElementById("app");
 
 /* ------------------------------------------------------------------ home */
@@ -180,23 +201,55 @@ async function home() {
   listen();
   document.getElementById("ctx").textContent = S.boot.workspace;
   const list = S.boot.sessions;
+  const workflows = S.boot.presets || [];
   app().innerHTML = "";
-  if (!list.length) {
-    app().append($(`<div class="card stack" style="text-align:center;padding:3.5rem 2rem">
-      <h2>Put your agents in one room</h2>
-      <p class="muted">Describe the work once. Synchri makes a safe workspace and gives you
-        one ready-to-paste setup instruction for each agent.</p>
-      <div class="row" style="justify-content:center"><button class="primary" id="cta">Start a room</button>
-        <button id="advanced">Advanced setup</button></div>
-    </div>`));
-    document.getElementById("cta").onclick = () => quickStart();
-    document.getElementById("advanced").onclick = () => newSession();
-    return;
+  if (!workflows.length) {
+    const welcome = $(`<div class="card stack" style="max-width:48rem;padding:3rem 2rem">
+      <div><h2>Configure your autonomous workflow</h2>
+        <p class="muted">Choose the agents and defaults you want Synchri to use. You can adjust every setting later — nothing starts until you choose work for the team.</p></div>
+      <div class="reassurance">Start with a sensible pair. This is a reusable workflow, not a commitment to your next session.</div>
+      <div class="row"><button class="primary" id="create-workflow">Create workflow</button></div>
+    </div>`);
+    welcome.querySelector("#create-workflow").onclick = () => configureWorkflow();
+    app().append(welcome);
+  } else {
+    const title = $(`<div class="between" style="margin-bottom:1rem"><div><h2>Autonomous workflows</h2>
+      <div class="small muted">Reusable agent teams and defaults. Adjust them whenever you need to.</div></div>
+      <div class="row"><button id="new-workflow">Create workflow</button><button class="primary" id="run-workflow">Run a workflow</button></div></div>`);
+    title.querySelector("#new-workflow").onclick = () => configureWorkflow();
+    title.querySelector("#run-workflow").onclick = () => quickStart();
+    app().append(title);
+    const cards = $(`<div class="workflow-list"></div>`);
+    for (const workflow of workflows) {
+      const agents = workflow.agents || [];
+      const card = $(`<div class="card workflow-card"><div><b>${esc(workflow.name)}</b>
+        <div class="small muted" style="margin-top:.18rem">Long horizon development · ${agents.length} agent${agents.length===1?"":"s"}</div></div>
+        <div class="row"><button class="primary" data-run>Run</button><details class="workflow-menu"><summary aria-label="Workflow options">•••</summary><div>
+          <button data-edit>Edit workflow</button><button data-rename>Rename</button><button class="danger" data-delete>Delete workflow</button>
+        </div></details></div></div>`);
+      card.querySelector("[data-run]").onclick = () => quickStart(workflow.name);
+      card.querySelector("[data-edit]").onclick = () => configureWorkflow(workflow.name);
+      card.querySelector("[data-rename]").onclick = guard(async () => {
+        const name = prompt("New workflow name", workflow.name)?.trim();
+        if (!name || name === workflow.name) return;
+        S.boot.presets = (await api("preset/rename", {name: workflow.name, new_name: name})).presets;
+        confirmNotice(`Renamed workflow to “${name}”.`); await home();
+      });
+      card.querySelector("[data-delete]").onclick = guard(async () => {
+        if (!confirm(`Delete workflow “${workflow.name}”? Previous sessions are not affected.`)) return;
+        S.boot.presets = (await api("preset/delete", {name: workflow.name})).presets;
+        confirmNotice(`Deleted workflow “${workflow.name}”.`); await home();
+      });
+      cards.append(card);
+    }
+    app().append(cards);
   }
-  const title = $(`<div class="between" style="margin-bottom:1rem"><h2>Rooms</h2>
-    <button class="primary" id="new-room">Start a room</button></div>`);
-  title.querySelector("#new-room").onclick = () => quickStart();
-  app().append(title);
+  if (!list.length) return;
+  const sessionsTitle = $(`<div class="between" style="margin:2.5rem 0 1rem"><h3>Previous sessions</h3>
+    <div class="row"><button id="session-workflow">Create workflow</button>${workflows.length?`<button class="primary" id="session-run">Run a workflow</button>`:""}</div></div>`);
+  sessionsTitle.querySelector("#session-workflow").onclick = () => configureWorkflow();
+  const run = sessionsTitle.querySelector("#session-run"); if (run) run.onclick = () => quickStart();
+  app().append(sessionsTitle);
   for (const s of list) {
     const done = ["complete","timed_out","stopped","failed"].includes(s.status);
     const cls = s.status === "active" ? "" : (done ? "dim" : "warn");
@@ -217,66 +270,150 @@ async function home() {
 }
 
 /* ------------------------------------------------------------- quick start */
-async function quickStart() {
+async function quickStart(selectedWorkflow) {
   stopClock();
   app().classList.remove("session-app");
   if (!S.boot) S.boot = await api("bootstrap");
+  const workflows = S.boot.presets || [];
+  if (!workflows.length) return configureWorkflow();
+  const workflow = workflows.find(item => item.name === selectedWorkflow) || workflows[0];
   S.view = "quick"; S.session = null; S.launch = null;
   S.quick = {
     repo_path: S.boot.default_repo || "",
     goal: "",
-    agents: [
-      {name:"codex", runtime:"codex", role:"primary_builder"},
-      {name:"copilot", runtime:"copilot", role:"adversarial_reviewer"},
-    ],
+    deadline: "",
+    preset: workflow.name,
   };
   renderQuick();
+}
+
+/* ----------------------------------------------------------- workflows */
+async function configureWorkflow(name) {
+  stopClock();
+  app().classList.remove("session-app");
+  if (!S.boot) S.boot = await api("bootstrap");
+  S.view = "workflow"; S.session = null;
+  S.workflowOriginal = name || "";
+  S.workflowName = name || "";
+  S.draft = name
+    ? await api("draft", {draft:"workflow", preset:name})
+    : await api("draft/reset", {draft:"workflow"});
+  const savedAgents = S.draft.draft.agents || [];
+  S.workflowAgents = savedAgents.length ? savedAgents.map(agent => ({...agent})) : [
+    {name:"codex", runtime:"codex", role:"primary_builder"},
+    {name:"copilot", runtime:"copilot", role:"adversarial_reviewer"},
+  ];
+  S.workflowPermissions = {...S.draft.draft.permissions};
+  S.workflowDeadline = S.draft.draft.deadline_duration || "";
+  renderWorkflow();
+}
+
+function renderWorkflow() {
+  const agents = S.workflowAgents;
+  app().innerHTML = "";
+  const box = $(`<div class="workflow-editor stack">
+    <div><h2>Configure your autonomous workflow</h2>
+      <p class="muted">Set up the team Synchri will reuse whenever you start work. Nothing launches from this page, and every choice can be changed later.</p></div>
+    <div class="reassurance">Start with the defaults if they fit. You can refine this workflow after seeing it in action.</div>
+    <label><b>Workflow name</b><input id="workflow-name" value="${esc(S.workflowName)}" placeholder="e.g. Product build review"></label>
+    <div class="card stack"><div><b>Agent team</b><div class="small muted">The builder works first. The reviewer follows with an adversarial pass, then both continue the conversation until the work is verified.</div></div>
+      <div id="workflow-agents" class="stack"></div><div><button id="workflow-add">Add an agent</button></div></div>
+    <details class="card"><summary><b>Permissions and pacing</b> <span class="small muted">Optional defaults</span></summary>
+      <div class="small muted" style="margin:.65rem 0">Synchri starts cautiously. These are defaults for sessions using this workflow, and remain adjustable later.</div>
+      <div id="workflow-permissions"></div>
+      <label style="display:block;margin-top:1rem"><b>Suggested timebox</b><input id="workflow-deadline" value="${esc(S.workflowDeadline)}" placeholder="Optional, e.g. 2 hours"></label>
+      <div class="small muted" style="margin-top:.35rem">The clock begins only when collaboration begins. It guides pace; it never cuts work off.</div>
+    </details>
+    <div class="row"><button class="primary" id="workflow-save">Save workflow</button><button id="workflow-cancel">Cancel</button></div>
+  </div>`);
+  app().append(box);
+  const list = box.querySelector("#workflow-agents");
+  const drawAgents = () => {
+    list.innerHTML = "";
+    agents.forEach((agent, index) => {
+      const row = $(`<div class="grid" style="grid-template-columns:minmax(8rem,1fr) minmax(11rem,1.2fr) minmax(11rem,1.2fr) auto;align-items:center">
+        <input value="${esc(agent.name)}" placeholder="agent name">
+        <select>${S.boot.runtimes.map(runtime => `<option value="${runtime.key}" ${runtime.key===agent.runtime?"selected":""}>${esc(runtime.label)}</option>`).join("")}</select>
+        <select>${S.boot.roles.map(role => `<option value="${role.key}" ${role.key===agent.role?"selected":""}>${esc(role.label)}</option>`).join("")}</select>
+        <button class="ghost">Remove</button></div>`);
+      const [name, runtime, role] = row.querySelectorAll("input,select");
+      name.oninput = event => agent.name = event.target.value;
+      runtime.onchange = event => agent.runtime = event.target.value;
+      role.onchange = event => agent.role = event.target.value;
+      row.querySelector("button").onclick = () => { agents.splice(index, 1); drawAgents(); };
+      list.append(row);
+    });
+  };
+  drawAgents();
+  box.querySelector("#workflow-add").onclick = () => {
+    agents.push({name:"", runtime:"generic", role:"participant"}); drawAgents();
+  };
+  const permissions = box.querySelector("#workflow-permissions");
+  for (const group of S.boot.permissions) {
+    const groupEl = $(`<div style="margin-top:.8rem"><div class="small muted" style="font-weight:700;letter-spacing:.06em">${esc(group.group.toUpperCase())}</div></div>`);
+    for (const capability of group.capabilities) {
+      const value = S.workflowPermissions[capability.key] || capability.default;
+      const row = $(`<div class="perm"><div><div>${esc(capability.label)}</div><div class="small muted">${esc(capability.description)}</div></div>
+        <div class="seg"><button data-value="allow" class="${value==="allow"?"on":""}">Yes</button><button data-value="ask" class="${value==="ask"?"on":""}">Ask</button><button data-value="deny" class="${value==="deny"?"on":""}">No</button></div></div>`);
+      row.querySelectorAll("button").forEach(button => button.onclick = () => {
+        S.workflowPermissions[capability.key] = button.dataset.value;
+        row.querySelectorAll("button").forEach(item => item.classList.toggle("on", item === button));
+      });
+      groupEl.append(row);
+    }
+    permissions.append(groupEl);
+  }
+  box.querySelector("#workflow-cancel").onclick = () => home();
+  box.querySelector("#workflow-save").onclick = guard(async () => {
+    const name = box.querySelector("#workflow-name").value.trim();
+    const selectedAgents = agents.filter(agent => agent.name.trim()).map(agent => ({...agent, name:agent.name.trim()}));
+    const deadline = box.querySelector("#workflow-deadline").value.trim();
+    if (!name) throw new Error("Give this workflow a name so you can use it again.");
+    if (selectedAgents.length < 2) throw new Error("A long-horizon workflow needs at least a builder and a reviewer.");
+    S.draft = await api("draft", {draft:"workflow", mode:"long_horizon", agents:selectedAgents,
+      permissions:S.workflowPermissions, deadline});
+    S.boot.presets = (await api("preset", {draft:"workflow", name, replace:S.workflowOriginal || undefined})).presets;
+    confirmNotice(`“${name}” is ready. Choose it whenever you want to start work.`);
+    await home();
+  });
 }
 
 function renderQuick() {
   const q = S.quick;
   app().innerHTML = "";
+  const workflows = S.boot.presets || [];
+  const workflow = workflows.find(item => item.name === q.preset) || workflows[0];
   app().append($(`<div class="quick stack" style="max-width:48rem">
-    <div><h2>Start a collaboration room</h2>
-      <p class="muted">Synchri uses a separate worktree, so your primary checkout stays untouched.</p></div>
+    <div><h2>Run a workflow</h2>
+      <p class="muted">Choose the project and describe the work. Synchri uses your saved team, makes an isolated workspace, and prepares the agent prompts.</p></div>
+    <label><b>Workflow</b><select id="quick-workflow">${workflows.map(item =>
+      `<option value="${esc(item.name)}" ${item.name===workflow.name?"selected":""}>${esc(item.name)}</option>`).join("")}</select></label>
+    <div class="note"><b>${esc(workflow.agents?.map(agent => agent.name).join(" + ") || "Saved team")}</b>
+      <div class="small">These settings are adjustable. Edit this workflow if you want to change the team or its defaults.</div></div>
     <label><b>Project</b><input id="quick-repo" value="${esc(q.repo_path)}"
       placeholder="Paste a GitHub link, owner/repository, or local folder"></label>
     <div class="small muted">No local project folder? Paste <code>owner/repository</code> or a
       GitHub URL. Synchri downloads it into <code>${esc(S.boot.desktop_clone_root)}</code> first.
       Existing local folders work too.</div>
-    <label><b>What do you want the team to do?</b>
-      <textarea id="quick-goal" placeholder="Review the current changes, then fix the most important issue.">${esc(q.goal)}</textarea></label>
-    <div class="card stack"><div><b>Your agents</b>
-      <div class="small muted">Use the names you want them to address each other by.</div></div>
-      <div id="quick-agents" class="stack"></div>
-    </div>
-    <div class="row"><button class="primary" id="quick-go">Create room and setup instructions</button>
-      <button id="quick-advanced">Advanced setup</button></div>
+    <label><b>What should they work on?</b>
+      <textarea id="quick-goal" placeholder="Paste a spec, ticket, notes, or plain-language brief. Any text works.">${esc(q.goal)}</textarea></label>
+    <div class="small muted">Your text is kept exactly as you wrote it. Add acceptance criteria if you want Synchri to track them individually.</div>
+    <details><summary class="small muted">Pacing and advanced setup</summary>
+      <div class="row" style="margin-top:.6rem"><input id="quick-deadline" value="${esc(q.deadline||"")}" placeholder="Optional timebox, e.g. 2 hours"></div>
+      <div class="small muted" style="margin-top:.35rem">The clock starts when collaboration begins, and never ends the work by itself.</div>
+    </details>
+    <div class="row"><button class="primary" id="quick-go">Generate agent prompts</button>
+      <button id="quick-advanced">Edit workflow</button></div>
   </div>`));
-  const agents = document.getElementById("quick-agents");
-  q.agents.forEach((agent, index) => {
-    const info = S.boot.runtimes.find(runtime => runtime.key === agent.runtime) || {};
-    const state = info.managed ? "Ready to start locally" : (info.installed ? "Use external terminal" : "Not found on this Mac");
-    const row = $(`<div class="grid" style="grid-template-columns:1fr 1fr;align-items:center">
-      <input value="${esc(agent.name)}" placeholder="agent name">
-      <select>${S.boot.runtimes.map(runtime =>
-        `<option value="${runtime.key}" ${runtime.key===agent.runtime?"selected":""}>${esc(runtime.label)}</option>`
-      ).join("")}</select><div class="small muted" data-runtime-state style="grid-column:1/-1">${esc(state)}</div></div>`);
-    const [name, runtime] = row.querySelectorAll("input,select");
-    name.oninput = event => q.agents[index].name = event.target.value;
-    runtime.onchange = event => {
-      q.agents[index].runtime = event.target.value;
-      const next = S.boot.runtimes.find(item => item.key === event.target.value) || {};
-      row.querySelector("[data-runtime-state]").textContent = next.managed ? "Ready to start locally"
-        : (next.installed ? "Use external terminal" : "Not found on this Mac");
-    };
-    agents.append(row);
-  });
-  document.getElementById("quick-advanced").onclick = () => newSession();
+  document.getElementById("quick-workflow").onchange = event => { q.preset = event.target.value; renderQuick(); };
+  document.getElementById("quick-advanced").onclick = () => configureWorkflow(q.preset);
   document.getElementById("quick-go").onclick = guard(async () => {
     q.repo_path = document.getElementById("quick-repo").value.trim();
     q.goal = document.getElementById("quick-goal").value.trim();
-    const result = await api("quick-start", q);
+    q.deadline = document.getElementById("quick-deadline").value.trim();
+    const result = await api("quick-start", {
+      repo_path:q.repo_path, goal:q.goal, deadline:q.deadline, preset:q.preset,
+    });
     showLaunch(result);
   });
 }
@@ -317,7 +454,7 @@ function renderLaunch() {
   const managed = l.managed || {readiness:{available:false,agents:[]},run:{phase:"not_started"}};
   const run = managed.run;
   const allManaged = managed.readiness.available;
-  const heading = run.alive ? "Starting your agents" : (allManaged ? "Ready to start" : "Your room is ready");
+  const heading = run.alive ? "Starting your agents" : (allManaged ? "Ready when you are" : "Invite your agents");
   app().append($(`<div class="stack"><div class="between"><div>
     <h2>${heading}</h2>
     <div class="muted small">${esc(l.agents.length)} agent${l.agents.length===1?"":"s"} · isolated worktree ready</div></div>
@@ -331,10 +468,10 @@ function renderLaunch() {
   document.getElementById("refresh").onclick = guard(refreshLaunch);
 
   if (allManaged) {
-    const action = $(`<div class="card stack"><div><b>Run locally</b>
-      <div class="small muted">Synchri will connect the agents, ask each to agree to the contract, then begin the builder automatically.</div>
-      </div><div class="row"><button class="primary" id="managed-start" ${run.alive?"disabled":""}>${run.alive ? "Starting…" : "Start agents"}</button>
-      <button id="external">Use external terminals instead</button></div></div>`);
+    const action = $(`<div class="card stack"><div><b>Let Synchri start them here</b>
+      <div class="small muted">Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.</div>
+      </div><div class="row"><button class="primary" id="managed-start" ${run.alive?"disabled":""}>${run.alive ? "Starting…" : "Start my agents"}</button>
+      <button id="external">Send prompts instead</button></div></div>`);
     action.querySelector("#managed-start").onclick = guard(startManaged);
     action.querySelector("#external").onclick = () => renderExternalSetup(l);
     app().append(action);
@@ -363,7 +500,7 @@ function pollManagedLaunch() {
 function renderExternalSetup(l) {
   const a = l.acknowledgments;
   const external = l.agents.filter(agent => !agent.managed_ready || !l.managed.readiness.available);
-  const note = $(`<div class="note">Synchri cannot launch ${esc(external.map(x=>x.name).join(", "))} from this Mac. Paste the matching prompt below. It will join, read the agreement, and stay connected without status chatter.</div>`);
+  const note = $(`<div class="note">Paste one short prompt into each agent. They will join, read the agreement, and remain available without status chatter.</div>`);
   app().append(note);
   for (const agent of l.agents) {
     const status = agent.joined
@@ -372,18 +509,16 @@ function renderExternalSetup(l) {
     const card = $(`<div class="agent-card"><div class="between"><div><b>${esc(agent.name)}</b>
       <span class="small muted">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>${status}</div>
       <pre>${esc(agent.setup_prompt)}</pre>
-      <div class="row" style="margin-top:.75rem"><button class="primary">Copy prompt</button>
-        <button>Copy join command</button></div></div>`);
-    const [setup, join] = card.querySelectorAll("button");
+      <div class="row" style="margin-top:.75rem"><button class="primary">Copy for ${esc(agent.name)}</button></div></div>`);
+    const [setup] = card.querySelectorAll("button");
     setup.onclick = guard(async () => { await copyText(agent.setup_prompt); setup.textContent = "Copied"; });
-    join.onclick = guard(async () => { await copyText(agent.join_command); join.textContent = "Copied"; });
     app().append(card);
   }
   const action = $(`<div class="card stack" style="margin-top:1rem"><div>
-    <b>Start the collaboration</b><div class="small muted">${l.ready_to_activate
+    <b>When everyone is here</b><div class="small muted">${l.ready_to_activate
       ? "Both agents joined and acknowledged the agreement."
       : `Waiting for: ${esc(a.waiting.join(", ") || l.agents.filter(x=>!x.joined).map(x=>x.name).join(", ") || "an acknowledgement")}`}
-    </div></div><div class="row"><button class="primary" id="activate" ${l.ready_to_activate?"":"disabled"}>Start collaboration</button>
+    </div></div><div class="row"><button class="primary" id="activate" ${l.ready_to_activate?"":"disabled"}>Begin collaboration</button>
       <button id="open">Open room</button></div></div>`);
   action.querySelector("#activate").onclick = guard(async () => {
     await api("activate", {session:S.session}); await openSession(S.session);
@@ -396,7 +531,7 @@ function renderExternalSetup(l) {
 async function newSession(resume) {
   stopClock();
   app().classList.remove("session-app");
-  S.view = "wizard"; S.step = "mode";
+  S.view = "wizard"; S.step = "repository";
   S.draft = resume ? await api("draft?draft=default")
                    : await api("draft/reset", { draft: "default" });
   if (!S.boot) S.boot = await api("bootstrap");
@@ -591,6 +726,7 @@ function stepAgents() {
   save.onclick = guard(async () => {
     S.draft = await api("draft", { draft: "default", agents: agents.filter(a => a.name.trim()) });
     renderWizard();
+    confirmNotice("Your agent team is saved. You can keep going or change it later.");
   });
   const actions = $(`<div class="row" style="margin-top:.4rem"></div>`);
   actions.append(add, save);
@@ -629,7 +765,7 @@ function stepPerms() {
 function stepSpec() {
   const req = S.draft.steps.find(s => s.key === "spec")?.label || "";
   const box = $(`<div class="stack"><h2>What should the agents build?</h2>
-    <div class="muted small">Paste Markdown. This is stored unchanged and becomes the
+    <div class="muted small">Paste any text. This is stored unchanged and becomes the
       contract's source of truth for what "done" means — agents may not rewrite it.</div>
     <textarea id="spec" placeholder="# Product\n\n## Acceptance\n- AUTH-01 users can log in\n- API-01 tasks support CRUD">${esc(S.draft.draft.spec||"")}</textarea>
     <div class="row"><button class="primary" id="save">Save specification</button>
@@ -742,6 +878,10 @@ function listen() {
           refreshSessionChrome();
           const conversation = document.getElementById("conversation-panel");
           if (conversation) await paint("conversation", conversation);
+          if (S.tab !== "conversation" && (what.includes("gates") || what.includes("conversation"))) {
+            const detail = document.getElementById("detail-panel");
+            if (detail) await paint(S.tab, detail);
+          }
         }
       } else if (S.view === "launch" && S.session) {
         const result = await api("launch?session=" + encodeURIComponent(S.session));
@@ -770,14 +910,15 @@ function timeboxText(deadline) {
   return `${String(hours).padStart(2,"0")}:${String(minutes).padStart(2,"0")}:${String(seconds % 60).padStart(2,"0")} remaining`;
 }
 
-function startClock(deadline) {
+function startClock(deadline, status) {
   stopClock();
   const tick = () => {
     const clock = document.getElementById("timebox");
-    if (clock) clock.textContent = timeboxText(deadline);
+    if (clock) clock.textContent = ["complete", "stopped", "failed", "timed_out"].includes(status)
+      ? "Session ended" : timeboxText(deadline);
   };
   tick();
-  if (deadline?.ends_at) S.clock = setInterval(tick, 1000);
+  if (deadline?.ends_at && !["complete", "stopped", "failed", "timed_out"].includes(status)) S.clock = setInterval(tick, 1000);
 }
 
 function stopClock() {
@@ -790,6 +931,7 @@ function renderSession() {
   const working = s.status === "active";
   const current = d.current_actor || (working ? "Waiting for the next turn" : s.status.replace("_", " "));
   const activeNotes = new Set((d.activities || []).map(note => note.name));
+  const gatePercent = g.required ? Math.round((g.satisfied / g.required) * 100) : 0;
   app().innerHTML = "";
   const team = s.participants.map(p => {
     const active = p.name === d.current_actor;
@@ -800,12 +942,13 @@ function renderSession() {
   const layout = $(`<div class="session-layout"><aside class="session-rail">
       <div><div class="rail-kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
       <div class="rail-status"><i id="rail-current-dot" class="${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
-      <div id="timebox" class="rail-clock mono">${esc(timeboxText(s.deadline))}</div>
+      <div id="timebox" class="rail-clock mono">${esc(["complete", "stopped", "failed", "timed_out"].includes(s.status) ? "Session ended" : timeboxText(s.deadline))}</div>
+      <div class="rail-progress"><div class="rail-progress-line"><span>Acceptance gates</span><b id="rail-gates">${esc(g.satisfied + "/" + g.required)}</b></div><span class="rail-progress-track"><i id="rail-gates-bar" style="width:${gatePercent}%"></i></span></div>
       <nav class="rail-nav" aria-label="Session tools">${nav.map(tab =>
         `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
       ).join("")}</nav>
       <div class="rail-team"><div class="rail-kicker" style="margin-bottom:.35rem">Team</div>${team}</div>
-      <div class="rail-controls">${s.status === "active" && d.managed?.readiness?.available && !d.managed?.run?.alive ? `<button id="c-continue">Continue agents</button>` : ""}${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${s.status === "active" ? `<button id="c-complete">Complete</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button id="c-stop">Stop</button>` : ""}</div>
+      <div class="rail-controls">${s.status === "active" && d.managed?.readiness?.available && !d.managed?.run?.alive ? `<button id="c-continue">Continue agents</button>` : ""}${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${["active", "paused"].includes(s.status) ? `<button class="control-complete" id="c-complete">Complete session</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button class="control-stop" id="c-stop">Stop session</button>` : ""}</div>
     </aside><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
       <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.repository.branch || "")}</div></div>
       <div class="chat-time">${esc(g.satisfied + "/" + g.required)} gates verified</div></div>
@@ -813,17 +956,15 @@ function renderSession() {
       <section id="detail-panel" class="details-panel hide"></section></main></div>`);
   app().append(layout);
   const pause = document.getElementById("c-pause");
-  if (pause) pause.onclick = guard(async () => {
-    S.dash = await api("control", { session: S.session,
-      action: s.status === "active" ? "pause" : "resume" }); renderSession(); });
+  if (pause) pause.onclick = guard(() => runSessionControl(pause, s.status === "active" ? "pause" : "resume"));
   const complete = document.getElementById("c-complete");
-  if (complete) complete.onclick = guard(async () => {
+  if (complete) complete.onclick = () => guard(async () => {
     if (!confirm("Complete this session? Synchri will verify its gates, close the room, and create the final changelog.")) return;
-    S.dash = await api("control", { session: S.session, action: "complete" }); renderSession(); });
+    await runSessionControl(complete, "complete"); })();
   const stop = document.getElementById("c-stop");
-  if (stop) stop.onclick = guard(async () => {
+  if (stop) stop.onclick = () => guard(async () => {
     if (!confirm("Stop this session? Agents stop immediately. The worktree and all work stay.")) return;
-    S.dash = await api("control", { session: S.session, action: "stop" }); renderSession(); });
+    await runSessionControl(stop, "stop"); })();
   layout.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => {
     S.tab = button.dataset.tab; renderSession();
   });
@@ -838,20 +979,39 @@ function renderSession() {
   if (S.tab !== "conversation") {
     const panel = document.getElementById("detail-panel");
     panel.classList.remove("hide");
-    panel.innerHTML = `<div class="detail-heading">${esc(S.tab.toUpperCase())}</div><span class="muted small">Loading…</span>`;
+    panel.innerHTML = `<button class="detail-close" aria-label="Close">Close</button><div class="detail-heading">${esc(S.tab.toUpperCase())}</div><span class="muted small">Loading…</span>`;
+    panel.querySelector(".detail-close").onclick = () => { S.tab = "conversation"; renderSession(); };
     paint(S.tab, panel).catch(error => panel.innerHTML = `<span class="muted">${esc(error.message)}</span>`);
   }
-  startClock(s.deadline);
+  startClock(s.deadline, s.status);
+}
+
+async function runSessionControl(button, action) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = action === "complete" ? "Verifying…" : `${action[0].toUpperCase()+action.slice(1)}…`;
+  try {
+    S.dash = await api("control", {session:S.session, action});
+    renderSession();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = label;
+    throw error;
+  }
 }
 
 function refreshSessionChrome() {
-  const d = S.dash, s = d.session;
+  const d = S.dash, s = d.session, g = d.gates.summary;
   const current = d.current_actor || (s.status === "active" ? "Waiting for the next turn" : s.status.replace("_", " "));
   const activeNotes = new Set((d.activities || []).map(note => note.name));
   const currentEl = document.getElementById("rail-current");
   if (currentEl) currentEl.textContent = current;
   const dot = document.getElementById("rail-current-dot");
   if (dot) dot.classList.toggle("live", s.status === "active");
+  const gateText = document.getElementById("rail-gates");
+  if (gateText) gateText.textContent = `${g.satisfied}/${g.required}`;
+  const gateBar = document.getElementById("rail-gates-bar");
+  if (gateBar) gateBar.style.width = `${g.required ? Math.round((g.satisfied / g.required) * 100) : 0}%`;
   document.querySelectorAll(".team-line[data-member]").forEach(row => {
     const name = row.dataset.member;
     const active = name === d.current_actor;
@@ -873,10 +1033,14 @@ async function paint(tab, el) {
     const caretEnd = previousInput?.selectionEnd ?? draftValue.length;
     const r = await api("conversation" + q);
     const activityTrail = d.activity_entries || d.activities || [];
-    const liveWork = `<section class="live-work" aria-live="polite">
-      ${activityTrail.length ? `<div class="live-work-label">LIVE WORK · THIS TURN</div>${activityTrail.map(note =>
+    const currentActivity = activityTrail[activityTrail.length - 1];
+    const previousActivities = activityTrail.slice(0, -1);
+    const liveWork = currentActivity ? `<details class="live-work" aria-live="polite"><summary>
+        <span class="live-work-label">LIVE WORK</span>
+        <span class="live-note"><span class="dot">●</span><b>${esc(String(currentActivity.name).toUpperCase())}</b><span>${richInline(currentActivity.summary)}</span></span>
+      </summary>${previousActivities.length ? `<div style="margin-top:.3rem">${previousActivities.map(note =>
         `<div class="live-note"><span class="dot">●</span><b>${esc(String(note.name).toUpperCase())}</b><div>${rich(note.summary)}</div></div>`
-      ).join("")}` : ""}</section>`;
+      ).join("")}</div>` : ""}</details>` : `<section class="live-work" aria-live="polite"></section>`;
     const messages = r.messages.length ? r.messages.map(m => {
       const speaker = m.metadata?.source === "session_activation" ? "SYNCHRI"
         : (m.sender === "human" ? "YOU" : String(m.sender).toUpperCase());
@@ -921,16 +1085,37 @@ async function paint(tab, el) {
     el.innerHTML = `<div class="rich">${rich(r.markdown)}</div>`;
   } else if (tab === "gates") {
     const r = await api("gates" + q);
-    el.innerHTML = r.gates.length ? `<table><thead><tr><th>Gate</th><th>Status</th><th>Description</th>
-      <th>Evidence</th></tr></thead><tbody>${r.gates.map(x=>`<tr>
-      <td class="mono">${esc(x.gate_id)}</td>
-      <td><span class="pill ${x.satisfied?"":(x.status==="fail"?"bad":"dim")}">${esc(x.status)}</span></td>
-      <td>${esc(x.description)}</td>
-      <td class="small muted">${esc([...x.evidence,...x.tests,...x.commits].join(", ")||"none")}</td>
-      </tr>`).join("")}</tbody></table>
-      <div class="small muted" style="margin-top:.7rem">A gate passes only with evidence and both
-      sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>`
+    const editable = !["complete", "stopped", "failed", "timed_out"].includes(d.session.status);
+    el.innerHTML = r.gates.length ? `<div class="between"><div><b>${r.summary.satisfied}/${r.summary.required} verified</b>
+      <div class="small muted">Agents report evidence here as they work. You can correct or override any gate.</div></div></div>
+      <div class="stack" style="margin-top:1rem">${r.gates.map(x=>`<div class="card gate-card" data-gate="${esc(x.gate_id)}">
+        <div class="between"><div><b class="mono">${esc(x.gate_id)}</b><div class="small" style="margin-top:.18rem">${esc(x.description)}</div></div>
+          <select class="gate-status" ${editable?"":"disabled"}>${["pending","in_progress","pass","fail","unverified","waived"].map(status => `<option value="${status}" ${x.status===status?"selected":""}>${status.replace("_"," ")}</option>`).join("")}</select></div>
+        <div class="small muted" style="margin-top:.65rem">${esc([...x.evidence,...x.tests,...x.commits].join(" · ") || "No evidence recorded yet.")}</div>
+        <div class="small muted" style="margin-top:.25rem">Builder: ${esc(x.builder_assessment || "not recorded")} · Reviewer: ${esc(x.reviewer_assessment || "not recorded")}</div>
+        ${editable?`<details style="margin-top:.65rem"><summary class="small muted">Add evidence or override</summary><div class="grid" style="margin-top:.55rem"><input class="gate-evidence" placeholder="Evidence, test, or commit"><input class="gate-builder" placeholder="Builder assessment"><input class="gate-reviewer" placeholder="Reviewer assessment"><button class="primary gate-save">Save gate</button></div></details>`:""}
+        ${x.blocker?`<div class="small" style="color:var(--warn);margin-top:.55rem">${esc(x.blocker)}</div>`:""}</div>`).join("")}</div>
+      <div class="small muted" style="margin-top:.9rem">A gate passes only with evidence and both sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>`
       : `<span class="muted">No gates defined. Add acceptance criteria to the spec.</span>`;
+    if (editable) el.querySelectorAll(".gate-card").forEach(card => {
+      const id = card.dataset.gate;
+      card.querySelector(".gate-status").onchange = guard(async event => {
+        await api("gate", {session:S.session, gate_id:id, status:event.target.value, actor:"human"});
+        S.dash = await api("dashboard" + q); await paint("gates", el);
+      });
+      const save = card.querySelector(".gate-save");
+      if (save) save.onclick = guard(async () => {
+        const evidence = card.querySelector(".gate-evidence").value.trim();
+        const builder = card.querySelector(".gate-builder").value.trim();
+        const reviewer = card.querySelector(".gate-reviewer").value.trim();
+        const payload = {session:S.session, gate_id:id, actor:"human"};
+        if (evidence) payload.evidence = [evidence];
+        if (builder) payload.builder_assessment = builder;
+        if (reviewer) payload.reviewer_assessment = reviewer;
+        await api("gate", payload);
+        S.dash = await api("dashboard" + q); await paint("gates", el); confirmNotice(`Updated ${id}.`);
+      });
+    });
   } else if (tab === "tests") {
     const t = d.tests;
     el.innerHTML = `<div class="between"><div>

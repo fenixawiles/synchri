@@ -39,7 +39,14 @@ def extract_gates(spec_text: str) -> list[Gate]:
     explicit = _explicit_gates(spec_text)
     if explicit:
         return explicit[:MAX_GATES]
-    return _acceptance_section_gates(spec_text)[:MAX_GATES]
+    accepted = _acceptance_section_gates(spec_text)
+    if accepted:
+        return accepted[:MAX_GATES]
+    # The product brief is allowed to be a ticket, pasted chat, plain prose,
+    # or any other text.  A generic evidence gate keeps that unconstrained
+    # input honest at completion without pretending Synchri understood or
+    # rewrote the user's requirements.
+    return [Gate(gate_id="SPEC-01", description="Deliver the supplied specification.")]
 
 
 def _explicit_gates(spec_text: str) -> list[Gate]:
@@ -93,8 +100,5 @@ def _trim(text: str) -> str:
 
 def describe(gates: list[Gate]) -> str:
     if not gates:
-        return (
-            "No acceptance criteria detected. Add IDs like 'AUTH-01 ...' or an "
-            "'## Acceptance' section, or define gates yourself."
-        )
+        return "No acceptance criteria detected. Define gates yourself if you need more than the supplied-specification gate."
     return f"Detected {len(gates)} acceptance gate(s): " + ", ".join(g.gate_id for g in gates)

@@ -771,6 +771,57 @@ def test_completion_requires_evidence_and_both_sign_offs(manager, repo, agents):
     assert "session.completed" in event_types
 
 
+def test_agent_gate_reports_merge_evidence_and_primary_can_complete(manager, repo, agents):
+    """Agent progress is durable data, not just text emitted into the room."""
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [Gate("AUTH-01", "login works")])
+
+    builder = manager.report_gate(
+        record.session_id,
+        "AUTH-01",
+        actor="claude",
+        status="in_progress",
+        assessment="implemented the login flow",
+        evidence=["src/auth.py"],
+        tests=["pytest tests/test_auth.py::test_login"],
+        commits=["abc123"],
+    )
+    assert builder.status == "in_progress"
+    assert builder.builder_assessment == "implemented the login flow"
+    assert builder.tests == ["pytest tests/test_auth.py::test_login"]
+
+    reviewer = manager.report_gate(
+        record.session_id,
+        "AUTH-01",
+        actor="codex",
+        status="pass",
+        assessment="verified independently",
+        evidence=["reviewed the login boundary"],
+    )
+    assert reviewer.status == "pass"
+    assert reviewer.builder_assessment == "implemented the login flow"
+    assert reviewer.reviewer_assessment == "verified independently"
+    assert set(reviewer.evidence) == {"src/auth.py", "reviewed the login boundary"}
+
+    completed = manager.complete_by_agent(record.session_id, "claude")
+    assert completed.status == SessionStatus.COMPLETE.value
+
+
+def test_only_the_primary_builder_can_request_agent_completion(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    with pytest.raises(StateError) as exc:
+        manager.complete_by_agent(record.session_id, "codex")
+    assert exc.value.code == "agent_not_authorized"
+
+
+def test_stopping_a_session_also_stops_its_room(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    stopped = manager.stop(record.session_id)
+    assert stopped.status == SessionStatus.STOPPED.value
+    room = manager.broker.room_status(record.room_id, credential=manager._human_credential(record))
+    assert room["room"]["status"] == "stopped"
+
+
 def test_unverified_is_not_a_pass(manager, repo, agents):
     record = make_session(manager, repo, agents)
     manager.set_gates(record.session_id, [Gate("AUTH-01", "login works")])
@@ -780,13 +831,17 @@ def test_unverified_is_not_a_pass(manager, repo, agents):
     assert manager.handoff_report(record.session_id)["gates"]["unverified"] == ["AUTH-01"]
 
 
-def test_a_session_with_no_gates_cannot_complete(manager, repo, agents):
-    # A spec with no detectable criteria yields no gates to extract.
+def test_plain_text_spec_gets_one_honest_generic_gate(manager, repo, agents):
+    # Plain text is a valid brief, even when it does not contain formal IDs.
+    # It still needs evidence before a session can complete.
     record = make_session(manager, repo, agents, spec=ProductSpec(text="Make it nicer."))
-    assert manager.gates(record.session_id) == []
+    gates = manager.gates(record.session_id)
+    assert [(gate.gate_id, gate.description) for gate in gates] == [
+        ("SPEC-01", "Deliver the supplied specification.")
+    ]
     with pytest.raises(StateError) as exc:
         manager.complete(record.session_id)
-    assert exc.value.code == "no_gates"
+    assert exc.value.code == "gates_unsatisfied"
 
 
 def test_gate_summary_lists_concrete_blockers():
@@ -857,6 +912,7 @@ def test_presets_never_store_session_specific_state(workspace, repo, agents):
     stored = json.loads(Path(path).read_text(encoding="utf-8"))
     for forbidden in ("spec", "deadline", "worktree", "session_id", "repo_path"):
         assert forbidden not in stored
+    assert stored["deadline_duration"] == "10 hours"
 
 
 def test_loading_a_missing_preset_is_not_found(workspace):
@@ -1006,7 +1062,7 @@ def test_the_wizard_hides_steps_a_mode_does_not_need(repo):
     long_horizon = SessionDraft()
     long_horizon.set_mode("long_horizon")
     labels = dict(long_horizon.visible_steps())
-    assert labels["spec"] == "Describe what to build"
+    assert labels["spec"] == "Describe the work"
 
 
 def test_the_wizard_can_go_back_and_change_earlier_choices(repo, agents):
@@ -1101,8 +1157,9 @@ def test_cli_start_refuses_incomplete_configuration(workspace, repo, capsys):
 def test_cli_dry_run_creates_nothing(workspace, repo, capsys):
     before = worktree_module.list_session_worktrees(repo)
     code = run_cli(
-        workspace, "--json", "start", "--yes", "--dry-run", "--mode", "review_audit",
-        "--repo", str(repo), "--agent", "codex:codex:auditor", "--spec", "Audit auth.",
+        workspace, "--json", "start", "--yes", "--dry-run", "--mode", "long_horizon",
+        "--repo", str(repo), "--agent", "codex:codex:primary_builder",
+        "--agent", "copilot:copilot:adversarial_reviewer", "--spec", "Audit auth.",
     )
     payload = json.loads(capsys.readouterr().out)
     assert code == 0 and payload["dry_run"] is True
@@ -1187,8 +1244,9 @@ def test_explicit_ids_win_over_bullets():
 def test_extraction_reports_when_it_finds_nothing():
     from synchri.session.extract import describe, extract_gates
 
-    assert extract_gates("just build something good") == []
-    assert "No acceptance criteria detected" in describe([])
+    gates = extract_gates("just build something good")
+    assert [gate.gate_id for gate in gates] == ["SPEC-01"]
+    assert "SPEC-01" in describe(gates)
 
 
 def test_extracted_gates_can_be_replaced_by_the_user(manager, repo, agents):

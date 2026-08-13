@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -21,6 +22,8 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 #: How long a writer waits for a competing writer before giving up.
 DEFAULT_BUSY_TIMEOUT_MS = 10_000
+INITIALIZE_RETRIES = 8
+INITIALIZE_RETRY_SECONDS = 0.05
 
 
 def connect(db_path: Path, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS) -> sqlite3.Connection:
@@ -54,14 +57,26 @@ def initialize(conn: sqlite3.Connection) -> None:
     which makes this idempotent and safe when two processes race to create the
     workspace — SQLite serializes the writers.
     """
-    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    with transaction(conn):
-        _apply_additive_migrations(conn)
-        conn.execute(
-            "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (SCHEMA_VERSION,),
-        )
+    # Independent agent terminals may reach ``Broker()`` for the first time
+    # at exactly the same moment. SQLite serializes that safely, but schema
+    # bootstrap includes DDL whose lock upgrade can briefly fail before the
+    # normal busy timeout applies. Retry the complete idempotent bootstrap so
+    # "join the room" does not become an avoidable connection error.
+    for attempt in range(INITIALIZE_RETRIES):
+        try:
+            conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            with transaction(conn):
+                _apply_additive_migrations(conn)
+                conn.execute(
+                    "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (SCHEMA_VERSION,),
+                )
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == INITIALIZE_RETRIES - 1:
+                raise
+            time.sleep(INITIALIZE_RETRY_SECONDS * (attempt + 1))
 
 
 #: Columns added after the first release.  The schema is only ever extended

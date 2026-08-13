@@ -23,7 +23,7 @@ from ..session.escalation import EscalationPolicy
 from ..session.manager import SessionManager
 from ..session.modes import KNOWN_RUNTIMES, ParticipantPlan, list_modes, policy_for
 from ..session.permissions import BY_KEY, Decision
-from . import render
+from . import render, session as session_files
 
 
 # ----------------------------------------------------------------------
@@ -96,6 +96,12 @@ def add_parsers(sub, command) -> None:
     session.add_argument("--detail", default="", help="escalation detail")
     session.add_argument("--set", dest="set_status", help="new gate status")
     session.add_argument("--evidence", action="append", default=[])
+    session.add_argument(
+        "--assessment",
+        help="your evidence-backed assessment for a gate; recorded under your session role",
+    )
+    session.add_argument("--test", action="append", default=[], help="test evidence for a gate")
+    session.add_argument("--commit", action="append", default=[], help="commit evidence for a gate")
     session.add_argument("--reason", help="reason, for stop")
 
     preset = command("preset", "Save and reuse session configurations.")
@@ -466,6 +472,27 @@ def cmd_session(args: argparse.Namespace, broker: Broker) -> int:
 
     session_id = _resolve_session(manager, args)
 
+    def participant_credential(actor: str):
+        """Require a saved, valid room identity for an agent-only action.
+
+        ``--as`` is not treated as a cosmetic attribution label when an agent
+        is updating durable progress or closing a room.  The named participant
+        must have joined this exact room and present the secret created at
+        join time.
+        """
+        record = manager.get(session_id)
+        if not record.room_id:
+            raise ValidationError("this session has no room identity")
+        credential = session_files.resolve_credential(
+            broker.workspace, record.room_id, actor
+        )
+        if not credential.secret:
+            raise ValidationError(
+                f"{actor!r} has not joined this room on this machine; join before reporting progress"
+            )
+        broker.turn_status(record.room_id, credential=credential)
+        return credential
+
     if action == "show":
         record = manager.get(session_id)
         return _out(args, record.to_dict(), render_session(record))
@@ -499,13 +526,27 @@ def cmd_session(args: argparse.Namespace, broker: Broker) -> int:
         return _out(args, data, render_dashboard(data))
     if action == "gates":
         if args.value and args.set_status:
-            gate = manager.update_gate(
-                session_id,
-                args.value,
-                actor=args.actor,
-                status=args.set_status,
-                **({"evidence": args.evidence} if args.evidence else {}),
-            )
+            if args.actor:
+                participant_credential(args.actor)
+                gate = manager.report_gate(
+                    session_id,
+                    args.value,
+                    actor=args.actor,
+                    status=args.set_status,
+                    assessment=args.assessment,
+                    evidence=args.evidence,
+                    tests=args.test,
+                    commits=args.commit,
+                )
+            else:
+                gate = manager.update_gate(
+                    session_id,
+                    args.value,
+                    status=args.set_status,
+                    **({"evidence": args.evidence} if args.evidence else {}),
+                    **({"tests": args.test} if args.test else {}),
+                    **({"commits": args.commit} if args.commit else {}),
+                )
             return _out(args, gate.to_dict(), gate.render())
         gates = manager.gates(session_id)
         from ..session.gates import summarize
@@ -517,7 +558,11 @@ def cmd_session(args: argparse.Namespace, broker: Broker) -> int:
             text += f"\n  blocked: {blocker}"
         return _out(args, {"gates": [g.to_dict() for g in gates], "summary": report}, text)
     if action == "complete":
-        manager.complete(session_id)
+        if args.actor:
+            participant_credential(args.actor)
+            manager.complete_by_agent(session_id, args.actor)
+        else:
+            manager.complete(session_id)
         report = manager.handoff_report(session_id)
         return _out(args, report, render_handoff(report))
     if action == "stop":

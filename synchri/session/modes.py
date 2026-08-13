@@ -17,6 +17,9 @@ from .permissions import Decision, PermissionSet
 
 
 class SessionMode(str, Enum):
+    # Keep the historical values readable so an existing room is never made
+    # unreadable by an app upgrade.  New sessions intentionally expose only
+    # Long Horizon Development; it is the product Synchri is concentrating on.
     INTERACTIVE = "interactive"
     LONG_HORIZON = "long_horizon"
     REVIEW_AUDIT = "review_audit"
@@ -187,10 +190,13 @@ Completion requires evidence, not agreement. A gate is PASS only when there are
 tests, commits, or inspectable artifacts backing it, and both the builder and the
 reviewer have signed off. If you cannot verify a gate, mark it UNVERIFIED.
 
-When the final evidence and both assessments are in the room, send one concise
-completion-ready response to the human. Do not stop the room yourself or treat
-an ordinary completed response as the end: the human performs Synchri's explicit
-completion transition, which closes the room and preserves the final changelog.
+Record gate progress as it happens. At the end of a completed turn, use Synchri
+control lines for every gate you touched: `SYNCHRI-GATE: ID|status|assessment`,
+followed by `SYNCHRI-EVIDENCE`, `SYNCHRI-TEST`, and `SYNCHRI-COMMIT` lines for
+that gate. These update the durable progress view; a claim in ordinary prose
+does not. The Primary Builder may add `SYNCHRI-COMPLETE` only after all required
+gates have evidence and both assessments. Synchri verifies that claim, closes
+the room, and writes the final changelog; it never completes on prose alone.
 
 If a timebox is present, use it as pacing guidance: explore early, implement and
 review in the middle, and stabilise near its end. It is not a stop condition.
@@ -254,6 +260,13 @@ POLICIES: dict[SessionMode, ModePolicy] = {
 }
 
 
+# ``POLICIES`` remains a compatibility registry for rooms made by early builds.
+# This deliberately smaller list is the new-session product surface used by the
+# UI and CLI.  Do not turn a persisted interactive/audit room into an error just
+# because it no longer appears in the starter flow.
+NEW_SESSION_MODES: tuple[SessionMode, ...] = (SessionMode.LONG_HORIZON,)
+
+
 def policy_for(mode: str | SessionMode) -> ModePolicy:
     try:
         resolved = mode if isinstance(mode, SessionMode) else SessionMode(str(mode))
@@ -274,7 +287,7 @@ def resolve_role(value: str | Role) -> str:
 
 
 def list_modes() -> list[dict]:
-    return [POLICIES[mode].to_dict() for mode in SessionMode]
+    return [POLICIES[mode].to_dict() for mode in NEW_SESSION_MODES]
 
 
 @dataclass

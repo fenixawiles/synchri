@@ -18,17 +18,23 @@ from ..errors import ValidationError
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
-from .modes import KNOWN_RUNTIMES, ParticipantPlan, Role, list_modes, policy_for, resolve_role
+from .modes import (
+    KNOWN_RUNTIMES,
+    ParticipantPlan,
+    Role,
+    SessionMode,
+    list_modes,
+    policy_for,
+    resolve_role,
+)
 from .permissions import PermissionSet
 from .spec import ProductSpec
 
 STEPS = (
-    ("mode", "Choose how this session runs"),
     ("repository", "Choose the repository"),
-    ("worktree", "Create an isolated workspace"),
     ("agents", "Choose agents and roles"),
     ("permissions", "Decide what agents may do"),
-    ("spec", "Describe what to build"),
+    ("spec", "Describe the work"),
     ("deadline", "Set a timebox (optional)"),
     ("review", "Review the session"),
 )
@@ -38,7 +44,10 @@ STEPS = (
 class SessionDraft:
     """Everything the user has chosen so far. Nothing here touches disk."""
 
-    mode: str | None = None
+    # Long Horizon Development is the whole new-session product.  Historic
+    # modes remain loadable through ``set_mode`` for old rooms, but nobody new
+    # should have to make a mode decision before describing their work.
+    mode: str | None = SessionMode.LONG_HORIZON.value
     repo_path: str | None = None
     base_branch: str | None = None
     worktree_name: str | None = None
@@ -47,6 +56,9 @@ class SessionDraft:
     permissions: PermissionSet = field(default_factory=PermissionSet.defaults)
     spec: ProductSpec | None = None
     deadline: Deadline | None = None
+    #: Reusable pacing preference.  Unlike a resolved Deadline, this belongs
+    #: in a preset and begins only when collaboration actually begins.
+    deadline_duration: str | None = None
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
     name: str | None = None
     _repo_status: worktree_module.RepoStatus | None = field(default=None, repr=False)
@@ -185,10 +197,12 @@ class SessionDraft:
 
     def set_deadline_duration(self, text: str) -> "SessionDraft":
         self.deadline = Deadline.from_duration(text)
+        self.deadline_duration = text.strip()
         return self
 
     def set_deadline_at(self, timestamp: str) -> "SessionDraft":
         self.deadline = Deadline.from_timestamp(timestamp)
+        self.deadline_duration = None
         return self
 
     def set_escalation(self, policy: EscalationPolicy) -> "SessionDraft":
@@ -299,7 +313,15 @@ class SessionDraft:
             "worktree_name": self.worktree_name,
             "worktree_parent": self.worktree_parent,
             "spec": self.spec.to_dict() if self.spec else None,
-            "deadline": self.deadline.to_dict() if self.deadline else None,
+            # A duration draft has no meaningful absolute timestamp until the
+            # session begins. Persist only its text preference so reopening a
+            # setup screen never starts a hidden countdown.
+            "deadline": (
+                self.deadline.to_dict()
+                if self.deadline and not self.deadline_duration
+                else None
+            ),
+            "deadline_duration": self.deadline_duration,
             "name": self.name,
         }
 
@@ -322,13 +344,19 @@ class SessionDraft:
         draft.name = state.get("name")
         if state.get("spec"):
             draft.spec = ProductSpec.from_dict(state["spec"])
-        if state.get("deadline"):
+        if state.get("deadline_duration"):
+            draft.set_deadline_duration(state["deadline_duration"])
+        elif state.get("deadline"):
             restored = Deadline.from_dict(state["deadline"])
             draft.deadline = restored
         return draft
 
     def to_preset(self) -> dict:
-        """Reusable configuration only. No spec, no deadline, no worktree, no ids."""
+        """Reusable configuration only. No spec, worktree, or session ids.
+
+        A duration is a preference rather than an absolute timestamp, so it is
+        safe—and useful—to reuse. The actual clock starts on activation.
+        """
         return {
             "mode": self.mode,
             "agents": [
@@ -337,6 +365,7 @@ class SessionDraft:
             ],
             "permissions": self.permissions.to_dict(),
             "escalation": self.escalation.to_dict(),
+            "deadline_duration": self.deadline_duration,
         }
 
     @classmethod
@@ -346,6 +375,8 @@ class SessionDraft:
             draft.set_mode(preset["mode"])
         draft.permissions = PermissionSet.from_dict(preset.get("permissions"))
         draft.escalation = EscalationPolicy.from_dict(preset.get("escalation"))
+        if preset.get("deadline_duration"):
+            draft.set_deadline_duration(preset["deadline_duration"])
         draft.participants = [
             ParticipantPlan(
                 name=a["name"],

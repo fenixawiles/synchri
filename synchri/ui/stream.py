@@ -45,6 +45,7 @@ class Fingerprint:
 
     sessions: tuple
     room_seq: tuple[int, str]
+    gates: tuple
     activities: tuple
     activity_entries: tuple
     drafts: tuple
@@ -56,6 +57,7 @@ class Fingerprint:
             (r.session_id, r.status, r.updated_at, r.contract_revision) for r in records
         )
         room_seq = (0, "")
+        gates: tuple = ()
         activities: tuple = ()
         activity_entries: tuple = ()
         if session_id:
@@ -77,9 +79,17 @@ class Fingerprint:
                     (item["entry_id"], item["summary"], item["expires_at"])
                     for item in dao.list_live_activity_entries(manager.conn, record.room_id)
                 )
+            if record:
+                gates = tuple(
+                    (gate.gate_id, gate.status, tuple(gate.evidence), tuple(gate.tests),
+                     tuple(gate.commits), gate.builder_assessment, gate.reviewer_assessment,
+                     gate.updated_at)
+                    for gate in manager.gates(record.session_id)
+                )
         return cls(
             sessions=sessions,
             room_seq=room_seq,
+            gates=gates,
             activities=activities,
             activity_entries=activity_entries,
             drafts=tuple(sorted(drafts_module.versions(manager.conn).items())),
@@ -122,6 +132,8 @@ def events(workspace: Workspace, session_id: str | None, *, stop=lambda: False):
                     changed.append("sessions")
                 if current.room_seq != previous.room_seq:
                     changed.append("conversation")
+                if current.gates != previous.gates:
+                    changed.append("gates")
                 if current.activities != previous.activities and "conversation" not in changed:
                     changed.append("conversation")
                 if current.activity_entries != previous.activity_entries and "conversation" not in changed:

@@ -70,6 +70,16 @@ TERMINAL = {
 }
 
 
+def _append_unique(existing: list[str], added: list[str]) -> list[str]:
+    """Preserve evidence history while avoiding duplicate reports."""
+    merged = list(existing)
+    for value in added:
+        text = str(value).strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
+
+
 @dataclass
 class SessionRecord:
     """A session as stored. Configuration plus lifecycle state."""
@@ -496,7 +506,19 @@ class SessionManager:
                 code="awaiting_join",
             )
         now = utc_now()
-        self._update(session_id, status=SessionStatus.ACTIVE.value, activated_at=now)
+        # A duration is selected during setup, but it is a suggestion for the
+        # collaboration—not a stopwatch that punishes the user while agents
+        # join or review the contract. Rebase it at the one authoritative
+        # transition into active work. Fixed timestamps remain untouched.
+        activated_deadline = (
+            record.deadline.start_when_collaboration_begins()
+            if record.deadline
+            else None
+        )
+        changes = {"status": SessionStatus.ACTIVE.value, "activated_at": now}
+        if activated_deadline and activated_deadline is not record.deadline:
+            changes["deadline"] = json.dumps(activated_deadline.to_dict())
+        self._update(session_id, **changes)
         self._log(record, ev.SESSION_ACTIVATED, {"revision": record.contract_revision})
         try:
             self._open_collaboration(record)
@@ -650,6 +672,12 @@ class SessionManager:
         return self.gates(session_id)
 
     def update_gate(self, session_id: str, gate_id: str, *, actor: str | None = None, **fields) -> Gate:
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(
+                f"cannot update a gate after the session is {record.status}",
+                code="session_finished",
+            )
         existing = {g.gate_id: g for g in self.gates(session_id)}
         if gate_id not in existing:
             raise NotFoundError(f"no gate {gate_id!r} in this session")
@@ -664,11 +692,60 @@ class SessionManager:
         with db.transaction(self.conn):
             self._write_gate(session_id, gate)
         self._log(
-            self.get(session_id),
+            record,
             ev.SESSION_GATE_UPDATED,
             {"gate_id": gate_id, "status": gate.status, "actor": actor},
         )
         return gate
+
+    def report_gate(
+        self,
+        session_id: str,
+        gate_id: str,
+        *,
+        actor: str,
+        status: str | None = None,
+        assessment: str | None = None,
+        evidence: list[str] | None = None,
+        tests: list[str] | None = None,
+        commits: list[str] | None = None,
+    ) -> Gate:
+        """Merge one agent's evidence-bearing assessment into an existing gate.
+
+        Agents can report their own work directly, but completion remains
+        evidence-backed: builder and reviewer assessments both have to exist
+        before a PASS can close the session.  Merging, instead of replacing,
+        means a review cannot accidentally erase the builder's test evidence.
+        """
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(
+                f"cannot report a gate after the session is {record.status}",
+                code="session_finished",
+            )
+        plan = next((item for item in record.participants if item.name == actor), None)
+        if plan is None:
+            raise ValidationError(f"{actor!r} is not a participant in this session")
+        current = next((gate for gate in self.gates(session_id) if gate.gate_id == gate_id), None)
+        if current is None:
+            raise NotFoundError(f"no gate {gate_id!r} in this session")
+        fields: dict[str, object] = {}
+        if status:
+            fields["status"] = status
+        if evidence:
+            fields["evidence"] = _append_unique(current.evidence, evidence)
+        if tests:
+            fields["tests"] = _append_unique(current.tests, tests)
+        if commits:
+            fields["commits"] = _append_unique(current.commits, commits)
+        if assessment:
+            if plan.role == "primary_builder":
+                fields["builder_assessment"] = assessment
+            elif plan.role in {"adversarial_reviewer", "verifier", "auditor"}:
+                fields["reviewer_assessment"] = assessment
+            else:
+                fields["evidence"] = _append_unique(current.evidence, [assessment])
+        return self.update_gate(session_id, gate_id, actor=actor, **fields)
 
     def gates(self, session_id: str) -> list[Gate]:
         rows = self.conn.execute(
@@ -775,6 +852,23 @@ class SessionManager:
             raise
         return completed
 
+    def complete_by_agent(self, session_id: str, actor: str) -> SessionRecord:
+        """Allow the designated builder to request the normal verified finish.
+
+        This is intentionally not a bypass: it invokes the same evidence and
+        reviewer-signoff checks as a human pressing Complete in the app.  It
+        simply gives the agent leading a long-horizon build a durable way to
+        close its own room when the work is actually ready.
+        """
+        record = self.get(session_id)
+        plan = next((item for item in record.participants if item.name == actor), None)
+        if plan is None or plan.role != "primary_builder":
+            raise StateError(
+                "only the Primary Builder may complete a session",
+                code="agent_not_authorized",
+            )
+        return self.complete(session_id)
+
     def final_changelog(self, session_id: str) -> dict:
         """Return the durable artifact created by a successful completion."""
         record = self.get(session_id)
@@ -798,7 +892,29 @@ class SessionManager:
         record = self.get(session_id)
         if record.is_terminal:
             return record
-        return self._finish(record, SessionStatus.STOPPED, reason)
+        # Stopping a *session* must stop its room in the same durable state
+        # transition.  Otherwise a CLI caller could see a stopped session
+        # while the queued agents continued to work underneath it.
+        with db.transaction(self.conn):
+            if record.room_id:
+                self.broker.stop_room(
+                    record.room_id, credential=self._human_credential(record)
+                )
+            return self._finish(record, SessionStatus.STOPPED, reason)
+
+    def pause(self, session_id: str) -> SessionRecord:
+        record = self.get(session_id)
+        if record.status != SessionStatus.ACTIVE.value:
+            raise StateError(f"cannot pause a session that is {record.status}", code="session_not_active")
+        return self._finish(record, SessionStatus.PAUSED, "paused by the user")
+
+    def resume(self, session_id: str) -> SessionRecord:
+        record = self.get(session_id)
+        if record.status != SessionStatus.PAUSED.value:
+            raise StateError(f"cannot resume a session that is {record.status}", code="session_not_paused")
+        self._update(session_id, status=SessionStatus.ACTIVE.value, ended_at=None, ended_reason=None)
+        self._log(record, ev.SESSION_ACTIVATED, {"resumed": True})
+        return self.get(session_id)
 
     def handoff_report(self, session_id: str) -> dict:
         """The honest end-of-session state. Never claims more than the gates show."""

@@ -186,7 +186,7 @@ def test_broker_errors_come_back_as_structured_json(ui):
 
 def test_bootstrap_gives_the_app_everything_it_needs(ui):
     boot = call(ui, "/api/bootstrap")
-    assert [m["mode"] for m in boot["modes"]] == ["interactive", "long_horizon", "review_audit"]
+    assert [m["mode"] for m in boot["modes"]] == ["long_horizon"]
     assert any(c["key"] == "git.push" for g in boot["permissions"] for c in g["capabilities"])
     assert boot["sessions"] == [] and "workspace" in boot
 
@@ -218,7 +218,7 @@ def test_every_session_start_routes_to_the_agent_setup_prompts():
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
     assert "function showLaunch(result)" in source
     assert "showLaunch(r);" in source
-    assert "Start agents" in source
+    assert "Start my agents" in source
     assert "function renderExternalSetup(l)" in source
     assert 'api("managed/start", {session:S.session})' in source
     assert "function openLaunch(id)" in source
@@ -297,14 +297,14 @@ def test_quick_start_returns_paste_ready_agent_setup_and_live_arrival_state(ui, 
 
     session_id = result["session"]["session_id"]
     launch = result["launch"]
-    assert result["session"]["mode"] == "interactive"
+    assert result["session"]["mode"] == "long_horizon"
     assert launch["joined_count"] == 0
     assert launch["agents"][0]["join_command"].startswith("cd ")
     assert "synchri join " in launch["agents"][0]["setup_prompt"]
     assert f"synchri session contract --session {session_id}" in launch["agents"][0]["setup_prompt"]
-    assert "synchri activity --as" in launch["agents"][0]["setup_prompt"]
+    assert f"synchri session ack codex --reply UNDERSTOOD --session {session_id}" in launch["agents"][0]["setup_prompt"]
     assert "--watch-messages" in launch["agents"][0]["setup_prompt"]
-    assert "Do not repeatedly say that you are waiting." in launch["agents"][0]["setup_prompt"]
+    assert "do not send status updates" in launch["agents"][0]["setup_prompt"]
 
     for agent in launch["agents"]:
         token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]
@@ -328,13 +328,47 @@ def test_external_prompt_uses_the_packaged_helper_not_the_agents_path(ui, repo):
     result = call(ui, "/api/quick-start", {
         "repo_path": str(repo),
         "goal": "Review the repository.",
-        "agents": [{"name": "copilot", "runtime": "generic", "role": "participant"}],
+        "agents": [
+            {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+            {"name": "copilot", "runtime": "generic", "role": "adversarial_reviewer"},
+        ],
     })
     agent = result["launch"]["agents"][0]
 
     assert f"&& {helper} join " in agent["join_command"]
     assert helper + " session contract" in agent["setup_prompt"]
     assert helper + " wait" in agent["setup_prompt"]
+
+
+def test_workflows_are_reusable_and_can_be_renamed_or_deleted(ui):
+    workflow = call(ui, "/api/draft/reset", {"draft": "workflow"})
+    assert workflow["draft"]["mode"] == "long_horizon"
+    call(ui, "/api/draft", {"draft": "workflow", "agents": [
+        {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+        {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+    ], "deadline": "2 hours"})
+    saved = call(ui, "/api/preset", {"draft": "workflow", "name": "Steady build"})
+    assert saved["presets"][0]["name"] == "Steady build"
+    assert saved["presets"][0]["deadline_duration"] == "2 hours"
+
+    renamed = call(ui, "/api/preset/rename", {"name": "Steady build", "new_name": "Ship it"})
+    assert [item["name"] for item in renamed["presets"]] == ["Ship it"]
+    deleted = call(ui, "/api/preset/delete", {"name": "Ship it"})
+    assert deleted["presets"] == []
+
+
+def test_quick_start_uses_the_saved_workflow_instead_of_reasking_for_agents(ui, repo):
+    call(ui, "/api/draft/reset", {"draft": "workflow"})
+    call(ui, "/api/draft", {"draft": "workflow", "agents": [
+        {"name": "builder", "runtime": "codex", "role": "primary_builder"},
+        {"name": "reviewer", "runtime": "copilot", "role": "adversarial_reviewer"},
+    ]})
+    call(ui, "/api/preset", {"draft": "workflow", "name": "Saved pair"})
+
+    result = call(ui, "/api/quick-start", {
+        "repo_path": str(repo), "goal": "Ship the requested change.", "preset": "Saved pair",
+    })
+    assert [agent["name"] for agent in result["launch"]["agents"]] == ["builder", "reviewer"]
 
 
 def test_managed_start_attaches_agrees_and_begins_without_pasted_prompts(ui, repo, tmp_path):
@@ -358,6 +392,9 @@ def test_managed_start_attaches_agrees_and_begins_without_pasted_prompts(ui, rep
         "goal": "Inspect the repository.",
         "agents": [{
             "name": "builder", "runtime": "generic", "role": "primary_builder",
+            "command": command,
+        }, {
+            "name": "reviewer", "runtime": "generic", "role": "adversarial_reviewer",
             "command": command,
         }],
     })
@@ -391,7 +428,10 @@ def test_quick_start_clones_a_github_reference_before_making_the_room(ui, repo, 
     result = call(ui, "/api/quick-start", {
         "repo_path": "fenixawiles/synchri",
         "goal": "Review the current change together.",
-        "agents": [{"name": "codex", "runtime": "codex", "role": "primary_builder"}],
+        "agents": [
+            {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+            {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+        ],
     })
 
     assert result["clone"] == cloned
@@ -607,8 +647,10 @@ def test_gates_can_be_updated_from_the_ui(ui, repo):
 
 def test_pause_and_resume_from_the_ui(ui, repo):
     session_id = _active(ui, repo)
-    call(ui, "/api/control", {"session": session_id, "action": "pause"})
-    call(ui, "/api/control", {"session": session_id, "action": "resume"})
+    paused = call(ui, "/api/control", {"session": session_id, "action": "pause"})
+    assert paused["session"]["status"] == "paused"
+    resumed = call(ui, "/api/control", {"session": session_id, "action": "resume"})
+    assert resumed["session"]["status"] == "active"
 
 
 def test_changing_permissions_forces_re_acknowledgment(ui, repo):
@@ -712,7 +754,7 @@ def test_starting_a_session_clears_its_draft(ui, repo):
     _ready_draft(ui, repo)
     assert call(ui, "/api/draft?draft=d")["draft"]["mode"] == "long_horizon"
     call(ui, "/api/start", {"draft": "d"})
-    assert call(ui, "/api/draft?draft=d")["draft"]["mode"] is None
+    assert call(ui, "/api/draft?draft=d")["draft"]["mode"] == "long_horizon"
 
 
 def test_a_permission_edit_does_not_corrupt_the_draft_id(ui, repo):

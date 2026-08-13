@@ -1,9 +1,8 @@
 """Saved session configurations.
 
-A preset stores the parts of a session that repeat -- mode, agents, roles,
-permissions, escalation policy. It deliberately does NOT store the product
-spec, the deadline, the worktree, or any session id: those are what makes a
-session this session, and silently reusing them would be a footgun.
+A preset stores the repeatable shape of a long-running collaboration—agents,
+roles, permissions, escalation policy, and an optional *duration* preference.
+It deliberately excludes the actual work, repository, worktree and session id.
 """
 
 from __future__ import annotations
@@ -71,3 +70,20 @@ def delete(workspace: Workspace, name: str) -> None:
     if not path.exists():
         raise NotFoundError(f"no preset named {name!r}")
     path.unlink()
+
+
+def rename(workspace: Workspace, name: str, new_name: str) -> str:
+    """Rename a workflow without dropping its configuration.
+
+    The replacement is written before the old file is removed, so a failed
+    rename cannot erase the user's only workflow.
+    """
+    original = load(workspace, name)
+    if name == new_name:
+        return str(presets_dir(workspace) / f"{_slug(name)}.json")
+    target = presets_dir(workspace) / f"{_slug(new_name)}.json"
+    if target.exists():
+        raise ValidationError(f"a preset named {new_name!r} already exists")
+    saved = save(workspace, new_name, original)
+    delete(workspace, name)
+    return saved

@@ -69,6 +69,7 @@ class ManagedRunnerRegistry:
         self.cli_command = cli_command or _local_cli_command()
         self._runs: dict[str, ManagedRun] = {}
         self._threads: dict[str, threading.Thread] = {}
+        self._cancel: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
 
     def readiness(self, record: "SessionRecord") -> dict:
@@ -86,6 +87,20 @@ class ManagedRunnerRegistry:
             run = self._runs.get(session_id)
             return (run or ManagedRun(session_id=session_id)).to_dict()
 
+    def cancel(self, session_id: str, *, reason: str) -> dict:
+        """Signal an in-flight provider command to end without losing room state."""
+        with self._lock:
+            event = self._cancel.get(session_id)
+            if event is not None:
+                event.set()
+            run = self._runs.setdefault(session_id, ManagedRun(session_id=session_id))
+            run.phase = "stopping"
+            run.detail = reason
+            run.reason = "cancelled"
+            run.updated_at = _now()
+            run.alive = event is not None
+            return run.to_dict()
+
     def start(self, record: "SessionRecord") -> dict:
         readiness = self.readiness(record)
         if not readiness["available"]:
@@ -100,6 +115,15 @@ class ManagedRunnerRegistry:
         """Resume after a human reply reaches a managed agent."""
         if not self.readiness(record)["available"] or record.status != "active":
             return self.status(record.session_id)
+        # Pause/Stop signal a running agent asynchronously.  If the user
+        # resumes immediately, wait briefly for that supervised worker to
+        # acknowledge cancellation before spawning the new one; otherwise the
+        # old thread would win the race and make Resume look like a no-op.
+        with self._lock:
+            thread = self._threads.get(record.session_id)
+            event = self._cancel.get(record.session_id)
+        if thread is not None and thread.is_alive() and event is not None and event.is_set():
+            thread.join(timeout=4)
         return self._spawn(record.session_id, "resuming", "Your reply reached the agents; continuing the session.")
 
     def _spawn(self, session_id: str, phase: str, detail: str) -> dict:
@@ -116,6 +140,7 @@ class ManagedRunnerRegistry:
                 alive=True,
             )
             self._runs[session_id] = run
+            self._cancel[session_id] = threading.Event()
             worker = threading.Thread(
                 target=self._worker,
                 args=(session_id, phase == "attaching"),
@@ -153,6 +178,8 @@ class ManagedRunnerRegistry:
         except Exception as exc:  # pragma: no cover - defensive UI boundary
             self._set(session_id, "failed", f"Synchri could not run this session: {exc}", reason="internal")
         finally:
+            with self._lock:
+                self._cancel.pop(session_id, None)
             broker.close()
 
     def _attach_and_agree(self, broker: Broker, manager, record: "SessionRecord") -> None:
@@ -219,6 +246,8 @@ class ManagedRunnerRegistry:
             credentials,
             observer,
             role_guidance=role_guidance,
+            session_id=record.session_id,
+            cancel_event=self._cancel.get(record.session_id),
         )
         report = conductor.run()
         phrases = {
@@ -227,6 +256,7 @@ class ManagedRunnerRegistry:
             "room_stopped": "The session has ended.",
             "idle": "The agents have no next handoff. Review their last message.",
             "unmanaged_speaker": "A human or externally-run participant has the floor.",
+            "cancelled": "Session control applied.",
         }
         self._set(
             record.session_id,

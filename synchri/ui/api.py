@@ -86,6 +86,8 @@ class Api:
             ("POST", "control"): self.control,
             ("GET", "presets"): self.presets,
             ("POST", "preset"): self.save_preset,
+            ("POST", "preset/rename"): self.rename_preset,
+            ("POST", "preset/delete"): self.delete_preset,
         }
 
     def route(self, method: str, path: str) -> Route | None:
@@ -178,8 +180,12 @@ class Api:
                 draft.set_spec(body["spec"])
             else:
                 draft.spec = None
-        if body.get("deadline"):
-            draft.set_deadline_duration(body["deadline"])
+        if "deadline" in body:
+            if str(body["deadline"] or "").strip():
+                draft.set_deadline_duration(body["deadline"])
+            else:
+                draft.deadline = None
+                draft.deadline_duration = None
         elif body.get("deadline_at"):
             draft.set_deadline_at(body["deadline_at"])
         if body.get("name"):
@@ -204,6 +210,7 @@ class Api:
                 "permissions": draft.permissions.to_dict(),
                 "spec": draft.spec.text if draft.spec else "",
                 "deadline": draft.deadline.to_dict() if draft.deadline else None,
+                "deadline_duration": draft.deadline_duration,
                 "name": draft.name,
             },
             "steps": [{"key": k, "label": label} for k, label in draft.visible_steps()],
@@ -242,13 +249,7 @@ class Api:
         return self._launch_payload(self.manager.get(record.session_id), document=document)
 
     def quick_start(self, query: dict, body: dict) -> dict:
-        """Create the safe, collaborative default without walking eight screens.
-
-        The detailed draft remains available for a long-running autonomous job,
-        a non-default branch, or unusual permissions.  Most people just need a
-        worktree, a room, and paste-ready arrivals for the agents they already
-        have open.
-        """
+        """Create the one supported session shape without a setup gauntlet."""
         repo_path = (body.get("repo_path") or self.default_repo or "").strip()
         goal = (body.get("goal") or "").strip()
         if not repo_path:
@@ -261,13 +262,23 @@ class Api:
             cloned = discovery.clone_github_repository(repo_path)
             repo_path = cloned["path"]
 
-        draft = SessionDraft()
-        draft.set_mode("interactive")
+        preset_name = (body.get("preset") or "").strip()
+        draft = (
+            SessionDraft.from_preset(presets_module.load(self.broker.workspace, preset_name))
+            if preset_name
+            else SessionDraft()
+        )
+        draft.set_mode("long_horizon")
         draft.set_repository(repo_path)
-        draft.set_agents(self._plans(body.get("agents")))
-        # Interactive mode permits an empty spec, but a quick room should
-        # always carry the user's stated goal into the ledger and contract.
+        if body.get("agents") is not None:
+            draft.set_agents(self._plans(body.get("agents")))
+        elif not draft.participants:
+            raise ValidationError("choose a workflow with at least two agents")
+        # Any non-empty text is a valid brief. Synchri preserves it verbatim;
+        # Markdown is merely rendered nicely later, never required here.
         draft.set_spec(goal)
+        if body.get("deadline"):
+            draft.set_deadline_duration(body["deadline"])
         if body.get("name"):
             draft.name = body["name"]
 
@@ -357,45 +368,25 @@ class Api:
                 f"cd {shlex.quote(worktree.path)} && {cli} join {invite['token']} "
                 f"--name {shlex.quote(plan.name)}"
             )
-            contract_command = f"{cli} session contract --session {record.session_id}"
-            acknowledge_command = (
-                f"{cli} session ack {shlex.quote(plan.name)} --reply UNDERSTOOD "
-                f"--session {record.session_id}"
-            )
-            wait_command = f"{cli} wait --as {shlex.quote(plan.name)} --watch-messages"
-            activity_command = (
-                f"{cli} activity --as {shlex.quote(plan.name)} "
-                "-m \"Inspecting the task and repository.\""
-            )
             setup_prompt = "\n".join(
                 [
-                    f"Join the Synchri collaboration as {plan.name} ({plan_view['role_label']}).",
-                    "Use a terminal in this order:",
-                    f"1. {join_command}",
-                    "2. Read the shared agreement:",
-                    f"   {contract_command}",
-                    "3. If you agree, acknowledge it:",
-                    f"   {acknowledge_command}",
-                    "4. Stay in the room loop for your first turn and every later turn:",
-                    f"   {wait_command}",
-                    "While wait is blocking, do nothing and send no status updates. It also wakes "
-                    "for new room messages so you retain context; read those, do not reply unless "
-                    "you have the turn, then immediately run the same wait command again. The Primary "
-                    "Builder is started automatically; Synchri will hand you their completed response "
-                    "when it is your turn. Do not repeatedly say that you are waiting.",
-                    "When wait says it is your turn, act on the task immediately: read the room briefing, "
-                    "then note that wait has already started a visible Live Work trail in the UI. "
-                    "At each meaningful shift (understanding, exploring, implementing, testing, "
-                    "or reviewing), append a short public semantic update with:",
-                    f"   {activity_command}",
-                    "Those updates are the human-facing live progress stream. They are not a response, "
-                    "do not move the queue, and must never contain private reasoning or a handoff. "
-                    "Work in the authorized worktree, then send one completed response and hand off. "
-                    "If you need a human decision, send a blocked response to `human`, then return "
-                    "to the same wait command; do not end this agent session or switch to the provider's "
-                    "normal chat. Synchri routes the human's next UI reply back to the blocked requester. "
-                    "The session activation task starts the Primary Builder automatically; do not "
-                    "wait for the human to say 'begin'.",
+                    f"You are {plan.name}, the {plan_view['role_label']} in a Synchri build room.",
+                    "In your terminal, join the room:",
+                    join_command,
+                    "",
+                    "Then handle room protocol yourself — do not ask the human to relay it:",
+                    f"{cli} session contract --session {record.session_id}",
+                    f"{cli} session ack {shlex.quote(plan.name)} --reply UNDERSTOOD --session {record.session_id}",
+                    f"{cli} wait --as {shlex.quote(plan.name)} --watch-messages",
+                    "Only acknowledge after reading the contract. Stay connected until the room ends. "
+                    "Work only when Synchri gives you the turn; while waiting, do not send status updates.",
+                    f"When you finish a gate, record it with `{cli} session gates GATE-ID --set pass "
+                    f"--as {shlex.quote(plan.name)} --assessment \"…\" --evidence \"…\" --session {record.session_id}`.",
+                    (
+                        f"When every required gate is evidenced and reviewed, end the room with `{cli} session complete "
+                        f"--as {shlex.quote(plan.name)} --session {record.session_id}`."
+                        if plan.role == "primary_builder" else "The Primary Builder owns final session completion."
+                    ),
                 ]
             )
             agents.append(
@@ -615,14 +606,18 @@ class Api:
         credential = self._human(record)
 
         if action == "pause":
+            self.managed.cancel(session_id, reason="Pausing the session.")
             self.broker.pause_room(record.room_id, credential=credential)
+            self.manager.pause(session_id)
         elif action == "resume":
             self.broker.resume_room(record.room_id, credential=credential)
+            resumed = self.manager.resume(session_id)
+            self.managed.resume(resumed)
         elif action == "stop":
-            if record.room_id:
-                self.broker.stop_room(record.room_id, credential=credential)
+            self.managed.cancel(session_id, reason="Stopping the session.")
             self.manager.stop(session_id, body.get("reason") or "stopped by the user")
         elif action == "complete":
+            self.managed.cancel(session_id, reason="Completing the session.")
             self.manager.complete(session_id)
         elif action == "remove":
             self.broker.remove_participant(
@@ -663,7 +658,19 @@ class Api:
 
     def save_preset(self, query: dict, body: dict) -> dict:
         draft = self._draft(body.get("draft", "default"))
-        presets_module.save(self.broker.workspace, body["name"], draft.to_preset())
+        name = body["name"]
+        presets_module.save(self.broker.workspace, name, draft.to_preset())
+        previous = (body.get("replace") or "").strip()
+        if previous and previous != name:
+            presets_module.delete(self.broker.workspace, previous)
+        return {"presets": presets_module.list_presets(self.broker.workspace)}
+
+    def rename_preset(self, query: dict, body: dict) -> dict:
+        presets_module.rename(self.broker.workspace, body["name"], body["new_name"])
+        return {"presets": presets_module.list_presets(self.broker.workspace)}
+
+    def delete_preset(self, query: dict, body: dict) -> dict:
+        presets_module.delete(self.broker.workspace, body["name"])
         return {"presets": presets_module.list_presets(self.broker.workspace)}
 
     # -- internals -----------------------------------------------------

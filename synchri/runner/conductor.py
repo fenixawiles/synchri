@@ -23,6 +23,7 @@ from ..broker import Broker, Credential
 from ..errors import SynchriError, ValidationError
 from ..models.enums import MessageType, ResponseStatus, RoomStatus, TurnState
 from ..models.envelope import MessageDraft
+from ..session.manager import SessionManager
 from .agent_command import AgentCommand, parse_directives
 
 #: Why the conductor handed control back.
@@ -32,6 +33,7 @@ STOP_ROOM_PAUSED = "room_paused"
 STOP_TURN_LIMIT = "turn_limit"
 STOP_IDLE = "idle"
 STOP_UNMANAGED_SPEAKER = "unmanaged_speaker"
+STOP_CANCELLED = "cancelled"
 
 
 @dataclass
@@ -71,6 +73,8 @@ class Conductor:
         context_messages: int = 12,
         include_memory: bool = True,
         role_guidance: dict[str, str] | None = None,
+        session_id: str | None = None,
+        cancel_event=None,
         on_event: Callable[[str, dict], None] | None = None,
     ) -> None:
         if not agents:
@@ -89,6 +93,8 @@ class Conductor:
         self.context_messages = context_messages
         self.include_memory = include_memory
         self.role_guidance = dict(role_guidance or {})
+        self.session_id = session_id
+        self.cancel_event = cancel_event
         self.on_event = on_event or (lambda event, payload: None)
 
     # ------------------------------------------------------------------
@@ -96,6 +102,12 @@ class Conductor:
     def run(self, *, max_turns: int | None = None, poll_interval: float = 0.5) -> ConductorReport:
         report = ConductorReport(room_id=self.room_id, reason=STOP_IDLE)
         while True:
+            # Session controls own the room transition.  The conductor's job
+            # is simply to stop supervising immediately, not to sneak one
+            # more provider invocation in after Pause or Stop was pressed.
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                report.reason = STOP_CANCELLED
+                return report
             if max_turns is not None and report.turn_count >= max_turns:
                 report.reason = STOP_TURN_LIMIT
                 return report
@@ -161,7 +173,7 @@ class Conductor:
         prompt = self.build_prompt(name, status)
         self.on_event("agent.invoking", {"participant": name, "prompt_chars": len(prompt)})
 
-        result = self.agents[name].invoke(prompt)
+        result = self.agents[name].invoke(prompt, cancel_event=self.cancel_event)
         self.on_event(
             "agent.returned",
             {
@@ -180,6 +192,12 @@ class Conductor:
 
         try:
             if not result.ok:
+                if result.cancelled:
+                    return {
+                        "participant": name,
+                        "status": "cancelled",
+                        "warnings": warnings,
+                    }
                 detail = (result.stderr or "").strip() or "no output"
                 sent = self.broker.send(
                     self.room_id,
@@ -203,19 +221,29 @@ class Conductor:
                     "warnings": warnings,
                 }
 
+            # Gate progress is meaningful even if this particular turn ends in
+            # a pass.  Recording it first keeps a terse evidence report from
+            # disappearing just because the agent had no prose to add.
+            gate_updates = self._record_gate_updates(name, directives, warnings)
+
             if directives.passed or not body.strip():
                 passed = self.broker.pass_turn(
                     self.room_id,
                     credential=credential,
                     reason=body.strip() or "nothing material to add",
                 )
-                return {
+                outcome = {
                     "participant": name,
                     "status": "passed",
                     "message_id": passed["message"]["message_id"],
                     "next_speaker": passed.get("next_speaker"),
                     "warnings": warnings,
                 }
+                if gate_updates:
+                    outcome["gate_updates"] = gate_updates
+                if directives.complete_requested:
+                    outcome["completion_requested"] = self._try_complete(name, warnings)
+                return outcome
 
             sent = self.broker.send(
                 self.room_id,
@@ -232,7 +260,7 @@ class Conductor:
                     metadata={"conductor": True},
                 ),
             )
-            return {
+            outcome = {
                 "participant": name,
                 "status": "spoke",
                 "message_id": sent["message"]["message_id"],
@@ -241,11 +269,57 @@ class Conductor:
                 "next_speaker": sent.get("next_speaker"),
                 "warnings": warnings,
             }
+            if gate_updates:
+                outcome["gate_updates"] = gate_updates
+            if directives.complete_requested:
+                outcome["completion_requested"] = self._try_complete(name, warnings)
+            return outcome
         except SynchriError as exc:
             # The room refused the post (interrupted, stopped, bad target...).
             # Report it; the loop re-reads room state and decides what is next.
             warnings.append(f"{name}: {exc.code}: {exc.message}")
             return {"participant": name, "status": "rejected", "error": exc.code, "warnings": warnings}
+
+    def _record_gate_updates(self, name: str, directives, warnings: list[str]) -> list[dict]:
+        """Persist concise gate reports before the completed message is queued."""
+        if not directives.gate_updates or not self.session_id:
+            return []
+        manager = SessionManager(self.broker)
+        saved = []
+        for update in directives.gate_updates:
+            try:
+                gate = manager.report_gate(
+                    self.session_id,
+                    update.gate_id,
+                    actor=name,
+                    status=update.status,
+                    assessment=update.assessment,
+                    evidence=update.evidence,
+                    tests=update.tests,
+                    commits=update.commits,
+                )
+                saved.append(gate.to_dict())
+            except SynchriError as exc:
+                warnings.append(f"{name}: could not update gate {update.gate_id}: {exc.message}")
+        return saved
+
+    def _try_complete(self, name: str, warnings: list[str]) -> bool:
+        """A Primary Builder may request completion; manager remains the authority."""
+        if not self.session_id:
+            warnings.append("completion request ignored: this room is not attached to a session")
+            return False
+        manager = SessionManager(self.broker)
+        record = manager.get(self.session_id)
+        plan = next((item for item in record.participants if item.name == name), None)
+        if plan is None or plan.role != "primary_builder":
+            warnings.append("completion request ignored: only the Primary Builder may request it")
+            return False
+        try:
+            manager.complete_by_agent(self.session_id, name)
+            return True
+        except SynchriError as exc:
+            warnings.append(f"completion request not accepted: {exc.message}")
+            return False
 
     # ------------------------------------------------------------------
 
@@ -332,10 +406,15 @@ class Conductor:
                 "  SYNCHRI-PASS                     you have nothing material to add",
                 "  SYNCHRI-STATUS: complete|partial|blocked|failed",
                 "  SYNCHRI-CONFIDENCE: 0.0-1.0",
+                "  SYNCHRI-GATE: <id>|<pending|in_progress|pass|fail|unverified>|<your assessment>",
+                "  SYNCHRI-EVIDENCE: <artifact or observation for the preceding gate>",
+                "  SYNCHRI-TEST: <test command or test name for the preceding gate>",
+                "  SYNCHRI-COMMIT: <commit sha for the preceding gate>",
+                "  SYNCHRI-COMPLETE              Primary Builder: request final completion when evidence is complete",
                 "",
                 "Keep the collaboration moving. When another agent should act next, use the",
                 "direct-address control line above. For a human decision, direct it to human",
-                "and mark the response blocked. Do not end the session yourself.",
+                "and mark the response blocked. Gate reports update the shared progress view immediately.",
             ]
         )
         return "\n".join(parts)

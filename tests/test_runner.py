@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 
 import pytest
 
@@ -85,6 +86,33 @@ def test_unparseable_confidence_is_ignored_with_a_warning():
     assert directives.warnings
 
 
+def test_gate_directives_keep_evidence_together_and_request_completion():
+    body, directives = parse_directives(
+        "Verified the login flow.\n\n"
+        "SYNCHRI-GATE: AUTH-01|pass|implemented and checked\n"
+        "SYNCHRI-EVIDENCE: src/auth.py validates the session\n"
+        "SYNCHRI-TEST: pytest tests/test_auth.py::test_login\n"
+        "SYNCHRI-COMMIT: abc123\n"
+        "SYNCHRI-COMPLETE\n"
+    )
+    assert body == "Verified the login flow."
+    assert directives.complete_requested is True
+    assert directives.gate_updates[0].gate_id == "AUTH-01"
+    assert directives.gate_updates[0].status == "pass"
+    assert directives.gate_updates[0].tests == ["pytest tests/test_auth.py::test_login"]
+
+
+def test_gate_directives_are_preserved_when_an_agent_passes():
+    body, directives = parse_directives(
+        "SYNCHRI-GATE: AUTH-01|in_progress|started the implementation\n"
+        "SYNCHRI-EVIDENCE: src/auth.py\n"
+        "SYNCHRI-PASS\n"
+    )
+    assert body == ""
+    assert directives.passed is True
+    assert directives.gate_updates[0].evidence == ["src/auth.py"]
+
+
 def test_reply_without_directives_is_untouched():
     body, directives = parse_directives("just a normal answer")
     assert body == "just a normal answer"
@@ -137,6 +165,15 @@ def test_agent_timeout_is_reported_not_raised(tmp_path):
     assert result.ok is False
 
 
+def test_cancelled_agent_never_starts_a_new_provider_process(tmp_path):
+    agent = AgentCommand.parse("x=definitely-not-a-real-binary-xyz")
+    cancelled = threading.Event()
+    cancelled.set()
+    result = agent.invoke("go", cancel_event=cancelled)
+    assert result.cancelled is True
+    assert result.stderr == ""
+
+
 def test_missing_executable_is_reported_not_raised():
     agent = AgentCommand.parse("x=definitely-not-a-real-binary-xyz")
     result = agent.invoke("go")
@@ -168,6 +205,23 @@ def test_conductor_relays_a_targeted_exchange_with_no_human_action(broker, tmp_p
     assert [t["participant"] for t in report.turns] == ["codex", "claude"]
     contents = [m["content"] for m in room.messages()]
     assert contents == ["review commit abc123", "Found a race in retry.py:40", "Fixed it."]
+
+
+def test_conductor_exits_before_another_turn_when_the_session_is_cancelled(broker, tmp_path):
+    room = make_room(broker, "claude")
+    room.send("human", "begin", target="claude")
+    cancelled = threading.Event()
+    cancelled.set()
+    conductor = conductor_for(
+        room,
+        tmp_path,
+        {"claude": "print('this must not run')\n"},
+        cancel_event=cancelled,
+    )
+    report = conductor.run()
+    assert report.reason == "cancelled"
+    assert report.turns == []
+    assert [message["content"] for message in room.messages()] == ["begin"]
 
 
 def test_human_direction_forces_reviewer_after_the_builder(broker, tmp_path):

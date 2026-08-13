@@ -60,7 +60,25 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" 
 fi
 
 DMG="$TAURI_TARGET_DIR/release/Synchri-macos-$ARCH.dmg"
-hdiutil create -volname Synchri -srcfolder "$FINAL_APP" -ov -format UDZO "$DMG" >/dev/null
+# ``hdiutil`` occasionally leaves the target file momentarily busy on hosted
+# macOS runners.  Build to a private, per-process path and retry the image
+# creation before publishing it under Synchri's stable download name.  This
+# only affects the installer container; the signed app bundle above is not
+# changed between attempts.
+attempt=1
+while :; do
+  DMG_STAGING="$TAURI_TARGET_DIR/release/.Synchri-macos-$ARCH-$$-$attempt.dmg"
+  if hdiutil create -volname Synchri -srcfolder "$FINAL_APP" -format UDZO "$DMG_STAGING" >/dev/null; then
+    break
+  fi
+  if [ "$attempt" -ge 3 ]; then
+    echo "Could not create the Synchri DMG after $attempt attempts" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 3
+done
+mv -f "$DMG_STAGING" "$DMG"
 
 # Tauri deliberately signs a tarball of the app bundle on macOS. Updating from
 # a DMG is not supported because a DMG is an installation medium, not an app.

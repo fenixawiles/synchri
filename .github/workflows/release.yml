@@ -99,7 +99,7 @@ jobs:
           test -x "$APP/Contents/Resources/engine/synchri-core"
           codesign --verify --deep --strict --verbose=2 "$APP"
           xcrun stapler validate "$DMG"
-          hdiutil imageinfo "$DMG" | grep -Eq 'Class: (CUDIFDiskImage|CRawDiskImage)'
+          hdiutil imageinfo "$DMG" | grep -Eq 'Class Name: (CUDIFDiskImage|CRawDiskImage)'
       - name: Build the signed update manifest
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

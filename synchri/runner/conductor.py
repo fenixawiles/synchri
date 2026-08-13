@@ -178,32 +178,6 @@ class Conductor:
         body, directives = parse_directives(result.stdout)
         warnings = list(directives.warnings)
 
-        # A human may give a fresh direction while the reviewer has the
-        # floor. In a paired session the lead must answer it first and the
-        # reviewer must examine that response second. The UI marks that
-        # direction in the durable transcript; enforce the reviewer handoff
-        # here, at the one point every managed reply passes through.
-        followup = self._human_direction_followup(name)
-        if followup is not None:
-            if directives.to and directives.to != followup:
-                warnings.append(
-                    f"{name}: ignored SYNCHRI-TO: {directives.to}; "
-                    f"human direction requires review by {followup} next"
-                )
-            if directives.handoff and directives.handoff != followup:
-                warnings.append(
-                    f"{name}: ignored SYNCHRI-HANDOFF: {directives.handoff}; "
-                    f"human direction requires review by {followup} next"
-                )
-            directives.to = None
-            directives.handoff = followup
-            # Passing is not a valid way to skip a mandatory review of a new
-            # human direction. Keep an honest, attributed boundary in the
-            # transcript, then hand it to the reviewer.
-            if directives.passed or not body.strip():
-                directives.passed = False
-                body = "Acknowledged the human direction; handing it to the reviewer."
-
         try:
             if not result.ok:
                 detail = (result.stderr or "").strip() or "no output"
@@ -218,7 +192,6 @@ class Conductor:
                         ),
                         message_type=MessageType.RESPONSE.value,
                         response_status=ResponseStatus.FAILED.value,
-                        handoff_target=followup,
                         metadata={"conductor": True, "returncode": result.returncode},
                     ),
                 )
@@ -273,22 +246,6 @@ class Conductor:
             # Report it; the loop re-reads room state and decides what is next.
             warnings.append(f"{name}: {exc.code}: {exc.message}")
             return {"participant": name, "status": "rejected", "error": exc.code, "warnings": warnings}
-
-    def _human_direction_followup(self, name: str) -> str | None:
-        """Return the reviewer owed the next turn after a human direction.
-
-        Only a marker on the current lead's request counts. This deliberately
-        leaves explicit user addressing and ordinary blocked permission replies
-        alone. The transcript is the durable source, so a resumed managed run
-        keeps the same sequencing rule after the UI process restarts.
-        """
-        status = self.broker.turn_status(self.room_id, credential=self.credentials[name])
-        request = status.get("request") or {}
-        direction = (request.get("metadata") or {}).get("human_direction") or {}
-        if request.get("sender") != "human" or direction.get("lead") != name:
-            return None
-        reviewer = direction.get("reviewer")
-        return reviewer if reviewer in self.agents else None
 
     # ------------------------------------------------------------------
 

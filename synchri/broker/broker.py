@@ -830,6 +830,18 @@ class Broker:
     ) -> dict:
         room_id = room.room_id
         turn = self._acquire_floor(room, actor)
+        required_reviewer = self._human_direction_reviewer(room_id, actor, turn)
+        if required_reviewer is not None:
+            # A new human direction is a two-step collaboration contract: the
+            # lead responds, then the reviewer examines that response. This is
+            # enforced where every participant writes, so an external terminal
+            # agent cannot bypass it with a conflicting control line.
+            target = None
+            handoff = required_reviewer
+            draft.metadata = {
+                **draft.metadata,
+                "human_direction_review": {"reviewer": required_reviewer.name},
+            }
         # A committed response is a clean boundary: stop displaying the
         # transient work note before another participant can act on it.
         dao.clear_activity(self.conn, room_id, actor.participant_id)
@@ -929,6 +941,7 @@ class Broker:
             "floor_held": hold_floor,
             "task_id": task_id,
             "awaiting_human": budget_exhausted,
+            "required_reviewer": required_reviewer.name if required_reviewer else None,
         }
 
     def pass_turn(self, room_id: str, *, credential: "Credential", reason: str | None = None) -> dict:
@@ -959,6 +972,15 @@ class Broker:
                 response_status=ResponseStatus.DECLINED.value,
                 task_id=active_turn.task_id if holds_floor and active_turn else None,
             ).validate()
+            required_reviewer = (
+                self._human_direction_reviewer(room_id, actor, active_turn)
+                if holds_floor and active_turn is not None
+                else None
+            )
+            if required_reviewer is not None:
+                draft.metadata = {
+                    "human_direction_review": {"reviewer": required_reviewer.name},
+                }
             dao.clear_activity(self.conn, room_id, actor.participant_id)
             envelope = self._append_message(
                 room_id,
@@ -999,6 +1021,17 @@ class Broker:
                     # Passes count against the budget too, otherwise two agents
                     # can pass at each other indefinitely.
                     scheduler.record_agent_turn(self.conn, room_id)
+                if required_reviewer is not None:
+                    self._promote(
+                        room_id,
+                        required_reviewer,
+                        Priority.HANDOFF,
+                        blocking=True,
+                        reason="human_direction_review",
+                        task_id=active_turn.task_id,
+                        source_message_id=envelope.message_id,
+                        actor=actor,
+                    )
             else:
                 scheduler.dequeue(self.conn, room_id, actor.participant_id, QueueStatus.DONE)
                 self._log(
@@ -1780,6 +1813,31 @@ class Broker:
                 "source_message_id": source_message_id,
             },
         )
+
+    def _human_direction_reviewer(
+        self, room_id: str, actor: Participant, turn: Turn
+    ) -> Participant | None:
+        """Find the reviewer guaranteed the turn after a new human direction.
+
+        The marker lives on the request message, which is already persisted in
+        the authoritative transcript.  That makes the rule survive a UI or
+        runner restart and applies equally to managed and externally launched
+        agents.
+        """
+        if not turn.request_message_id:
+            return None
+        request = dao.get_message(self.conn, room_id, turn.request_message_id)
+        if request is None:
+            return None
+        sender = dao.get_participant(self.conn, room_id, request.sender_participant_id)
+        direction = (request.metadata or {}).get("human_direction") or {}
+        if sender is None or not sender.is_human or direction.get("lead") != actor.name:
+            return None
+        reviewer_name = direction.get("reviewer")
+        if not isinstance(reviewer_name, str) or reviewer_name == actor.name:
+            return None
+        reviewer = dao.get_participant_by_name(self.conn, room_id, reviewer_name)
+        return reviewer if reviewer is not None and reviewer.is_active else None
 
     def _append_message(
         self,

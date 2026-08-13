@@ -193,7 +193,7 @@ def test_human_direction_forces_reviewer_after_the_builder(broker, tmp_path):
     messages = room.messages()
     assert messages[-2]["handoff_target"] == "codex"
     assert messages[-1]["sender"] == "codex"
-    assert any("ignored SYNCHRI-TO: human" in warning for warning in report.warnings)
+    assert messages[-2]["metadata"]["human_direction_review"] == {"reviewer": "codex"}
 
 
 def test_human_direction_cannot_be_skipped_with_a_pass(broker, tmp_path):
@@ -216,8 +216,8 @@ def test_human_direction_cannot_be_skipped_with_a_pass(broker, tmp_path):
     report = conductor.run(max_turns=2)
 
     assert [turn["participant"] for turn in report.turns] == ["claude", "codex"]
-    assert room.messages()[-2]["message_type"] == "response"
-    assert room.messages()[-2]["handoff_target"] == "codex"
+    assert room.messages()[-2]["message_type"] == "pass"
+    assert room.messages()[-2]["metadata"]["human_direction_review"] == {"reviewer": "codex"}
 
 
 def test_human_direction_reaches_the_reviewer_when_the_builder_crashes(broker, tmp_path):

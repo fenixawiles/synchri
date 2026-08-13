@@ -189,6 +189,29 @@ def test_pass_is_recorded_as_an_attributed_message(room):
     assert passed["response_status"] == "declined"
 
 
+def test_human_direction_forces_reviewer_for_an_external_agent(room):
+    room.send(
+        "human",
+        "Prioritize auth.",
+        target="claude",
+        metadata={"human_direction": {"lead": "claude", "reviewer": "codex"}},
+    )
+
+    result = room.send(
+        "claude",
+        "I will handle auth first.",
+        target="human",
+        message_type="task",
+    )
+
+    assert result["required_reviewer"] == "codex"
+    assert result["next_speaker"] == "codex"
+    response = room.messages()[-1]
+    assert response["target"] is None
+    assert response["handoff_target"] == "codex"
+    assert response["metadata"]["human_direction_review"] == {"reviewer": "codex"}
+
+
 def test_pass_gives_up_a_queued_slot_without_the_floor(room):
     room.add_agent("gemini")
     room.send("claude", "codex, review", target="codex", message_type="task")

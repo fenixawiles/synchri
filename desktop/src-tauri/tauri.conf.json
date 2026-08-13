@@ -32,7 +32,7 @@
     "resources": {
       "engine/aarch64-apple-darwin": "engine"
     },
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "macOS": {
       "entitlements": "Entitlements.plist",
       "infoPlist": "Info.plist",

@@ -27,19 +27,50 @@ PYTHON="$PYTHON" \
 # signing test. ``CI=true`` also keeps the DMG helper non-interactive.
 mkdir -p "$TAURI_TARGET_DIR"
 xattr -crs "$TAURI_TARGET_DIR" 2>/dev/null || true
-(cd "$ROOT/desktop" && CARGO_TARGET_DIR="$TAURI_TARGET_DIR" CI=true npm exec tauri build -- --bundles dmg,app)
+(cd "$ROOT/desktop" && CARGO_TARGET_DIR="$TAURI_TARGET_DIR" CI=true npm exec tauri build -- --bundles app --skip-stapling)
 
-DMG=$(find "$TAURI_TARGET_DIR/release/bundle/dmg" -maxdepth 1 -name '*.dmg' -type f | head -n 1)
-[ -n "$DMG" ] && [ -f "$DMG" ] || { echo "Tauri did not produce a DMG" >&2; exit 1; }
+sign_final_app() {
+  APP="$1"
+  ENGINE="$APP/Contents/Resources/engine"
+  [ -x "$ENGINE/synchri-core" ] || { echo "Synchri engine is missing from app resources" >&2; exit 1; }
+  # Sign concrete nested code first. The engine itself retains the narrow
+  # hardened-runtime entitlements Python needs to load extension modules.
+  find "$ENGINE" -type f -perm -111 ! -name synchri-core -print0 | xargs -0 -n 1 \
+    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY"
+  codesign --force --options runtime --entitlements "$ROOT/desktop/src-tauri/EngineEntitlements.plist" \
+    --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$ENGINE/synchri-core"
+  # Do not use `--deep`: every child is deliberately sealed above, and deep
+  # signing can discard the engine's explicit entitlements.
+  codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$APP"
+}
+
+# Build the installer and updater archive only after the final app seal. Tauri
+# has already built its `.app`; a direct DMG here avoids a second bundling pass
+# that would reseal the resource tree after we have verified it.
+FINAL_DIR="$TAURI_TARGET_DIR/release/final"
+FINAL_APP="$FINAL_DIR/Synchri.app"
+mkdir -p "$FINAL_DIR"
+ditto "$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app" "$FINAL_APP"
+# Finder metadata on the source checkout is not part of the app and cannot be
+# allowed to survive into a signed archive. This is a no-op on clean CI
+# worktrees, but keeps local release validation faithful to the public build.
+xattr -cr "$FINAL_APP" 2>/dev/null || true
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; then
+  sign_final_app "$FINAL_APP"
+fi
+
+DMG="$TAURI_TARGET_DIR/release/Synchri-macos-$ARCH.dmg"
+hdiutil create -volname Synchri -srcfolder "$FINAL_APP" -ov -format UDZO "$DMG" >/dev/null
 
 # Tauri deliberately signs a tarball of the app bundle on macOS. Updating from
 # a DMG is not supported because a DMG is an installation medium, not an app.
 # The DMG is the first-download asset; this tarball is the verified updater
 # payload users never need to handle themselves.
-UPDATE=$(find "$TAURI_TARGET_DIR/release/bundle/macos" -maxdepth 1 -name '*.app.tar.gz' -type f | head -n 1)
-[ -n "$UPDATE" ] && [ -f "$UPDATE" ] || { echo "Tauri did not produce a macOS update payload" >&2; exit 1; }
+UPDATE="$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app.tar.gz"
+ditto -c -k --sequesterRsrc --keepParent "$FINAL_APP" "$UPDATE"
+(cd "$ROOT/desktop" && npm exec tauri signer sign -- "$UPDATE")
 SIG="$UPDATE.sig"
-[ -f "$SIG" ] || { echo "Tauri did not produce an updater signature" >&2; exit 1; }
+[ -f "$SIG" ] || { echo "Synchri did not produce an updater signature" >&2; exit 1; }
 
 OUT="$ROOT/release/tauri"
 mkdir -p "$OUT"

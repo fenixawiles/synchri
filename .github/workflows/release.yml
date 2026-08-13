@@ -73,11 +73,8 @@ jobs:
           security import "$CERTIFICATE_PATH" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN"
-      - name: Build, sign, and notarize the native DMG
+      - name: Build and sign the native DMG
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -85,9 +82,18 @@ jobs:
           SYNCHRI_TARGET_TRIPLE: aarch64-apple-darwin
           SYNCHRI_TAURI_TARGET_DIR: ${{ runner.temp }}/synchri-tauri-target
         run: scripts/build_tauri_macos.sh
+      - name: Notarize and staple the final native DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG="release/tauri/Synchri-macos-arm64.dmg"
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
       - name: Verify the signed native bundle
         run: |
-          APP="$RUNNER_TEMP/synchri-tauri-target/release/bundle/macos/Synchri.app"
+          APP="$RUNNER_TEMP/synchri-tauri-target/release/final/Synchri.app"
           DMG="release/tauri/Synchri-macos-arm64.dmg"
           test -x "$APP/Contents/MacOS/synchri-desktop"
           test -x "$APP/Contents/Resources/engine/synchri-core"

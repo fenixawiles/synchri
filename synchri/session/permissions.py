@@ -169,6 +169,87 @@ AUTHORITY_DISCLAIMER = (
 )
 
 
+@dataclass(frozen=True)
+class PermissionProfile:
+    """A named, understandable starting point for a workflow's permissions."""
+
+    key: str
+    label: str
+    description: str
+    best_for: str
+    warning: str | None = None
+
+    def decisions(self) -> dict[str, str]:
+        if self.key == "god_mode":
+            return {capability.key: Decision.ALLOW.value for capability in CATALOG}
+        if self.key == "important_only":
+            return {
+                capability.key: (
+                    Decision.ASK.value
+                    if capability.risk in {Risk.HIGH, Risk.DESTRUCTIVE}
+                    else Decision.ALLOW.value
+                )
+                for capability in CATALOG
+            }
+        if self.key == "cautious":
+            return {
+                capability.key: (
+                    Decision.ALLOW.value
+                    if capability.key in {"repo.read", "repo.test", "repo.build", "repo.lint", "gh.pr_review"}
+                    else Decision.ASK.value
+                    if capability.key in {"repo.edit", "repo.create_delete", "git.commit", "git.branch"}
+                    else Decision.DENY.value
+                )
+                for capability in CATALOG
+            }
+        raise ValidationError(f"unknown permission profile {self.key!r}")
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "description": self.description,
+            "best_for": self.best_for,
+            "warning": self.warning,
+            "permissions": self.decisions(),
+        }
+
+
+PERMISSION_PROFILES: tuple[PermissionProfile, ...] = (
+    PermissionProfile(
+        "important_only",
+        "Ask only if it’s important",
+        "Lets agents implement, test, commit, and keep momentum. It asks before high-impact, external, or destructive actions.",
+        "People who want agents to keep going without watching every normal development step.",
+    ),
+    PermissionProfile(
+        "cautious",
+        "Cautious review",
+        "Lets agents inspect and verify freely, while changes and commits remain deliberate decisions.",
+        "People exploring a new codebase, reviewing a sensitive change, or learning how a workflow behaves.",
+    ),
+    PermissionProfile(
+        "god_mode",
+        "God Mode",
+        "Authorizes every action Synchri knows how to gate for this session.",
+        "People running trusted agents on a repository they fully control and who want to step away while they work.",
+        "This does not bypass provider, operating-system, GitHub, branch-protection, or other external approval prompts.",
+    ),
+)
+
+
+def permission_profiles() -> list[dict]:
+    """Profiles for presentation and workflow defaults; never hidden authority."""
+    return [profile.to_dict() for profile in PERMISSION_PROFILES]
+
+
+def permission_profile(key: str) -> PermissionProfile:
+    for profile in PERMISSION_PROFILES:
+        if profile.key == key:
+            return profile
+    raise ValidationError(f"unknown permission profile {key!r}")
+
+
 @dataclass
 class PermissionSet:
     """A user's decisions for one session."""

@@ -234,6 +234,34 @@ def test_validate_refuses_the_primary_tree_as_a_worktree(repo):
     assert exc.value.code == "worktree_is_primary"
 
 
+def test_existing_worktrees_are_listed_but_the_primary_checkout_is_not(repo):
+    tree = worktree_module.create(repo, "main", name="synchri-existing-tree-1234")
+
+    choices = worktree_module.list_worktrees(repo)
+
+    assert choices == [{
+        "name": tree.name,
+        "path": tree.path,
+        "branch": tree.branch,
+        "head": tree.head,
+    }]
+
+
+def test_a_new_session_can_intentionally_use_an_existing_worktree(manager, repo, agents):
+    first = make_session(manager, repo, agents)
+    second = make_session(
+        manager,
+        repo,
+        agents,
+        name="Follow-up review",
+        existing_worktree_path=first.worktree_path,
+    )
+
+    assert second.worktree_path == first.worktree_path
+    assert second.worktree_branch == first.worktree_branch
+    assert second.metadata["worktree_strategy"] == "existing"
+
+
 def test_concurrent_worktree_creation_yields_distinct_trees(repo):
     """Two sessions starting at once must not land in the same tree."""
     results: list = []
@@ -310,6 +338,18 @@ def test_permission_denial_is_audited(manager, repo, agents, broker):
     assert denials and denials[-1]["payload"]["capability"] == "sys.deploy"
 
 
+def test_human_can_approve_an_ask_capability_without_widening_a_denial(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+
+    approved = manager.approve_capability(record.session_id, "repo.install_deps")
+
+    assert manager.check_permission(approved.session_id, "repo.install_deps", actor="claude") is True
+    assert approved.metadata["approved_capabilities"]["repo.install_deps"]["approved_by"] == "human"
+    with pytest.raises(StateError) as exc:
+        manager.approve_capability(record.session_id, "git.push")
+    assert exc.value.code == "permission_denied_by_workflow"
+
+
 def test_permissions_persist_across_a_restart(workspace, repo, agents):
     with Broker(workspace) as first:
         manager = SessionManager(first)
@@ -344,6 +384,18 @@ def test_unknown_capabilities_are_rejected_and_stale_ones_dropped():
     loaded = PermissionSet.from_dict({"git.push": "allow", "legacy.capability": "allow"})
     assert loaded.allows("git.push")
     assert "legacy.capability" not in loaded.to_dict()
+
+
+def test_permission_profiles_are_explicit_and_keep_external_authority_outside_synchri():
+    from synchri.session.permissions import permission_profile, permission_profiles
+
+    profiles = {profile["key"]: profile for profile in permission_profiles()}
+    assert {"important_only", "cautious", "god_mode"} <= set(profiles)
+    assert profiles["god_mode"]["warning"]
+    assert all(value == "allow" for value in permission_profile("god_mode").decisions().values())
+    assert permission_profile("important_only").decisions()["repo.edit"] == "allow"
+    assert permission_profile("important_only").decisions()["sys.deploy"] == "ask"
+    assert permission_profile("cautious").decisions()["git.push"] == "deny"
 
 
 # ----------------------------------------------------------------------
@@ -691,6 +743,46 @@ def test_deadline_phases_advance_with_elapsed_time():
     ]
     assert phases == ["exploration", "implementation", "stabilisation", "freeze"]
     assert deadline.phase(now=start + timedelta(hours=11))[0] == "elapsed"
+
+
+def test_extending_a_timebox_preserves_the_original_start_and_adds_time():
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime.now(timezone.utc)
+    deadline = Deadline.from_duration("2 hours", now=start)
+    extended = deadline.extend("30 minutes", now=start + timedelta(minutes=10))
+
+    assert extended.started_at == deadline.started_at
+    assert extended.total_seconds() == deadline.total_seconds() + 1800
+    assert extended.seconds_remaining(now=start + timedelta(minutes=10)) > deadline.seconds_remaining(
+        now=start + timedelta(minutes=10)
+    )
+
+
+def test_extending_an_elapsed_timebox_starts_a_new_advisory_window():
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime.now(timezone.utc)
+    deadline = Deadline.from_duration("10 minutes", now=start)
+    after_elapsed = start + timedelta(minutes=20)
+    extended = deadline.extend("30 minutes", now=after_elapsed)
+
+    assert extended.seconds_remaining(now=after_elapsed) >= 1799
+    assert extended.total_seconds() > deadline.total_seconds()
+
+
+def test_extending_an_active_timebox_does_not_reissue_the_contract(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.issue_contract(record.session_id)
+    accept_all(manager, record)
+    join_all(manager, record)
+    active = manager.activate(record.session_id)
+
+    extended = manager.extend_timebox(active.session_id, "30 minutes")
+
+    assert extended.status == SessionStatus.ACTIVE.value
+    assert extended.contract_revision == active.contract_revision
+    assert extended.deadline and extended.deadline.total_seconds() >= active.deadline.total_seconds() + 1800
 
 
 def test_an_elapsed_timebox_never_stops_or_claims_completion(manager, repo, agents):
@@ -1397,6 +1489,117 @@ def test_github_listing_degrades_when_gh_is_absent(monkeypatch):
     assert "local" in payload, "local repositories remain fully supported"
 
 
+def test_native_github_status_never_requires_the_github_cli(workspace, monkeypatch):
+    from synchri.session import discovery, github_auth
+
+    monkeypatch.setattr(github_auth, "credentials", lambda _workspace: None)
+    status = discovery.github_status(workspace)
+
+    assert status["installed"] is True
+    assert status["authenticated"] is False
+    assert "CLI" not in status["message"]
+    assert status["resolution"]["kind"] == "connect_github"
+
+
+def test_device_authorization_returns_a_user_code(monkeypatch):
+    from synchri.session import discovery, github_auth
+
+    monkeypatch.setattr(
+        github_auth,
+        "_post_form",
+        lambda _url, fields: {
+            "device_code": "device-secret", "user_code": "WXYZ-1234",
+            "verification_uri": "https://github.com/login/device", "expires_in": 900, "interval": 5,
+        },
+    )
+    login = discovery.begin_github_login()
+
+    assert login["started"] is True
+    assert login["user_code"] == "WXYZ-1234"
+    # The standalone discovery helper is intentionally lower-level than the
+    # local UI. The UI API wraps it and keeps this secret server-side.
+    assert login["device_code"] == "device-secret"
+    assert login["verification_uri"] == "https://github.com/login/device"
+
+
+def test_device_authorization_persists_credentials_without_exposing_them(workspace, monkeypatch):
+    from synchri.session import github_auth
+
+    written = {}
+    monkeypatch.setattr(github_auth, "_save_credentials", lambda _workspace, value: written.update(value))
+    monkeypatch.setattr(
+        github_auth,
+        "_post_form",
+        lambda _url, _fields: {
+            "access_token": "ghu_private", "refresh_token": "ghr_private", "expires_in": 28_800,
+        },
+    )
+    monkeypatch.setattr(
+        github_auth, "_account_for_token", lambda _token: {"id": 42, "login": "fenixawiles"}
+    )
+    result = github_auth.complete_device_authorization(workspace, "device-secret")
+
+    assert result == {"state": "connected", "account": {"id": 42, "login": "fenixawiles"}}
+    assert written["access_token"] == "ghu_private"
+    assert "access_token" not in result
+    assert written["account"] == {"id": 42, "login": "fenixawiles"}
+
+
+def test_github_status_represents_identity_separately_from_repository_access(workspace, monkeypatch):
+    from synchri.session import discovery, github_auth
+
+    monkeypatch.setattr(
+        github_auth,
+        "credentials",
+        lambda _workspace: {"access_token": "ghu_private", "account": {"login": "fenixawiles"}},
+    )
+
+    status = discovery.github_status(workspace)
+
+    assert status["authenticated"] is True
+    assert status["account"] == {"login": "fenixawiles"}
+    assert "separately" in status["message"]
+
+
+def test_github_repository_access_distinguishes_an_empty_grant_from_sign_in(workspace, monkeypatch):
+    from synchri.session import discovery, github_auth
+
+    monkeypatch.setattr(github_auth, "credentials", lambda _workspace: {"access_token": "ghu_private"})
+    monkeypatch.setattr(discovery, "_github_get", lambda _path, _token: {"installations": []})
+
+    access = discovery.github_repository_access(workspace)
+
+    assert access["authorized"] is False
+    assert access["installations"] == 0
+    assert access["install_url"].endswith("/installations/new")
+    assert "Choose the repositories" in access["message"]
+
+
+def test_github_repository_listing_uses_app_installations(workspace, monkeypatch):
+    from synchri.session import discovery, github_auth
+
+    monkeypatch.setattr(github_auth, "credentials", lambda _workspace: {"access_token": "ghu_private"})
+    calls = []
+
+    def fake_get(path, token):
+        calls.append((path, token))
+        if path.startswith("/user/installations?"):
+            return {"installations": [{"id": 41}]}
+        return {"repositories": [{
+            "name": "private-repo", "full_name": "fenixawiles/private-repo",
+            "html_url": "https://github.com/fenixawiles/private-repo", "clone_url": "https://github.com/fenixawiles/private-repo.git",
+            "description": "private", "updated_at": "2026-08-13T00:00:00Z", "private": True,
+        }]}
+
+    monkeypatch.setattr(discovery, "_github_get", fake_get)
+    repos = discovery.github_repositories(local=[], workspace=workspace)
+
+    assert repos[0]["full_name"] == "fenixawiles/private-repo"
+    assert repos[0]["private"] is True
+    assert calls[0][0].startswith("/user/installations")
+    assert "/user/installations/41/repositories" in calls[1][0]
+
+
 def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path, monkeypatch):
     from synchri.session import discovery
 
@@ -1417,6 +1620,41 @@ def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path,
     assert result["path"] == str(expected.resolve()) and result["cloned"] is True
     with pytest.raises(ValidationError, match="already exists"):
         discovery.clone_github_repository("fenixawiles/synchri", destination_root=desktop)
+
+
+def test_resolve_github_repository_reuses_synchris_existing_checkout(repo, tmp_path, monkeypatch):
+    from synchri.session import discovery
+
+    desktop = tmp_path / "Desktop" / "Synchri"
+    target = desktop / "fenixawiles-synchri"
+    desktop.mkdir(parents=True)
+    subprocess.run(["git", "clone", str(repo), str(target)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(target), "remote", "set-url", "origin", "https://github.com/fenixawiles/synchri.git"],
+        check=True,
+        capture_output=True,
+    )
+
+    monkeypatch.setattr(discovery, "_clone", lambda *_args: pytest.fail("must reuse, not clone"))
+    resolved = discovery.resolve_github_repository("fenixawiles/synchri", destination_root=desktop)
+
+    assert resolved["path"] == str(target.resolve())
+    assert resolved["reused"] is True
+    assert resolved["cloned"] is False
+
+
+def test_resolve_github_repository_explains_an_occupied_clone_location(tmp_path):
+    from synchri.session import discovery
+
+    desktop = tmp_path / "Desktop" / "Synchri"
+    occupied = desktop / "fenixawiles-synchri"
+    occupied.mkdir(parents=True)
+
+    with pytest.raises(ValidationError) as exc:
+        discovery.resolve_github_repository("fenixawiles/synchri", destination_root=desktop)
+
+    assert exc.value.code == "clone_location_conflict"
+    assert exc.value.details["resolution"]["kind"] == "choose_local_repository"
 
 
 @pytest.mark.parametrize("reference", [

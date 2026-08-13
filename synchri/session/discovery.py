@@ -4,25 +4,31 @@ Two sources, both optional conveniences over the fully-supported "pick a
 directory" path:
 
 * **local** -- git repositories under the usual code directories;
-* **GitHub** -- whatever `gh` already has access to.
+* **GitHub** -- repositories the person explicitly granted the Synchri GitHub
+  App access to, through its native device sign-in.
 
-GitHub is deliberately shelled out to the user's own `gh` CLI rather than
-integrated: no tokens to store, no API client, and it simply does not appear if
-`gh` is absent or logged out. Local repositories remain fully supported with no
-GitHub involvement at all.
+GitHub credentials are a local detail of the desktop application.  They do not
+live in room state, are never sent to agents, and no `gh` installation is
+required. Local repositories remain fully supported with no GitHub involvement
+at all.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
+from ..config import Workspace, resolve_workspace
 from ..errors import StateError, ValidationError
+from . import github_auth
 
-GH_TIMEOUT_SECONDS = 15.0
+GITHUB_TIMEOUT_SECONDS = 15.0
 SCAN_TIMEOUT_SECONDS = 5.0
 
 #: Where people keep code. Scanned shallowly; never recursive-everything.
@@ -56,7 +62,10 @@ def github_reference(value: str) -> tuple[str, str, str] | None:
 
 
 def clone_github_repository(
-    reference: str, *, destination_root: str | Path | None = None
+    reference: str,
+    *,
+    destination_root: str | Path | None = None,
+    workspace: Workspace | None = None,
 ) -> dict:
     """Clone a selected GitHub repository into a predictable Desktop folder.
 
@@ -80,7 +89,15 @@ def clone_github_repository(
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as exc:
         raise StateError(f"could not create {parent}: {exc}", code="clone_failed") from exc
-    _clone(source, target)
+    credentials = github_auth.credentials(workspace or resolve_workspace().ensure())
+    access_token = (credentials or {}).get("access_token")
+    # Preserve the two-argument helper seam used by integrations that replace
+    # the actual clone with a local fixture. Real GitHub cloning receives the
+    # secure ephemeral credential only when one exists.
+    if access_token:
+        _clone(source, target, access_token=access_token)
+    else:
+        _clone(source, target)
 
     from . import worktree as worktree_module
 
@@ -99,22 +116,137 @@ def clone_github_repository(
     }
 
 
-def _clone(source: str, target: Path) -> None:
+def resolve_github_repository(
+    reference: str,
+    *,
+    destination_root: str | Path | None = None,
+    workspace: Workspace | None = None,
+) -> dict:
+    """Return a safe local checkout for a GitHub repository.
+
+    A repository is a reusable source, not a session identity.  This resolver
+    first reuses an existing matching checkout and only clones when no safe
+    match exists.  The caller can therefore start any number of sessions from
+    the same GitHub URL; :mod:`worktree` creates a fresh isolated target for
+    each session afterwards.
+
+    Nothing is ever overwritten.  If Synchri's visible clone location is
+    occupied by a different folder, the error says exactly what the user can
+    do next instead of asking them to guess.
+    """
+    parsed = github_reference(reference)
+    if parsed is None:
+        raise ValidationError("choose a GitHub repository, e.g. fenixawiles/synchri")
+    owner, repo, _source = parsed
+    parent = Path(destination_root).expanduser() if destination_root else desktop_clone_root()
+    target = parent / f"{owner}-{repo}"
+
+    from . import worktree as worktree_module
+
+    # The expected Synchri checkout is the inexpensive, most common lookup.
+    if target.exists():
+        status = worktree_module.inspect_repository(target)
+        if status.is_valid and _remote_matches_reference(status.remote, owner, repo):
+            return _resolved_checkout(status, owner, repo, reused=True)
+        message = (
+            f"Synchri's checkout location {target} is already occupied by a different folder. "
+            "Synchri will not overwrite it. Choose that folder if it is the project you want, "
+            "or move it and try again."
+        )
+        raise ValidationError(
+            message,
+            code="clone_location_conflict",
+            resolution={
+                "kind": "choose_local_repository",
+                "path": str(target),
+                "label": "Choose the existing folder",
+            },
+        )
+
+    # A user may have cloned the project elsewhere.  Search the intentionally
+    # shallow discovery roots plus Synchri's own clone shelf before cloning.
+    for candidate in local_repositories(extra=[str(parent)]):
+        if _remote_matches_reference(candidate.get("remote"), owner, repo):
+            status = worktree_module.inspect_repository(candidate["path"])
+            if status.is_valid:
+                return _resolved_checkout(status, owner, repo, reused=True)
+
+    cloned = clone_github_repository(
+        reference, destination_root=parent, workspace=workspace
+    )
+    return {**cloned, "reused": False}
+
+
+def _resolved_checkout(status, owner: str, repo: str, *, reused: bool) -> dict:
+    return {
+        "path": status.root,
+        "name": status.name,
+        "source": f"{owner}/{repo}",
+        "destination": status.root,
+        "cloned": False,
+        "reused": reused,
+    }
+
+
+def _remote_matches_reference(remote: str | None, owner: str, repo: str) -> bool:
+    """Match GitHub HTTPS and SSH remotes without treating a bare name as proof."""
+    if not remote:
+        return False
+    normalized = remote.strip().lower().removesuffix(".git").rstrip("/")
+    expected = f"github.com/{owner.lower()}/{repo.lower()}"
+    return normalized.endswith(expected)
+
+
+def _clone(source: str, target: Path, access_token: str | None = None) -> None:
     """Run one bounded, argument-safe clone invocation."""
+    env = os.environ.copy()
+    askpass: Path | None = None
+    if access_token:
+        askpass = _create_git_askpass()
+        env.update(
+            {
+                "GIT_ASKPASS": str(askpass),
+                "GIT_TERMINAL_PROMPT": "0",
+                "SYNCHRI_GITHUB_ACCESS_TOKEN": access_token,
+            }
+        )
+    completed = None
     try:
         completed = subprocess.run(
             ["git", "clone", "--", source, str(target)],
             capture_output=True,
             text=True,
             timeout=60.0,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         raise StateError("cloning the repository timed out", code="clone_failed") from exc
     except OSError as exc:
         raise StateError(f"could not run git clone: {exc}", code="clone_failed") from exc
-    if completed.returncode != 0:
+    finally:
+        if askpass:
+            askpass.unlink(missing_ok=True)
+    if completed is None or completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "git clone failed").strip()
+        if not access_token and "authentication" in detail.lower():
+            detail += " Connect GitHub in Synchri, then choose the repository again."
         raise StateError(f"could not clone the repository: {detail}", code="clone_failed")
+
+
+def _create_git_askpass() -> Path:
+    """Create a one-use helper so a clone never writes its token into Git config."""
+    descriptor, raw = tempfile.mkstemp(prefix="synchri-git-askpass-", text=True)
+    helper = Path(raw)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  *Username*) printf '%s\\n' x-access-token ;;\n"
+            "  *) printf '%s\\n' \"$SYNCHRI_GITHUB_ACCESS_TOKEN\" ;;\n"
+            "esac\n"
+        )
+    helper.chmod(0o700)
+    return helper
 
 
 def local_repositories(
@@ -188,53 +320,172 @@ def _last_commit_time(path: str) -> str | None:
     return worktree_module.git(path, "log", "-1", "--format=%cI", check=False) or None
 
 
-def github_available() -> bool:
-    """Is `gh` installed and authenticated?"""
+def github_status(workspace: Workspace | None = None) -> dict:
+    """Describe the local GitHub sign-in, independently of repository grants."""
+    active_workspace = workspace or resolve_workspace().ensure()
     try:
-        completed = subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return completed.returncode == 0
-
-
-def github_repositories(limit: int = 50, *, local: list[dict] | None = None) -> list[dict]:
-    """Repositories the user's own `gh` can see. Empty if unavailable."""
-    try:
-        completed = subprocess.run(
-            [
-                "gh", "repo", "list", "--limit", str(limit),
-                "--json", "name,nameWithOwner,url,sshUrl,description,updatedAt,isPrivate",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=GH_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if completed.returncode != 0:
-        return []
-    try:
-        raw = json.loads(completed.stdout or "[]")
-    except json.JSONDecodeError:  # pragma: no cover - unexpected gh output
-        return []
-
-    return [
-        {
-            "source": "github",
-            "name": item.get("name"),
-            "full_name": item.get("nameWithOwner"),
-            "url": item.get("url"),
-            "clone_url": item.get("sshUrl") or item.get("url"),
-            "description": item.get("description"),
-            "updated_at": item.get("updatedAt"),
-            "private": item.get("isPrivate", False),
-            # A GitHub entry is only usable once it exists on disk.
-            "local_path": _matching_local_clone(item.get("nameWithOwner") or "", local=local),
+        connected = bool(github_auth.credentials(active_workspace))
+    except StateError:
+        connected = False
+    if connected:
+        return {
+            "installed": True,
+            "authenticated": True,
+            "account": github_auth.account(active_workspace),
+            "message": "GitHub is signed in on this Mac. Repository access is managed separately.",
         }
-        for item in raw
-    ]
+    return {
+        "installed": True,
+        "authenticated": False,
+        "account": None,
+        "message": "Sign in with GitHub to create this Mac's Synchri profile.",
+        "resolution": {"kind": "connect_github"},
+    }
+
+
+def github_available(workspace: Workspace | None = None) -> bool:
+    """Compatibility shorthand for callers that only need an availability bit."""
+    return bool(github_status(workspace)["authenticated"])
+
+
+def begin_github_login() -> dict:
+    """Start GitHub App device flow for non-UI callers.
+
+    The local browser API deliberately wraps this operation and retains the
+    device secret server-side.  This low-level helper stays useful to trusted
+    native callers that need to manage their own device-flow polling.
+    """
+    authorization = github_auth.start_device_authorization()
+    return {
+        "started": True,
+        "device_code": authorization.device_code,
+        **authorization.to_dict(),
+    }
+
+
+def github_repositories(
+    limit: int = 50,
+    *,
+    local: list[dict] | None = None,
+    workspace: Workspace | None = None,
+) -> list[dict]:
+    """Repositories explicitly accessible through the Synchri App installation."""
+    token_bundle = github_auth.credentials(workspace or resolve_workspace().ensure())
+    if not token_bundle:
+        return []
+    token = str(token_bundle.get("access_token") or "")
+    if not token:
+        return []
+    installations = _github_get("/user/installations?per_page=100", token).get("installations", [])
+    raw: list[dict] = []
+    for installation in installations if isinstance(installations, list) else []:
+        installation_id = installation.get("id") if isinstance(installation, dict) else None
+        if not installation_id:
+            continue
+        try:
+            page = _github_get(
+                f"/user/installations/{installation_id}/repositories?per_page={min(100, limit)}",
+                token,
+            )
+        except StateError:
+            continue
+        items = page.get("repositories", [])
+        if isinstance(items, list):
+            raw.extend(item for item in items if isinstance(item, dict))
+        if len(raw) >= limit:
+            break
+
+    # A user can have the same repository reachable through more than one
+    # installation.  The chooser should show it exactly once.
+    seen: set[str] = set()
+    found = []
+    for item in raw:
+        full_name = str(item.get("full_name") or "")
+        if not full_name or full_name.lower() in seen:
+            continue
+        seen.add(full_name.lower())
+        found.append(
+            {
+                "source": "github",
+                "name": item.get("name"),
+                "full_name": full_name,
+                "url": item.get("html_url"),
+                "clone_url": item.get("clone_url") or item.get("html_url"),
+                "description": item.get("description"),
+                "updated_at": item.get("updated_at"),
+                "private": item.get("private", False),
+                # A GitHub entry is only usable once it exists on disk.
+                "local_path": _matching_local_clone(full_name, local=local),
+            }
+        )
+    return found[:limit]
+
+
+def github_repository_access(workspace: Workspace | None = None) -> dict[str, Any]:
+    """Expose the explicit GitHub App grant state without listing repositories.
+
+    A GitHub sign-in identifies the person; the app installation is the second
+    choice that allows a person or organization to select repositories.  This
+    tiny endpoint lets the UI give that missing step a clear resolution instead
+    of silently displaying an empty list.
+    """
+    token_bundle = github_auth.credentials(workspace or resolve_workspace().ensure())
+    token = str((token_bundle or {}).get("access_token") or "")
+    if not token:
+        return {
+            "authorized": False,
+            "installations": 0,
+            "install_url": github_auth.GITHUB_APP_INSTALL_URL,
+            "message": "Choose the repositories Synchri may access in GitHub.",
+        }
+    payload = _github_get("/user/installations?per_page=100", token)
+    installations = payload.get("installations", [])
+    count = len(installations) if isinstance(installations, list) else 0
+    return {
+        "authorized": count > 0,
+        "installations": count,
+        "install_url": github_auth.GITHUB_APP_INSTALL_URL,
+        "message": (
+            "Repository access is ready."
+            if count
+            else "Choose the repositories Synchri may access in GitHub."
+        ),
+    }
+
+
+def _github_get(path: str, token: str) -> dict[str, Any]:
+    request = Request(
+        f"{github_auth.GITHUB_API_URL}{path}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": github_auth.GITHUB_API_VERSION,
+        },
+    )
+    try:
+        with urlopen(request, timeout=GITHUB_TIMEOUT_SECONDS) as response:  # noqa: S310 - fixed API host
+            import json
+
+            value = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        if exc.code == 401:
+            raise StateError(
+                "Your GitHub connection expired. Connect GitHub again to continue.",
+                code="github_connection_expired",
+                resolution={"kind": "connect_github"},
+            ) from exc
+        raise StateError(
+            "GitHub could not load your repositories. Try again in a moment.",
+            code="github_unavailable",
+            resolution={"kind": "retry_github_login"},
+        ) from exc
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        raise StateError(
+            "GitHub could not load your repositories. Check your connection and try again.",
+            code="github_unavailable",
+            resolution={"kind": "retry_github_login"},
+        ) from exc
+    return value if isinstance(value, dict) else {}
 
 
 def _matching_local_clone(full_name: str, *, local: list[dict] | None = None) -> str | None:
@@ -249,16 +500,42 @@ def _matching_local_clone(full_name: str, *, local: list[dict] | None = None) ->
     return None
 
 
-def repositories(include_github: bool = True, *, include_local: bool = True) -> dict:
+def repositories(
+    include_github: bool = True,
+    *,
+    include_local: bool = True,
+    workspace: Workspace | None = None,
+) -> dict:
     """Everything the repository step can offer, in one call."""
     local = local_repositories() if include_local else []
     github: list[dict] = []
-    available = include_github and github_available()
+    active_workspace = workspace or resolve_workspace().ensure()
+    status = github_status(active_workspace) if include_github else {"installed": False, "authenticated": False}
+    # Keep the small boolean seam for older API consumers and test doubles.
+    # Retain the zero-argument seam used by external library consumers and
+    # lightweight test doubles.  ``github_status`` already authenticated the
+    # exact workspace above.
+    access = {
+        "authorized": False,
+        "installations": 0,
+        "install_url": github_auth.GITHUB_APP_INSTALL_URL,
+        "message": "Choose the repositories Synchri may access in GitHub.",
+    }
+    available = bool(include_github and status.get("authenticated") and github_available())
     if available:
-        github = github_repositories(local=local)
+        try:
+            access = github_repository_access(active_workspace)
+            if access["authorized"]:
+                github = github_repositories(local=local, workspace=active_workspace)
+        except StateError:
+            # Local discovery remains instant and useful when GitHub is briefly
+            # unavailable. A later background request gets another chance.
+            access["unavailable"] = True
     return {
         "local": local,
         "github": github,
-        "github_available": available,
+        "github_available": bool(available and access["authorized"]),
+        "github_status": status,
+        "github_access": access,
         "cwd": str(Path.cwd()),
     }

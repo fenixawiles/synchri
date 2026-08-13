@@ -102,6 +102,20 @@ def test_gate_directives_keep_evidence_together_and_request_completion():
     assert directives.gate_updates[0].tests == ["pytest tests/test_auth.py::test_login"]
 
 
+def test_approval_directive_is_structured_and_not_shown_in_the_reply():
+    body, directives = parse_directives(
+        "I need permission to install the package.\n\n"
+        "SYNCHRI-TO: human\n"
+        "SYNCHRI-STATUS: blocked\n"
+        "SYNCHRI-APPROVAL: repo.install_deps|Install the missing development dependency."
+    )
+    assert body == "I need permission to install the package."
+    assert directives.to == "human"
+    assert directives.status == "blocked"
+    assert directives.approval_capability == "repo.install_deps"
+    assert directives.approval_request == "Install the missing development dependency."
+
+
 def test_gate_directives_are_preserved_when_an_agent_passes():
     body, directives = parse_directives(
         "SYNCHRI-GATE: AUTH-01|in_progress|started the implementation\n"

@@ -51,5 +51,7 @@ SESSION_ENDED = "session.ended"
 SESSION_GATE_UPDATED = "session.gate_updated"
 SESSION_ESCALATED = "session.escalated"
 SESSION_PERMISSION_DENIED = "session.permission_denied"
+SESSION_PERMISSION_APPROVED = "session.permission_approved"
+SESSION_TIMEBOX_EXTENDED = "session.timebox_extended"
 
 ALL = [value for name, value in list(globals().items()) if name.isupper() and name != "ALL"]

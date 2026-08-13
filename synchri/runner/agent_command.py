@@ -25,7 +25,7 @@ DEFAULT_TIMEOUT_SECONDS = 900.0
 #: Trailing control lines an agent may emit to steer the room.  Documented in
 #: docs/single-terminal.md and included in every generated prompt.
 _DIRECTIVE = re.compile(
-    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT|COMPLETE)\s*:?\s*(?P<value>.*?)\s*$",
+    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT|COMPLETE|APPROVAL)\s*:?\s*(?P<value>.*?)\s*$",
     re.IGNORECASE,
 )
 
@@ -155,6 +155,8 @@ class Directives:
     confidence: float | None = None
     gate_updates: list["GateUpdate"] = field(default_factory=list)
     complete_requested: bool = False
+    approval_capability: str | None = None
+    approval_request: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -231,6 +233,12 @@ def parse_directives(text: str) -> tuple[str, Directives]:
                 getattr(directives.gate_updates[-1], field_name).append(value)
         elif key == "COMPLETE":
             directives.complete_requested = True
+        elif key == "APPROVAL":
+            capability, separator, description = value.partition("|")
+            directives.approval_capability = capability.strip() or None
+            directives.approval_request = (
+                description.strip() if separator and description.strip() else value or "Approval requested"
+            )
 
     if directives.to and directives.handoff:
         # The envelope forbids both; addressing someone is the stronger signal.

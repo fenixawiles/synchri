@@ -189,6 +189,7 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     assert [m["mode"] for m in boot["modes"]] == ["long_horizon"]
     assert any(c["key"] == "git.push" for g in boot["permissions"] for c in g["capabilities"])
     assert boot["sessions"] == [] and "workspace" in boot
+    assert boot["github"]["authenticated"] is False
 
 
 def test_the_client_uses_native_updates_only_from_the_packaged_desktop_app():
@@ -199,6 +200,54 @@ def test_the_client_uses_native_updates_only_from_the_packaged_desktop_app():
     assert 'nativeInvoke("check_for_update")' in source
     assert 'nativeInvoke("install_update")' in source
     assert "Download the signed Synchri update" in source
+
+
+def test_the_client_uses_github_app_device_sign_in_without_a_cli_dependency():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'api("github/connect", {})' in source
+    assert 'api("github/poll", {request_id: login.request_id})' in source
+    assert "Enter this code in GitHub" in source
+    assert "GitHub CLI" not in source
+
+
+def test_the_client_separates_github_profile_sign_in_from_repository_access():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+
+    assert 'id="github-account"' in source
+    assert "Create your Synchri profile" in source
+    assert "Choose repository access" in source
+    assert "openRepositoryAccess" in source
+
+
+def test_api_keeps_the_github_device_secret_out_of_the_browser(ui, monkeypatch):
+    from synchri.session import github_auth
+
+    monkeypatch.setattr(
+        github_auth,
+        "start_device_authorization",
+        lambda: github_auth.DeviceAuthorization(
+            device_code="secret-device-code", user_code="WXYZ-1234",
+            verification_uri="https://github.com/login/device", expires_at=9_999_999_999, interval=5,
+        ),
+    )
+    seen = []
+
+    def complete(workspace, device_code):
+        seen.append((workspace, device_code))
+        return {"state": "connected"}
+
+    monkeypatch.setattr(github_auth, "complete_device_authorization", complete)
+    started = call(ui, "/api/github/connect", {})
+
+    assert "device_code" not in started
+    assert started["request_id"]
+    result = call(ui, "/api/github/poll", {"request_id": started["request_id"]})
+    assert result == {"state": "connected"}
+    assert seen[0][1] == "secret-device-code"
 
 
 def test_local_repositories_do_not_wait_for_github(ui, monkeypatch):
@@ -430,11 +479,14 @@ def test_managed_start_attaches_agrees_and_begins_without_pasted_prompts(ui, rep
     assert conversation[-1]["message_type"] == "pass"
 
 
-def test_quick_start_clones_a_github_reference_before_making_the_room(ui, repo, monkeypatch):
+def test_quick_start_resolves_a_github_reference_before_making_the_room(ui, repo, monkeypatch):
     from synchri.session import discovery
 
-    cloned = {"path": str(repo), "name": "proj", "source": "fenixawiles/synchri", "cloned": True}
-    monkeypatch.setattr(discovery, "clone_github_repository", lambda reference: cloned)
+    resolved = {
+        "path": str(repo), "name": "proj", "source": "fenixawiles/synchri",
+        "cloned": False, "reused": True,
+    }
+    monkeypatch.setattr(discovery, "resolve_github_repository", lambda reference: resolved)
     result = call(ui, "/api/quick-start", {
         "repo_path": "fenixawiles/synchri",
         "goal": "Review the current change together.",
@@ -444,8 +496,91 @@ def test_quick_start_clones_a_github_reference_before_making_the_room(ui, repo, 
         ],
     })
 
-    assert result["clone"] == cloned
+    assert result["repository"] == resolved
     assert result["session"]["repository"]["root"] == str(repo.resolve())
+
+
+def test_reusing_a_repository_source_creates_distinct_session_worktrees(ui, repo):
+    agents = [
+        {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+        {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+    ]
+    first = call(ui, "/api/quick-start", {
+        "repo_path": str(repo), "goal": "Build the first feature.", "agents": agents,
+    })
+    second = call(ui, "/api/quick-start", {
+        "repo_path": str(repo), "goal": "Build a different feature.", "agents": agents,
+    })
+
+    assert first["session"]["repository"]["root"] == second["session"]["repository"]["root"]
+    assert first["session"]["worktree"]["path"] != second["session"]["worktree"]["path"]
+    assert first["session"]["worktree"]["branch"] != second["session"]["worktree"]["branch"]
+
+
+def test_existing_worktrees_can_be_selected_for_a_new_session(ui, repo):
+    agents = [
+        {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+        {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+    ]
+    first = call(ui, "/api/quick-start", {
+        "repo_path": str(repo), "goal": "Build the first feature.", "agents": agents,
+    })
+    choices = call(ui, f"/api/worktrees?repo={repo}")
+
+    assert choices["repository"] == str(repo.resolve())
+    assert len(choices["worktrees"]) == 1
+    choice = choices["worktrees"][0]
+    assert choice["name"] == first["session"]["worktree"]["name"]
+    assert choice["path"] == first["session"]["worktree"]["path"]
+    assert choice["branch"] == first["session"]["worktree"]["branch"]
+
+    second = call(ui, "/api/quick-start", {
+        "repo_path": str(repo), "goal": "Review the existing feature.", "agents": agents,
+        "existing_worktree_path": first["session"]["worktree"]["path"],
+    })
+
+    assert second["session"]["worktree"]["path"] == first["session"]["worktree"]["path"]
+    assert second["session"]["metadata"]["worktree_strategy"] == "existing"
+
+
+def test_bootstrap_exposes_understandable_permission_profiles(ui):
+    profiles = call(ui, "/api/bootstrap")["permission_profiles"]
+    by_key = {profile["key"]: profile for profile in profiles}
+    assert by_key["important_only"]["label"] == "Ask only if it’s important"
+    assert by_key["god_mode"]["warning"]
+
+
+def test_dashboard_exposes_the_active_turn_for_agent_task_timing(ui, repo):
+    started = call(ui, "/api/quick-start", {
+        "repo_path": str(repo), "goal": "Build this.",
+        "agents": [
+            {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+            {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+        ],
+    })
+    session_id = started["session"]["session_id"]
+    record = started["session"]
+    for agent in started["launch"]["agents"]:
+        token = agent["join_command"].split("synchri join ", 1)[1].split(" --name", 1)[0]
+        ui["broker"].join(token, agent["name"])
+        call(ui, "/api/ack", {"session": session_id, "participant": agent["name"], "reply": "UNDERSTOOD"})
+    call(ui, "/api/activate", {"session": session_id})
+
+    dashboard = call(ui, f"/api/dashboard?session={session_id}")
+    assert dashboard["current_actor"] == "codex"
+    assert dashboard["active_turn"]["participant_name"] == "codex"
+    assert dashboard["active_turn"]["started_at"]
+
+
+def test_conversation_ui_contains_task_states_timebox_resolution_and_inline_decisions():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "Planning the next step. This can take a few minutes." in source
+    assert "data-task-started" in source
+    assert "Add 30 min" in source and "agent work will not stop" in source
+    assert "Approve</button>" in source and "Deny</button>" in source
+    assert "Here’s how to continue" in source
 
 
 def test_the_ui_cannot_activate_before_acknowledgment(ui, repo):
@@ -556,6 +691,38 @@ def test_human_reply_returns_to_the_agent_waiting_on_permission(ui, repo):
     assert result["routed_to"] == "claude"
     assert result["message"]["target"] == "claude"
     assert result["next_speaker"] == "claude"
+
+
+def test_inline_approval_grants_only_the_named_ask_capability_and_routes_the_reply(ui, repo):
+    session_id, credentials = _active_with_credentials(ui, repo)
+    session = call(ui, f"/api/session?session={session_id}")
+    ui["broker"].send(
+        session["room_id"],
+        credential=credentials["claude"],
+        draft=MessageDraft(
+            content="I need permission to install the package.",
+            message_type="response",
+            response_status="blocked",
+            target="human",
+            metadata={
+                "approval_capability": "repo.install_deps",
+                "approval_request": "Install the missing development dependency.",
+            },
+        ),
+    )
+
+    result = call(ui, "/api/approval", {
+        "session": session_id,
+        "target": "claude",
+        "approved": True,
+        "capability": "repo.install_deps",
+        "detail": "Install the missing development dependency.",
+    })
+
+    assert result["routed_to"] == "claude"
+    assert "external controls still apply" in result["message"]["content"]
+    manager = SessionManager(ui["broker"])
+    assert manager.check_permission(session_id, "repo.install_deps") is True
 
 
 def test_resolved_permission_request_does_not_capture_later_human_direction(ui, repo):

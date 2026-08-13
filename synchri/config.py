@@ -54,6 +54,17 @@ class Workspace:
     def sessions_dir(self) -> Path:
         return self.home / "sessions"
 
+    @property
+    def github_credentials_path(self) -> Path:
+        """Fallback credential location for platforms without a native keychain.
+
+        macOS uses the user's Keychain instead.  Keeping the fallback inside
+        the existing owner-only workspace preserves the local-first contract
+        for the command-line package on other platforms without ever putting
+        credentials in the room database.
+        """
+        return self.home / "github-credentials.json"
+
     def room_dir(self, room_id: str) -> Path:
         """Per-room directory.
 

@@ -9,11 +9,14 @@ the browser honest with each other.
 from __future__ import annotations
 
 import shlex
+import secrets
+import threading
+import time
 from typing import Callable
 
 from ..broker import Broker, Credential
 from ..errors import NotFoundError, ValidationError
-from ..session import discovery, drafts as drafts_module, presets as presets_module
+from ..session import discovery, drafts as drafts_module, presets as presets_module, worktree as worktree_module
 from ..session.draft import SessionDraft
 from ..session.escalation import CATALOG as ESCALATION_CATALOG
 from ..session.extract import describe as describe_gates, extract_gates
@@ -27,7 +30,7 @@ from ..session.modes import (
     plan_launch_status,
     runtime_catalog,
 )
-from ..session.permissions import PermissionSet
+from ..session.permissions import PermissionSet, permission_profile, permission_profiles
 from ..session.spec import ProductSpec
 from ..runner.managed import ManagedRunnerRegistry
 
@@ -53,12 +56,22 @@ class Api:
         # room launch, not a repository-discovery exercise.  The draft still
         # validates it before anything is created.
         self.default_repo = self._valid_repository(default_repo)
+        # Device codes are short-lived, single-use, and deliberately stay in
+        # this local server process.  The browser receives only the harmless
+        # code it asks the person to type into GitHub.
+        self._github_device_codes: dict[str, tuple[str, float]] = {}
+        self._github_device_lock = threading.Lock()
         #: Wizard drafts are persisted, so closing the app does not lose an
         #: unfinished wizard and two tabs on one draft stay in step. They hold
         #: no authority: nothing is created until "Start session".
         self._routes: dict[tuple[str, str], Route] = {
             ("GET", "bootstrap"): self.bootstrap,
             ("GET", "repositories"): self.repositories,
+            ("GET", "worktrees"): self.worktrees,
+            ("POST", "repository/resolve"): self.resolve_repository,
+            ("POST", "github/connect"): self.connect_github,
+            ("POST", "github/poll"): self.poll_github,
+            ("POST", "github/disconnect"): self.disconnect_github,
             ("POST", "draft"): self.update_draft,
             ("GET", "draft"): self.get_draft,
             ("POST", "draft/reset"): self.reset_draft,
@@ -76,6 +89,7 @@ class Api:
             ("GET", "conversation"): self.conversation,
             ("GET", "changelog"): self.changelog,
             ("POST", "message"): self.message,
+            ("POST", "approval"): self.approval,
             ("GET", "gates"): self.gates,
             ("POST", "gate"): self.update_gate,
             ("POST", "tests/run"): self.run_tests,
@@ -104,10 +118,15 @@ class Api:
                 {"key": r.value, "label": r.value.replace("_", " ").title()} for r in Role
             ],
             "permissions": PermissionSet.defaults().grouped(),
+            "permission_profiles": permission_profiles(),
             "escalation_rules": [r.to_dict() for r in ESCALATION_CATALOG],
             "presets": presets_module.list_presets(self.broker.workspace),
             "sessions": [s.to_dict() for s in self.manager.list_sessions()],
             "workspace": str(self.broker.workspace.home),
+            # GitHub is the sign-in identity for this local installation. It
+            # never makes the session database cloud-hosted; it simply lets the
+            # person see who is signed in before choosing repository grants.
+            "github": discovery.github_status(self.broker.workspace),
             "default_repo": self.default_repo,
             "desktop_clone_root": str(discovery.desktop_clone_root()),
             "open_drafts": drafts_module.versions(self.broker.conn),
@@ -117,7 +136,100 @@ class Api:
         return discovery.repositories(
             include_github=query.get("github") != "0",
             include_local=query.get("local") != "0",
+            workspace=self.broker.workspace,
         )
+
+    def worktrees(self, query: dict, body: dict) -> dict:
+        """Selectable existing worktrees for a repository.
+
+        This is deliberately small: the UI presents a new worktree by default
+        and this endpoint supplies the optional alternatives.  The primary
+        checkout is excluded by ``list_worktrees`` and validated again on use.
+        """
+        repo_path = (query.get("repo") or "").strip()
+        status = worktree_module.inspect_repository(repo_path)
+        if not status.is_valid:
+            raise ValidationError("choose a usable repository before selecting a worktree")
+        return {"repository": status.root, "worktrees": worktree_module.list_worktrees(status.root)}
+
+    def resolve_repository(self, query: dict, body: dict) -> dict:
+        """Prepare a selected source repository without conflating it with a session.
+
+        This deliberately returns a reusable primary checkout.  ``create`` then
+        creates a new worktree per session, so resolving the same GitHub repo
+        repeatedly is safe and expected.
+        """
+        reference = (body.get("reference") or "").strip()
+        if not reference:
+            raise ValidationError("choose a repository first")
+        if discovery.github_reference(reference):
+            return {
+                "repository": discovery.resolve_github_repository(
+                    reference, workspace=self.broker.workspace
+                )
+            }
+        status = self._valid_repository(reference)
+        if not status:
+            raise ValidationError(
+                "That folder is not a usable Git repository. Choose a repository from the list, "
+                "or select Connect GitHub to browse one.",
+                code="repository_unusable",
+                resolution={"kind": "choose_repository"},
+            )
+        return {
+            "repository": {
+                "path": status,
+                "name": status.rsplit("/", 1)[-1],
+                "source": "local",
+                "cloned": False,
+                "reused": True,
+            }
+        }
+
+    def connect_github(self, query: dict, body: dict) -> dict:
+        from ..session import github_auth
+
+        authorization = github_auth.start_device_authorization()
+        request_id = secrets.token_urlsafe(24)
+        with self._github_device_lock:
+            self._discard_expired_github_codes()
+            self._github_device_codes[request_id] = (
+                authorization.device_code,
+                authorization.expires_at,
+            )
+        return {"started": True, "request_id": request_id, **authorization.to_dict()}
+
+    def poll_github(self, query: dict, body: dict) -> dict:
+        """Finish one native device-flow poll without exposing a credential to JS."""
+        from ..session import github_auth
+
+        request_id = str(body.get("request_id") or "")
+        with self._github_device_lock:
+            self._discard_expired_github_codes()
+            stored = self._github_device_codes.get(request_id)
+        if not stored:
+            raise ValidationError(
+                "That GitHub sign-in request expired. Connect GitHub again to get a fresh code.",
+                code="github_login_expired",
+                resolution={"kind": "connect_github"},
+            )
+        result = github_auth.complete_device_authorization(self.broker.workspace, stored[0])
+        if result.get("state") in {"connected", "expired"}:
+            with self._github_device_lock:
+                self._github_device_codes.pop(request_id, None)
+        return result
+
+    def _discard_expired_github_codes(self) -> None:
+        now = time.time()
+        for request_id, (_device_code, expires_at) in list(self._github_device_codes.items()):
+            if expires_at <= now:
+                self._github_device_codes.pop(request_id, None)
+
+    def disconnect_github(self, query: dict, body: dict) -> dict:
+        from ..session import github_auth
+
+        github_auth.delete_credentials(self.broker.workspace)
+        return {"disconnected": True, "message": "GitHub is disconnected from this Mac."}
 
     @staticmethod
     def _valid_repository(path: str | None) -> str | None:
@@ -159,8 +271,13 @@ class Api:
             draft.set_repository(body["repo_path"], body.get("base_branch"))
         elif body.get("base_branch") and draft.repo_path:
             draft.set_repository(draft.repo_path, body["base_branch"])
-        if "worktree_name" in body or "worktree_parent" in body:
-            draft.set_worktree(body.get("worktree_name") or None, body.get("worktree_parent") or None)
+        if ("worktree_name" in body or "worktree_parent" in body
+                or "existing_worktree_path" in body):
+            draft.set_worktree(
+                body.get("worktree_name") or None,
+                body.get("worktree_parent") or None,
+                body.get("existing_worktree_path") or None,
+            )
         if body.get("agents") is not None:
             draft.set_agents(
                 [
@@ -206,6 +323,7 @@ class Api:
                 "repo_path": draft.repo_path,
                 "base_branch": draft.base_branch,
                 "worktree_name": draft.worktree_name,
+                "existing_worktree_path": draft.existing_worktree_path,
                 "agents": [p.to_dict() for p in draft.participants],
                 "permissions": draft.permissions.to_dict(),
                 "spec": draft.spec.text if draft.spec else "",
@@ -241,6 +359,7 @@ class Api:
             escalation=draft.escalation,
             worktree_parent=draft.worktree_parent,
             worktree_name=draft.worktree_name,
+            existing_worktree_path=draft.existing_worktree_path,
         )
         document = self.manager.issue_contract(record.session_id, reason="initial contract")
         if body.get("save_preset"):
@@ -257,10 +376,10 @@ class Api:
         if not goal:
             raise ValidationError("describe what you want the agents to do")
 
-        cloned = None
+        repository = None
         if discovery.github_reference(repo_path):
-            cloned = discovery.clone_github_repository(repo_path)
-            repo_path = cloned["path"]
+            repository = discovery.resolve_github_repository(repo_path)
+            repo_path = repository["path"]
 
         preset_name = (body.get("preset") or "").strip()
         draft = (
@@ -270,6 +389,8 @@ class Api:
         )
         draft.set_mode("long_horizon")
         draft.set_repository(repo_path)
+        if "existing_worktree_path" in body:
+            draft.set_worktree(existing_path=body.get("existing_worktree_path") or None)
         if body.get("agents") is not None:
             draft.set_agents(self._plans(body.get("agents")))
         elif not draft.participants:
@@ -292,11 +413,17 @@ class Api:
             spec=draft.spec,
             deadline=draft.deadline,
             escalation=draft.escalation,
+            existing_worktree_path=draft.existing_worktree_path,
         )
         document = self.manager.issue_contract(record.session_id, reason="quick start")
         payload = self._launch_payload(self.manager.get(record.session_id), document=document)
-        if cloned:
-            payload["clone"] = cloned
+        if repository:
+            payload["repository"] = repository
+            # Kept for the existing desktop handoff copy.  New clients use
+            # ``repository`` so they can distinguish a fresh clone from a
+            # safely reused checkout.
+            if repository.get("cloned"):
+                payload["clone"] = repository
         return payload
 
     def launch(self, query: dict, body: dict) -> dict:
@@ -380,6 +507,9 @@ class Api:
                     f"{cli} wait --as {shlex.quote(plan.name)} --watch-messages",
                     "Only acknowledge after reading the contract. Stay connected until the room ends. "
                     "Work only when Synchri gives you the turn; while waiting, do not send status updates.",
+                    f"At the beginning of every turn, publish a concise live state with `{cli} activity "
+                    f"--as {shlex.quote(plan.name)} -m \"Planning the next step. This can take a few minutes.\"`. "
+                    "Update it before a long skill or tool call; it clears automatically when you respond.",
                     f"When you finish a gate, record it with `{cli} session gates GATE-ID --set pass "
                     f"--as {shlex.quote(plan.name)} --assessment \"…\" --evidence \"…\" --session {record.session_id}`.",
                     (
@@ -521,6 +651,34 @@ class Api:
         result["managed"] = self.managed.resume(self.manager.get(record.session_id))
         return result
 
+    def approval(self, query: dict, body: dict) -> dict:
+        """Act on an explicit agent decision request, then wake the waiting agent.
+
+        The approval record is meaningful only when the agent named a known
+        capability that the active workflow marked ASK.  Generic decisions are
+        still routed as normal human replies; they cannot become a hidden
+        permission escalation.
+        """
+        record = self.manager.get(self._session_id(query, body))
+        target = (body.get("target") or "").strip()
+        if target not in {plan.name for plan in record.participants}:
+            raise ValidationError("choose the agent that requested this decision")
+        approved = bool(body.get("approved"))
+        capability = (body.get("capability") or "").strip()
+        if approved and capability:
+            self.manager.approve_capability(record.session_id, capability, actor="human")
+        detail = (body.get("detail") or "the specific request in your prior message").strip()
+        content = (
+            f"Approved: proceed with {detail}. Synchri recorded the named session permission where applicable. "
+            "Provider, operating-system, GitHub, and other external controls still apply."
+            if approved else
+            f"Denied: do not proceed with {detail}. Explain a safer alternative if one exists."
+        )
+        return self.message(
+            {},
+            {"session": record.session_id, "target": target, "content": content, "interrupt": True},
+        )
+
     def _human_reply_route(self, record, requested: str | None = None) -> tuple[str | None, bool]:
         """Resolve who should receive the next human message from the app.
 
@@ -646,6 +804,15 @@ class Api:
                 session_id,
                 deadline=Deadline.from_duration(body["deadline"]),
                 reason="deadline changed by the user",
+            )
+        elif action == "extend_deadline":
+            self.manager.extend_timebox(session_id, body.get("duration", ""))
+        elif action == "permission_profile":
+            profile = permission_profile(body.get("profile", ""))
+            self.manager.update_configuration(
+                session_id,
+                permissions=PermissionSet.from_dict(profile.decisions()),
+                reason=f"permission profile changed to {profile.label}",
             )
         else:
             raise ValidationError(f"unknown control action {action!r}")

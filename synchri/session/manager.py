@@ -40,7 +40,7 @@ from .deadline import Deadline
 from .escalation import EscalationPolicy
 from .gates import Gate, summarize
 from .modes import ModePolicy, ParticipantPlan, collaboration_pair, policy_for, resolve_role
-from .permissions import Decision, PermissionDenied, PermissionSet
+from .permissions import BY_KEY, Decision, PermissionDenied, PermissionSet
 from .spec import ProductSpec
 from . import extract as extract_module
 from . import verify as verify_module
@@ -184,6 +184,7 @@ class SessionManager:
         escalation: EscalationPolicy | None = None,
         worktree_parent: str | None = None,
         worktree_name: str | None = None,
+        existing_worktree_path: str | None = None,
         metadata: dict | None = None,
     ) -> SessionRecord:
         """Validate the configuration, cut the worktree, and create the room.
@@ -221,15 +222,22 @@ class SessionManager:
         grants = policy.apply_forced_denials(permissions or PermissionSet.defaults())
         rules = escalation or EscalationPolicy()
 
-        # The worktree is cut before the room exists: no room, no session, if we
-        # cannot guarantee an isolated place to work.
-        tree = worktree_module.create(
-            status.root,
-            branch,
-            mode=policy.mode.value,
-            name=worktree_name,
-            parent_dir=worktree_parent,
-        )
+        # A fresh isolated worktree is the default. A user may deliberately
+        # select an existing non-primary worktree for a follow-up session.
+        # Both paths use the same validation; neither can target the primary
+        # checkout.
+        created_worktree = not bool(existing_worktree_path)
+        if existing_worktree_path:
+            selected = Path(existing_worktree_path).expanduser().resolve()
+            tree = worktree_module.validate(status.root, selected, selected.name, branch)
+        else:
+            tree = worktree_module.create(
+                status.root,
+                branch,
+                mode=policy.mode.value,
+                name=worktree_name,
+                parent_dir=worktree_parent,
+            )
 
         session_id = new_id("sess")
         try:
@@ -242,8 +250,10 @@ class SessionManager:
                 invite_ttl_seconds=0,  # invites live as long as the session room
             )
         except Exception:
-            # Do not leave an orphan worktree behind if the room could not be made.
-            worktree_module.remove(tree, force=True, delete_branch=True)
+            # Only a brand-new tree is ours to clean up. A selected existing
+            # worktree remains exactly where the user left it.
+            if created_worktree:
+                worktree_module.remove(tree, force=True, delete_branch=True)
             raise
 
         now = utc_now()
@@ -272,6 +282,7 @@ class SessionManager:
                 "observer_token": room["observer_token"],
                 "human": room["human"],
                 "primary_tree_dirty": status.is_dirty,
+                "worktree_strategy": "new" if created_worktree else "existing",
             },
             participants=plans,
         )
@@ -635,6 +646,28 @@ class SessionManager:
             "requires_reacknowledgment": True,
         }
 
+    def extend_timebox(self, session_id: str, duration: str) -> SessionRecord:
+        """Add advisory time without disrupting a live session.
+
+        A normal deadline edit changes the collaboration agreement and requires
+        a new acknowledgment.  Extending an already-active *suggested* timebox
+        is different: it only changes pacing, never execution authority, so it
+        is durable and audited without stopping the agents in mid-turn.
+        """
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(f"session is {record.status}", code="session_finished")
+        if record.deadline is None:
+            raise ValidationError("this session has no timebox to extend")
+        extended = record.deadline.extend(duration)
+        self._update(session_id, deadline=json.dumps(extended.to_dict()))
+        self._log(
+            record,
+            ev.SESSION_TIMEBOX_EXTENDED,
+            {"duration": duration, "ends_at": extended.ends_at},
+        )
+        return self.get(session_id)
+
     # ------------------------------------------------------------------
     # permission checks
     # ------------------------------------------------------------------
@@ -647,7 +680,8 @@ class SessionManager:
         """
         record = self.get(session_id)
         decision = record.permissions.decision(capability)
-        if decision is Decision.ALLOW:
+        approvals = (record.metadata or {}).get("approved_capabilities") or {}
+        if decision is Decision.ALLOW or approvals.get(capability):
             return True
         self._log(
             record,
@@ -655,6 +689,40 @@ class SessionManager:
             {"capability": capability, "decision": decision.value, "actor": actor},
         )
         raise PermissionDenied(capability, decision)
+
+    def approve_capability(self, session_id: str, capability: str, *, actor: str | None = None) -> SessionRecord:
+        """Record the human's approval of one explicitly requested ASK action.
+
+        This is intentionally scoped: it may satisfy an ``ASK`` capability for
+        the current session, but it cannot turn a policy ``DENY`` into a grant
+        and it never touches a provider, operating-system, GitHub, or other
+        external approval boundary.
+        """
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(f"session is {record.status}", code="session_finished")
+        if capability not in BY_KEY:
+            raise ValidationError(f"unknown capability {capability!r}")
+        decision = record.permissions.decision(capability)
+        if decision is Decision.DENY:
+            raise StateError(
+                f"{BY_KEY[capability].label} is denied by this workflow. Change the workflow permissions before approving it.",
+                code="permission_denied_by_workflow",
+                resolution={"kind": "edit_permissions", "capability": capability},
+            )
+        if decision is Decision.ALLOW:
+            return record
+        metadata = dict(record.metadata or {})
+        approved = dict(metadata.get("approved_capabilities") or {})
+        approved[capability] = {"approved_at": utc_now(), "approved_by": actor or "human"}
+        metadata["approved_capabilities"] = approved
+        self._update(session_id, metadata=json.dumps(metadata))
+        self._log(
+            record,
+            ev.SESSION_PERMISSION_APPROVED,
+            {"capability": capability, "actor": actor or "human"},
+        )
+        return self.get(session_id)
 
     def permits(self, session_id: str, capability: str) -> bool:
         """Non-raising variant, for rendering UI state."""
@@ -1102,6 +1170,7 @@ class SessionManager:
             "phase": deadline.phase()[0] if deadline else None,
             "phase_guidance": deadline.phase()[1] if deadline else None,
             "current_actor": (room_status or {}).get("active_speaker"),
+            "active_turn": (room_status or {}).get("active_turn"),
             "queue": (room_status or {}).get("queue", []),
             "activities": (room_status or {}).get("activities", []),
             "activity_entries": (room_status or {}).get("activity_entries", []),

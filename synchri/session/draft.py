@@ -13,8 +13,9 @@ use (no timebox step for a review, for example).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from ..errors import ValidationError
+from ..errors import StateError, ValidationError
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
@@ -52,6 +53,9 @@ class SessionDraft:
     base_branch: str | None = None
     worktree_name: str | None = None
     worktree_parent: str | None = None
+    #: Optional existing non-primary worktree the user intentionally selected.
+    #: Empty means the normal, safe default: create a fresh worktree.
+    existing_worktree_path: str | None = None
     participants: list[ParticipantPlan] = field(default_factory=list)
     permissions: PermissionSet = field(default_factory=PermissionSet.defaults)
     spec: ProductSpec | None = None
@@ -96,6 +100,7 @@ class SessionDraft:
             return {
                 "base_branch": self.base_branch or (status.branch if status else None),
                 "branches": status.branches if status else [],
+                "existing_worktree_path": self.existing_worktree_path,
                 "preview_name": self.worktree_name or worktree_module.generate_name(self.mode),
                 "parent": str(
                     worktree_module.default_worktree_parent(status.root)
@@ -148,9 +153,14 @@ class SessionDraft:
         status = worktree_module.inspect_repository(path)
         if not status.is_valid:
             raise ValidationError("; ".join(status.problems))
+        changed_repository = self.repo_path != status.root
         self._repo_status = status
         self.repo_path = status.root
         self.base_branch = base_branch or status.branch
+        # A worktree only belongs to the repository it was selected from.
+        # Changing projects restores the default fresh-worktree choice.
+        if changed_repository:
+            self.existing_worktree_path = None
         if self.base_branch and self.base_branch not in status.branches:
             raise ValidationError(
                 f"branch {self.base_branch!r} is not in this repository "
@@ -167,9 +177,26 @@ class SessionDraft:
             self._repo_status = worktree_module.inspect_repository(self.repo_path)
         return self._repo_status
 
-    def set_worktree(self, name: str | None = None, parent: str | None = None) -> "SessionDraft":
+    def set_worktree(
+        self,
+        name: str | None = None,
+        parent: str | None = None,
+        existing_path: str | None = None,
+    ) -> "SessionDraft":
         self.worktree_name = name
         self.worktree_parent = parent
+        selected = (existing_path or "").strip()
+        if selected:
+            status = self.repo_status()
+            path = worktree_module.validate(
+                status.root, selected, Path(selected).name,
+                self.base_branch or status.branch or "HEAD",
+            )
+            self.existing_worktree_path = path.path
+            self.worktree_name = None
+            self.worktree_parent = None
+        else:
+            self.existing_worktree_path = None
         return self
 
     def set_agents(self, participants: list[ParticipantPlan]) -> "SessionDraft":
@@ -278,13 +305,23 @@ class SessionDraft:
                 "dirty": bool(status and status.is_dirty),
             },
             "worktree": {
-                "name": self.worktree_name or "(generated at start)",
+                "name": (
+                    self.existing_worktree_path
+                    or self.worktree_name
+                    or "(generated at start)"
+                ),
                 "parent": self.worktree_parent
-                or (str(worktree_module.default_worktree_parent(status.root)) if status else None),
+                or (
+                    None if self.existing_worktree_path
+                    else str(worktree_module.default_worktree_parent(status.root)) if status else None
+                ),
                 "explanation": (
-                    "Synchri creates an isolated Git worktree so participating agents do not "
+                    "Using the worktree you selected."
+                    if self.existing_worktree_path
+                    else "Synchri creates an isolated Git worktree so participating agents do not "
                     "modify your primary working directory."
                 ),
+                "existing": bool(self.existing_worktree_path),
             },
             "agents": [p.to_dict() for p in self.participants],
             "permissions": self.permissions.grouped(),
@@ -312,6 +349,7 @@ class SessionDraft:
             "base_branch": self.base_branch,
             "worktree_name": self.worktree_name,
             "worktree_parent": self.worktree_parent,
+            "existing_worktree_path": self.existing_worktree_path,
             "spec": self.spec.to_dict() if self.spec else None,
             # A duration draft has no meaningful absolute timestamp until the
             # session begins. Persist only its text preference so reopening a
@@ -341,6 +379,11 @@ class SessionDraft:
                 draft.repo_path = None
         draft.worktree_name = state.get("worktree_name")
         draft.worktree_parent = state.get("worktree_parent")
+        if state.get("existing_worktree_path") and draft.repo_path:
+            try:
+                draft.set_worktree(existing_path=state["existing_worktree_path"])
+            except (ValidationError, StateError):
+                draft.existing_worktree_path = None
         draft.name = state.get("name")
         if state.get("spec"):
             draft.spec = ProductSpec.from_dict(state["spec"])

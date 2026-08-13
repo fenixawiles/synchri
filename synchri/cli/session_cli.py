@@ -49,6 +49,10 @@ def add_parsers(sub, command) -> None:
     start.add_argument("--worktree-name")
     start.add_argument("--worktree-parent")
     start.add_argument(
+        "--existing-worktree",
+        help="reuse this existing non-primary Git worktree instead of creating a new one",
+    )
+    start.add_argument(
         "--agent",
         action="append",
         default=[],
@@ -202,7 +206,7 @@ def build_draft(args, broker: Broker) -> SessionDraft:
             )
 
     # 3. worktree
-    draft.set_worktree(args.worktree_name, args.worktree_parent)
+    draft.set_worktree(args.worktree_name, args.worktree_parent, args.existing_worktree)
 
     # 4. agents
     if args.agent:
@@ -337,6 +341,7 @@ def cmd_start(args: argparse.Namespace, broker: Broker) -> int:
         escalation=draft.escalation,
         worktree_parent=draft.worktree_parent,
         worktree_name=draft.worktree_name,
+        existing_worktree_path=draft.existing_worktree_path,
     )
     document = manager.issue_contract(record.session_id, reason="initial contract")
     # Re-read: issuing the contract moved the session to awaiting_ack, and the

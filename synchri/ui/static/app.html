@@ -92,6 +92,7 @@ header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;ali
 .conversation-shell{position:relative;min-width:0;min-height:0;height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--panel)}.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.2rem clamp(2rem,4vw,5rem) 1rem;border-bottom:1px solid var(--line)}.chat-title{font-size:17px;font-weight:680}.chat-subtitle{font-size:12px;color:var(--dim);margin-top:.1rem}.chat-time{font-size:12px;color:var(--dim);white-space:nowrap}
 .conversation-feed{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto auto;overflow:hidden}.message-list{min-height:0;overflow-y:auto;padding:1rem clamp(2rem,4vw,5rem) .6rem;scroll-behavior:smooth}.message-list .msg{padding:1rem 0;border-bottom:0;max-width:62rem}.conversation-feed .msg .who{font-size:11px;letter-spacing:.075em;font-weight:750;color:var(--dim)}.conversation-feed .msg .body{white-space:normal;margin-top:.28rem;line-height:1.62}.msg.you .who{color:var(--accent)}.msg.system .body{color:var(--dim);font-size:13px}.handoff{margin:.52rem 0 0;font-size:10px;font-weight:750;letter-spacing:.08em;color:var(--accent)}.response-state{margin-top:.45rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
 .live-work{margin:0;padding:.3rem clamp(2rem,4vw,5rem) .45rem;max-width:none;background:transparent}.live-work-label{font-size:10px;font-weight:750;letter-spacing:.09em;color:var(--accent);margin-bottom:.18rem}.live-work summary{cursor:pointer;list-style:none}.live-work summary::-webkit-details-marker{display:none}.live-work summary::after{content:"Show trail";margin-left:.5rem;color:var(--dim);font-size:10px;font-weight:500;letter-spacing:0}.live-work[open] summary::after{content:"Hide trail"}.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.55rem;align-items:baseline;font-size:13px;padding:.08rem 0;max-width:62rem}.live-note b{font-size:11px;letter-spacing:.06em}.live-note .dot{color:var(--accent)}
+.timebox-nudge{margin:0 clamp(2rem,4vw,5rem) .5rem;padding:.6rem .8rem;border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 12px 12px 0;font-size:12px;color:var(--ink)}.timebox-nudge .row{margin-top:.5rem;flex-wrap:wrap}.timebox-nudge button{font-size:12px;padding:.3rem .55rem}.decision-actions{display:flex;gap:.45rem;margin-top:.65rem}.decision-actions button{font-size:12px;padding:.32rem .65rem}.decision-actions button[data-decision="approve"]{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:700}.decision-actions button[data-decision="deny"]{color:var(--bad)}
 .rich{max-width:62rem}.rich h3,.rich h4{font-size:14px;margin:.65rem 0 .2rem}.rich h4{font-size:13px}.rich p{margin:.45rem 0}.rich .rich-list{margin:.42rem 0;padding-left:1.1rem}.rich .rich-list div{margin:.16rem 0}.rich .rich-quote{margin:.6rem 0;padding:.15rem 0 .15rem .8rem;border-left:2px solid var(--line);color:var(--dim)}.rich code{font-size:.88em;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:.1rem .28rem}.rich .rich-code{margin:.65rem 0;padding:.75rem .85rem;border:1px solid var(--line);background:#f7f7f5;border-radius:7px;overflow:auto;line-height:1.5}.rich .rich-code code{padding:0;border:0;background:transparent}.rich a{color:var(--accent);text-decoration-thickness:1px}.live-note .rich{display:inline}.live-note .rich p{display:inline;margin:0}.live-note .rich .rich-code{display:block}
 .chat-compose{display:flex;gap:.55rem;margin:0;padding:.7rem clamp(2rem,4vw,5rem) 1.7rem;max-width:none}.chat-compose input{min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:.55rem .05rem;background:transparent;max-width:62rem}.chat-compose input:focus{outline:none;border-color:var(--accent)}.chat-compose button{padding:.45rem .8rem}
 .details-panel{position:absolute;inset:1rem clamp(1rem,3vw,3rem);z-index:5;margin:0;padding:1.2rem clamp(1.25rem,3vw,2.5rem);border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);box-shadow:0 18px 50px rgba(25,30,27,.16);overflow:auto}.detail-heading{font-size:11px;letter-spacing:.08em;color:var(--dim);font-weight:750;margin-bottom:.7rem}.detail-close{float:right;border:0;background:transparent;color:var(--dim);padding:.1rem .3rem}
@@ -110,6 +111,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)
   <div class="brand">synchri<span>.</span></div>
   <div class="row">
     <span id="ctx" class="small muted"></span>
+    <button class="ghost" id="github-account">Sign in with GitHub</button>
     <button class="ghost hide" id="app-update"></button>
     <button class="ghost" id="nav-home">Sessions</button>
     <button id="nav-new">Run a workflow</button>
@@ -168,14 +170,52 @@ async function api(path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.error) throw new Error(data.error?.message || res.statusText);
+  if (!res.ok || data.error) {
+    const error = new Error(data.error?.message || res.statusText);
+    error.code = data.error?.code;
+    error.resolution = data.error?.resolution;
+    throw error;
+  }
   return data;
 }
 
-function flash(message) {
+function flash(error) {
+  const message = typeof error === "string" ? error : error?.message;
+  const resolution = typeof error === "object" ? error?.resolution : null;
   const box = document.getElementById("err");
   box.className = "err card"; box.style.borderColor = "var(--bad)";
-  box.innerHTML = `<b>Could not do that</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
+  const action = resolution?.kind === "connect_github" || resolution?.kind === "retry_github_login"
+    ? `<button id="error-connect-github" style="margin-top:.65rem">Connect GitHub</button>`
+    : resolution?.kind === "github_app_settings"
+      ? `<button id="error-open-github-settings" style="margin-top:.65rem">Open GitHub App settings</button>`
+      : resolution?.kind === "choose_local_repository" && resolution?.path
+        ? `<button id="error-choose-repo" style="margin-top:.65rem">${esc(resolution.label || "Use existing folder")}</button>`
+        : resolution?.kind === "choose_repository"
+          ? `<button id="error-choose-repo" style="margin-top:.65rem">Choose a repository</button>`
+          : error?.code === "awaiting_join" || error?.code === "awaiting_ack"
+            ? `<button id="error-open-setup" style="margin-top:.65rem">Open agent setup</button>`
+            : error?.code === "gates_unsatisfied"
+              ? `<button id="error-open-gates" style="margin-top:.65rem">Review acceptance gates</button>`
+              : error?.code === "worktree_missing"
+                ? `<button id="error-open-worktree" style="margin-top:.65rem">View workspace details</button>`
+                : "";
+  box.innerHTML = `<b>Here’s how to continue</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>${action}`;
+  box.querySelector("#error-connect-github")?.addEventListener("click", guard(connectGitHub));
+  box.querySelector("#error-open-github-settings")?.addEventListener("click", () => {
+    window.open("https" + "://github.com/settings/apps", "_blank");
+  });
+  box.querySelector("#error-choose-repo")?.addEventListener("click", guard(async () => {
+    if (!S.quick) await quickStart();
+    if (resolution?.path) S.quick.repo_path = resolution.path;
+    renderQuick();
+  }));
+  box.querySelector("#error-open-setup")?.addEventListener("click", guard(() => openLaunch(S.session)));
+  box.querySelector("#error-open-gates")?.addEventListener("click", () => {
+    S.tab = "gates"; renderSession();
+  });
+  box.querySelector("#error-open-worktree")?.addEventListener("click", () => {
+    S.tab = "worktree"; renderSession();
+  });
   clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 7000);
 }
 function confirmNotice(message) {
@@ -184,14 +224,95 @@ function confirmNotice(message) {
   box.innerHTML = `<b>Saved</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
   clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 4200);
 }
-const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e.message); } };
+const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e); } };
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
             agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null,
             workflowName:"", workflowOriginal:"", workflowAgents:null,
-            workflowPermissions:null, workflowDeadline:"", update:null };
+            workflowPermissions:null, workflowDeadline:"", update:null, dismissedTimebox:null,
+            worktreeChoices:null, worktreeLoading:null };
 const app = () => document.getElementById("app");
+
+/* ----------------------------------------------------------- GitHub sign-in */
+async function connectGitHub() {
+  const login = await api("github/connect", {});
+  const githubDevicePage = "https" + "://github.com/login/device";
+  const destination = login.verification_uri || githubDevicePage;
+  const opened = window.open(destination, "_blank");
+  if (!opened) window.location.assign(destination);
+  await showGitHubCode(login);
+}
+
+function sleep(ms) { return new Promise(resolve => window.setTimeout(resolve, ms)); }
+
+async function showGitHubCode(login) {
+  const previous = document.getElementById("github-device-login");
+  previous?.remove();
+  const expiresIn = Math.max(0, Math.ceil((Number(login.expires_at) * 1000 - Date.now()) / 1000));
+  const code = $(`<div class="details-panel stack" id="github-device-login" role="dialog" aria-modal="true">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="detail-heading">CONNECT GITHUB</div>
+    <h2>Enter this code in GitHub</h2>
+    <p class="muted">GitHub opened in your browser. Sign in if needed, then enter this one-time code to create your Synchri profile on this Mac. Repository access is chosen separately.</p>
+    <pre style="font-size:1.6rem;text-align:center;letter-spacing:.12em;padding:1rem">${esc(login.user_code)}</pre>
+    <div class="small muted">Waiting for GitHub — this closes on its own after approval. Expires in about ${expiresIn} seconds.</div>
+    <div class="row"><button class="primary" data-open>Open GitHub again</button><button data-close>Cancel</button></div>
+  </div>`);
+  document.body.append(code);
+  let cancelled = false;
+  const close = () => { cancelled = true; code.remove(); };
+  code.querySelector(".detail-close").onclick = close;
+  code.querySelector("[data-close]").onclick = close;
+  code.querySelector("[data-open]").onclick = () => window.open(login.verification_uri || githubDevicePage, "_blank", "noopener,noreferrer");
+  let interval = Math.max(2, Number(login.interval) || 5);
+  while (!cancelled && Date.now() < Number(login.expires_at) * 1000) {
+    await sleep(interval * 1000);
+    if (cancelled) return;
+    const result = await api("github/poll", {request_id: login.request_id});
+    if (result.state === "pending") { interval = Math.max(interval, Number(result.interval) || interval); continue; }
+    if (result.state === "connected") {
+      code.remove(); S.repos = null; S.githubReposRequest = null;
+      S.boot = await api("bootstrap"); renderGitHubAccount();
+      const login = result.account?.login ? `Signed in as @${result.account.login}.` : "GitHub is signed in.";
+      confirmNotice(`${login} Choose repository access when you are ready.`);
+      if (S.view === "quick") { await loadQuickRepositories(); renderQuick(); }
+      if (S.view === "wizard" && S.step === "repository") renderWizard();
+      return;
+    }
+    if (result.state === "expired") break;
+  }
+  if (!cancelled) { code.remove(); flash("That GitHub code expired. Connect GitHub again to get a new one."); }
+}
+
+function renderGitHubAccount() {
+  const button = document.getElementById("github-account");
+  const github = S.boot?.github || {};
+  const account = github.account || {};
+  if (github.authenticated) {
+    button.textContent = account.login ? `@${account.login}` : "GitHub connected";
+    button.title = "Signed in to Synchri with GitHub on this Mac";
+    button.onclick = guard(async () => {
+      await api("github/disconnect", {});
+      S.repos = null; S.githubReposRequest = null; S.boot = await api("bootstrap");
+      renderGitHubAccount(); confirmNotice("GitHub was disconnected from this Mac.");
+    });
+    return;
+  }
+  button.textContent = "Sign in with GitHub";
+  button.title = "Create or open your Synchri profile with GitHub";
+  button.onclick = guard(connectGitHub);
+}
+
+function openRepositoryAccess(access) {
+  const destination = access?.install_url;
+  if (!destination) {
+    flash({message:"Repository selection is being finished for Synchri. You are already signed in; local repositories remain available in the meantime.", resolution:{kind:"github_app_settings"}});
+    return;
+  }
+  const opened = window.open(destination, "_blank", "noopener,noreferrer");
+  if (!opened) window.location.assign(destination);
+}
 
 /* --------------------------------------------------------- application update */
 const nativeInvoke = (command, args) => window.__TAURI__?.core?.invoke(command, args);
@@ -237,6 +358,7 @@ async function home() {
   S.boot = await api("bootstrap");
   listen();
   document.getElementById("ctx").textContent = S.boot.workspace;
+  renderGitHubAccount();
   const list = S.boot.sessions;
   const workflows = S.boot.presets || [];
   app().innerHTML = "";
@@ -290,7 +412,8 @@ async function home() {
   for (const s of list) {
     const done = ["complete","timed_out","stopped","failed"].includes(s.status);
     const cls = s.status === "active" ? "" : (done ? "dim" : "warn");
-    const row = $(`<div class="card" style="margin-bottom:.65rem;cursor:pointer">
+    const brief = (s.spec?.text || s.spec?.canonical_text || "").trim().split("\n").find(Boolean) || "No saved brief";
+    const row = $(`<div class="card" style="margin-bottom:.65rem">
       <div class="between">
         <div>
           <b>${esc(s.name)}</b> <span class="pill ${cls}">${esc(s.status.replace("_"," "))}</span>
@@ -298,13 +421,23 @@ async function home() {
             ${esc(s.mode_label)} · ${esc(s.repository.name)} ·
             ${esc(s.worktree ? s.worktree.name : "no worktree")}
           </div>
+          <div class="small muted" style="margin-top:.25rem">${esc(brief.slice(0, 180))}</div>
         </div>
-        <div class="small muted mono">${esc(s.session_id)}</div>
+        <div class="row"><button data-open>Open</button><button class="ghost" data-new>New session in this repo</button></div>
       </div></div>`);
-    row.onclick = () => openSession(s.session_id);
+    row.querySelector("[data-open]").onclick = () => openSession(s.session_id);
+    row.querySelector("[data-new]").onclick = () => quickStartFromRepository(s.repository.root);
     app().append(row);
   }
   void checkForUpdate();
+}
+
+async function quickStartFromRepository(repoPath) {
+  await quickStart();
+  S.quick.repo_path = repoPath;
+  S.quick.existing_worktree_path = null;
+  await loadWorktreeChoices(repoPath);
+  renderQuick();
 }
 
 /* ------------------------------------------------------------- quick start */
@@ -321,8 +454,54 @@ async function quickStart(selectedWorkflow) {
     goal: "",
     deadline: "",
     preset: workflow.name,
+    existing_worktree_path: null,
   };
+  S.worktreeChoices = null;
+  await loadQuickRepositories();
+  if (S.quick.repo_path) await loadWorktreeChoices(S.quick.repo_path);
   renderQuick();
+}
+
+async function loadQuickRepositories() {
+  if (!S.repos) S.repos = await api("repositories?github=0");
+  if (!S.githubReposRequest) {
+    S.githubReposLoading = true;
+    S.githubReposRequest = api("repositories").then(repos => {
+      S.repos = repos; S.githubReposLoading = false;
+      if (S.view === "quick") renderQuick();
+      return repos;
+    }).catch(() => {
+      S.githubReposLoading = false;
+      if (S.view === "quick") renderQuick();
+      return S.repos;
+    });
+  }
+}
+
+async function selectQuickRepository(reference) {
+  const result = await api("repository/resolve", {reference});
+  S.quick.repo_path = result.repository.path;
+  S.quick.existing_worktree_path = null;
+  await loadWorktreeChoices(S.quick.repo_path);
+  confirmNotice(result.repository.reused
+    ? `Using the existing checkout. This session will get a new isolated worktree.`
+    : `Repository ready. This session will get a new isolated worktree.`);
+  renderQuick();
+}
+
+async function loadWorktreeChoices(repoPath) {
+  if (!repoPath) return [];
+  if (S.worktreeChoices?.repository === repoPath) return S.worktreeChoices.worktrees;
+  if (S.worktreeLoading === repoPath) return [];
+  S.worktreeLoading = repoPath;
+  try {
+    S.worktreeChoices = await api(`worktrees?repo=${encodeURIComponent(repoPath)}`);
+    return S.worktreeChoices.worktrees;
+  } finally {
+    S.worktreeLoading = null;
+    if (S.view === "quick" && S.quick?.repo_path === repoPath) renderQuick();
+    if (S.view === "wizard" && S.draft?.draft.repo_path === repoPath && S.step === "worktree") renderWizard();
+  }
 }
 
 /* ----------------------------------------------------------- workflows */
@@ -358,6 +537,8 @@ function renderWorkflow() {
       <div id="workflow-agents" class="stack"></div><div><button id="workflow-add">Add an agent</button></div></div>
     <details class="card"><summary><b>Permissions and pacing</b> <span class="small muted">Optional defaults</span></summary>
       <div class="small muted" style="margin:.65rem 0">Synchri starts cautiously. These are defaults for sessions using this workflow, and remain adjustable later.</div>
+      <div id="workflow-profiles" class="grid"></div>
+      <div class="small muted" style="margin:.7rem 0">A profile is a starting point; the controls below remain available for a custom setup. Synchri never overrides provider, operating-system, or GitHub approvals.</div>
       <div id="workflow-permissions"></div>
       <label style="display:block;margin-top:1rem"><b>Suggested timebox</b><input id="workflow-deadline" value="${esc(S.workflowDeadline)}" placeholder="Optional, e.g. 2 hours"></label>
       <div class="small muted" style="margin-top:.35rem">The clock begins only when collaboration begins. It guides pace; it never cuts work off.</div>
@@ -387,6 +568,15 @@ function renderWorkflow() {
     agents.push({name:"", runtime:"generic", role:"participant"}); drawAgents();
   };
   const permissions = box.querySelector("#workflow-permissions");
+  const profiles = box.querySelector("#workflow-profiles");
+  for (const profile of S.boot.permission_profiles || []) {
+    const choice = $(`<button class="choice" data-profile="${esc(profile.key)}"><b>${esc(profile.label)}</b><span class="small muted">${esc(profile.description)}</span><span class="small muted" style="display:block;margin-top:.25rem">Best for: ${esc(profile.best_for)}</span>${profile.warning ? `<span class="small" style="display:block;margin-top:.25rem;color:var(--warn)">${esc(profile.warning)}</span>` : ""}</button>`);
+    choice.onclick = () => {
+      S.workflowPermissions = {...profile.permissions};
+      renderWorkflow();
+    };
+    profiles.append(choice);
+  }
   for (const group of S.boot.permissions) {
     const groupEl = $(`<div style="margin-top:.8rem"><div class="small muted" style="font-weight:700;letter-spacing:.06em">${esc(group.group.toUpperCase())}</div></div>`);
     for (const capability of group.capabilities) {
@@ -421,6 +611,35 @@ function renderQuick() {
   app().innerHTML = "";
   const workflows = S.boot.presets || [];
   const workflow = workflows.find(item => item.name === q.preset) || workflows[0];
+  const repos = S.repos || {local:[], github:[], github_status:{}};
+  const selectedRepo = repos.local.find(repo => repo.path === q.repo_path)
+    || repos.github.find(repo => repo.local_path === q.repo_path);
+  const worktrees = S.worktreeChoices?.repository === q.repo_path
+    ? S.worktreeChoices.worktrees : [];
+  const workspacePicker = q.repo_path ? `<details>
+      <summary class="small muted">Workspace: ${q.existing_worktree_path ? "existing worktree selected" : "new isolated worktree (default)"}</summary>
+      <div class="stack" style="margin-top:.55rem">
+        <div class="small muted">Use an existing worktree only when you deliberately want this session to continue work already in it.</div>
+        <select id="quick-worktree">
+          <option value="" ${q.existing_worktree_path ? "" : "selected"}>Create a new isolated worktree</option>
+          ${worktrees.map(tree => `<option value="${esc(tree.path)}" ${tree.path===q.existing_worktree_path ? "selected" : ""}>${esc(tree.name)} · ${esc(tree.branch)}</option>`).join("")}
+        </select>
+        ${!worktrees.length ? `<div class="small muted">${S.worktreeLoading ? "Looking for existing worktrees…" : "No existing worktrees found."}</div>` : ""}
+      </div>
+    </details>` : "";
+  const repoChoices = [...repos.local.slice(0, 8).map(repo =>
+    `<button class="choice ${repo.path===q.repo_path?"on":""}" data-repo="${esc(repo.path)}">
+      <div class="repo-row"><b>${esc(repo.name)}</b><span class="small muted">${esc(repo.branch || "")}</span></div>
+      <span class="small muted mono">${esc(repo.path)}</span></button>`),
+    ...repos.github.slice(0, 8).map(repo =>
+      `<button class="choice ${repo.local_path===q.repo_path?"on":""}" data-repo="${esc(repo.full_name)}">
+        <div class="repo-row"><b>${esc(repo.full_name)}</b><span class="small muted">${repo.local_path ? "on this machine" : "prepare a local checkout"}</span></div>
+        ${repo.description ? `<span class="small muted">${esc(repo.description)}</span>` : ""}</button>`)].join("");
+  const githubState = !repos.github_status?.authenticated
+    ? `<div class="note small"><b>Sign in with GitHub</b><div>${esc(repos.github_status?.message || "Create your Synchri profile, then decide which repositories it may access.")}</div><button id="quick-connect-github" style="margin-top:.55rem">Sign in with GitHub</button></div>`
+    : !repos.github_access?.authorized
+      ? `<div class="note small"><b>Choose repository access</b><div>You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
+      : "";
   app().append($(`<div class="quick stack" style="max-width:48rem">
     <div><h2>Run a workflow</h2>
       <p class="muted">Choose the project and describe the work. Synchri uses your saved team, makes an isolated workspace, and prepares the agent prompts.</p></div>
@@ -428,11 +647,13 @@ function renderQuick() {
       `<option value="${esc(item.name)}" ${item.name===workflow.name?"selected":""}>${esc(item.name)}</option>`).join("")}</select></label>
     <div class="note"><b>${esc(workflow.agents?.map(agent => agent.name).join(" + ") || "Saved team")}</b>
       <div class="small">These settings are adjustable. Edit this workflow if you want to change the team or its defaults.</div></div>
-    <label><b>Project</b><input id="quick-repo" value="${esc(q.repo_path)}"
-      placeholder="Paste a GitHub link, owner/repository, or local folder"></label>
-    <div class="small muted">No local project folder? Paste <code>owner/repository</code> or a
-      GitHub URL. Synchri downloads it into <code>${esc(S.boot.desktop_clone_root)}</code> first.
-      Existing local folders work too.</div>
+    <div><b>Project</b><div class="small muted" style="margin-top:.2rem">Choose a reusable source repository. New isolated worktrees are the default.</div></div>
+    ${selectedRepo ? `<div class="note"><b>${esc(selectedRepo.name || selectedRepo.full_name || q.repo_path)}</b><div class="small muted mono">${esc(q.repo_path)}</div></div>` : ""}
+    <div id="quick-repositories" class="stack">${repoChoices || `<div class="small muted">Looking for local repositories…</div>`}</div>
+    ${repos.github_status?.authenticated && S.githubReposLoading ? `<div class="small muted">Loading GitHub repositories…</div>` : ""}
+    ${githubState}
+    <details><summary class="small muted">Paste a repository link or local path instead</summary><div class="row" style="margin-top:.55rem"><input id="quick-repo" value="${esc(q.repo_path)}" placeholder="owner/repository, GitHub URL, or local folder"><button id="quick-use-repo">Use</button></div></details>
+    ${workspacePicker}
     <label><b>What should they work on?</b>
       <textarea id="quick-goal" placeholder="Paste a spec, ticket, notes, or plain-language brief. Any text works.">${esc(q.goal)}</textarea></label>
     <div class="small muted">Your text is kept exactly as you wrote it. Add acceptance criteria if you want Synchri to track them individually.</div>
@@ -445,12 +666,23 @@ function renderQuick() {
   </div>`));
   document.getElementById("quick-workflow").onchange = event => { q.preset = event.target.value; renderQuick(); };
   document.getElementById("quick-advanced").onclick = () => configureWorkflow(q.preset);
+  document.querySelectorAll("#quick-repositories [data-repo]").forEach(button => button.onclick = guard(() => selectQuickRepository(button.dataset.repo)));
+  document.getElementById("quick-connect-github")?.addEventListener("click", guard(connectGitHub));
+  document.getElementById("quick-connect-repositories")?.addEventListener("click", () => openRepositoryAccess(repos.github_access));
+  document.getElementById("quick-use-repo")?.addEventListener("click", guard(async () => {
+    await selectQuickRepository(document.getElementById("quick-repo").value.trim());
+  }));
+  document.getElementById("quick-worktree")?.addEventListener("change", event => {
+    q.existing_worktree_path = event.target.value || null; renderQuick();
+  });
   document.getElementById("quick-go").onclick = guard(async () => {
-    q.repo_path = document.getElementById("quick-repo").value.trim();
+    q.repo_path = document.getElementById("quick-repo")?.value.trim() || q.repo_path;
+    if (S.worktreeChoices?.repository !== q.repo_path) await loadWorktreeChoices(q.repo_path);
     q.goal = document.getElementById("quick-goal").value.trim();
     q.deadline = document.getElementById("quick-deadline").value.trim();
     const result = await api("quick-start", {
       repo_path:q.repo_path, goal:q.goal, deadline:q.deadline, preset:q.preset,
+      existing_worktree_path:q.existing_worktree_path,
     });
     showLaunch(result);
   });
@@ -692,33 +924,58 @@ async function stepRepo() {
     box.append($(`<h3 class="small muted" style="margin-top:.5rem">GITHUB</h3>`));
     for (const r of S.repos.github.slice(0, 12)) {
       const usable = !!r.local_path;
-      const b = $(`<button class="choice" ${usable?"":"disabled style=opacity:.5"}>
+      const b = $(`<button class="choice">
         <div class="repo-row"><b>${esc(r.full_name)}</b>
-        <span class="small muted">${usable ? "cloned locally" : "not cloned — clone it first"}</span></div>
+        <span class="small muted">${usable ? "cloned locally" : "prepare a local checkout"}</span></div>
         ${r.description?`<span class="small muted">${esc(r.description)}</span>`:""}</button>`);
-      if (usable) b.onclick = guard(() => patch({ repo_path: r.local_path }));
+      b.onclick = guard(async () => {
+        const result = await api("repository/resolve", {reference: r.full_name});
+        await patch({ repo_path: result.repository.path });
+        confirmNotice(result.repository.reused
+          ? "Using the existing checkout. A new session worktree will be created."
+          : "Repository is ready. A new session worktree will be created.");
+      });
       box.append(b);
     }
   } else if (S.githubReposLoading) {
     box.append($(`<div class="small muted">Loading your GitHub repositories…</div>`));
-  } else if (!S.repos.github_available) {
-    box.append($(`<div class="small muted">GitHub listing needs the <code>gh</code> CLI signed in.
-      Local repositories work without it.</div>`));
+  } else if (!S.repos.github_status?.authenticated) {
+    const status = S.repos.github_status || {};
+    const notice = $(`<div class="note small"><b>Sign in with GitHub</b><div>${esc(status.message || "Create your Synchri profile before browsing GitHub repositories. Local repositories work without it.")}</div><button style="margin-top:.55rem">Sign in with GitHub</button></div>`);
+    notice.querySelector("button").onclick = guard(connectGitHub);
+    box.append(notice);
+  } else if (!S.repos.github_access?.authorized) {
+    const access = S.repos.github_access || {};
+    const account = S.repos.github_status?.account?.login;
+    const notice = $(`<div class="note small"><b>Choose repository access</b><div>${account ? `Signed in as @${esc(account)}. ` : ""}Select the repositories Synchri may open. This does not change your sign-in.</div><button style="margin-top:.55rem">Choose repositories</button></div>`);
+    notice.querySelector("button").onclick = () => openRepositoryAccess(access);
+    box.append(notice);
   }
 }
 
 function stepTree() {
   const st = S.draft.repo_status;
+  const worktrees = S.worktreeChoices?.repository === st?.root
+    ? S.worktreeChoices.worktrees : [];
+  if (st?.root && S.worktreeChoices?.repository !== st.root && S.worktreeLoading !== st.root) {
+    void loadWorktreeChoices(st.root);
+  }
+  const selected = S.draft.draft.existing_worktree_path || "";
   app().append($(`<div class="stack">
     <h2>Create an isolated workspace</h2>
-    <div class="note">Synchri creates a separate Git worktree so the agents never touch your
-      primary working directory. It is made when you start the session, and named for you.</div>
+    <div class="note">By default, Synchri creates a separate Git worktree so the agents never touch your
+      primary working directory. You can optionally select an existing worktree instead.</div>
     <div class="card stack">
       <div><span class="muted small">Repository</span><div><b>${esc(st?.name||"—")}</b></div></div>
       <div><span class="muted small">Base branch</span><div class="mono">${esc(S.draft.draft.base_branch||"—")}</div></div>
       <div><span class="muted small">Synchri worktree</span>
-        <div class="mono">${esc(S.draft.draft.worktree_name || "synchri-…-…-####  (generated)")}</div></div>
+        <div class="mono">${esc(selected || S.draft.draft.worktree_name || "synchri-…-…-####  (generated)")}</div></div>
     </div>
+    <label><b>Workspace</b><select id="existing-tree">
+      <option value="" ${selected ? "" : "selected"}>Create a new isolated worktree (default)</option>
+      ${worktrees.map(tree => `<option value="${esc(tree.path)}" ${tree.path===selected ? "selected" : ""}>Use existing: ${esc(tree.name)} · ${esc(tree.branch)}</option>`).join("")}
+    </select></label>
+    <div class="small muted">${worktrees.length ? "An existing choice keeps its current files and branch." : (S.worktreeLoading ? "Looking for existing worktrees…" : "No existing worktrees found for this repository.")}</div>
     <details><summary class="small muted">Advanced: branch and name</summary>
       <div class="grid" style="margin-top:.6rem">
         <select id="bb">${(st?.branches||[]).map(b=>
@@ -727,9 +984,13 @@ function stepTree() {
         <button id="apply">Apply</button>
       </div></details></div>`));
   const apply = document.getElementById("apply");
+  document.getElementById("existing-tree").onchange = guard(() => patch({
+    existing_worktree_path: document.getElementById("existing-tree").value,
+  }));
   if (apply) apply.onclick = guard(() => patch({
     base_branch: document.getElementById("bb").value,
     worktree_name: document.getElementById("wn").value,
+    existing_worktree_path: "",
   }));
 }
 
@@ -948,15 +1209,48 @@ function timeboxText(deadline) {
   return `${String(hours).padStart(2,"0")}:${String(minutes).padStart(2,"0")}:${String(seconds % 60).padStart(2,"0")} remaining`;
 }
 
+function taskElapsed(startedAt) {
+  if (!startedAt) return "just now";
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(startedAt)) / 1000));
+  const minutes = Math.floor(seconds / 60), rest = seconds % 60;
+  return minutes ? `${minutes}m ${String(rest).padStart(2,"0")}s` : `${rest}s`;
+}
+
+function activeAgentTask(d) {
+  const name = d.current_actor;
+  if (!name || d.session.status !== "active") return null;
+  const entries = d.activity_entries || d.activities || [];
+  const note = [...entries].reverse().find(item => item.name === name);
+  return {
+    name,
+    started_at: note?.created_at || d.active_turn?.started_at,
+    summary: note?.summary || "Planning the next step. This can take a few minutes.",
+    planning: !note,
+  };
+}
+
+function timeboxNudge(d) {
+  const deadline = d.session.deadline;
+  if (!deadline?.ends_at || d.session.status !== "active") return "";
+  const remaining = Math.ceil((Date.parse(deadline.ends_at) - Date.now()) / 1000);
+  const total = Number(deadline.duration_seconds) || Math.max(1, Date.parse(deadline.ends_at) - Date.parse(deadline.started_at)) / 1000;
+  if (remaining <= 0 || remaining > Math.max(15 * 60, total * .1) || S.dismissedTimebox === d.session.session_id) return "";
+  return `<section class="timebox-nudge"><b>Timebox is getting close.</b> It guides pace only—agent work will not stop when it ends.
+    <span class="row"><button data-extend="30 minutes">Add 30 min</button><button data-extend="1 hour">Add 1 hour</button><button class="ghost" data-dismiss-timebox>Keep current timebox</button></span></section>`;
+}
+
 function startClock(deadline, status) {
   stopClock();
   const tick = () => {
     const clock = document.getElementById("timebox");
     if (clock) clock.textContent = ["complete", "stopped", "failed", "timed_out"].includes(status)
       ? "Session ended" : timeboxText(deadline);
+    document.querySelectorAll("[data-task-started]").forEach(node => {
+      node.textContent = taskElapsed(node.dataset.taskStarted);
+    });
   };
   tick();
-  if (deadline?.ends_at && !["complete", "stopped", "failed", "timed_out"].includes(status)) S.clock = setInterval(tick, 1000);
+  if ((deadline?.ends_at || status === "active") && !["complete", "stopped", "failed", "timed_out"].includes(status)) S.clock = setInterval(tick, 1000);
 }
 
 function stopClock() {
@@ -1073,9 +1367,13 @@ async function paint(tab, el) {
     const activityTrail = d.activity_entries || d.activities || [];
     const currentActivity = activityTrail[activityTrail.length - 1];
     const previousActivities = activityTrail.slice(0, -1);
-    const liveWork = currentActivity ? `<details class="live-work" aria-live="polite"><summary>
-        <span class="live-work-label">LIVE WORK</span>
-        <span class="live-note"><span class="dot">●</span><b>${esc(String(currentActivity.name).toUpperCase())}</b><span>${richInline(currentActivity.summary)}</span></span>
+    const activeTask = activeAgentTask(d);
+    const liveName = currentActivity?.name || activeTask?.name;
+    const liveSummary = currentActivity?.summary || activeTask?.summary;
+    const liveStarted = currentActivity?.created_at || activeTask?.started_at;
+    const liveWork = liveName ? `<details class="live-work" aria-live="polite"><summary>
+        <span class="live-work-label">${esc(String(liveName).toUpperCase())} · ${activeTask?.planning ? "PLANNING" : "WORKING"} · <span data-task-started="${esc(liveStarted || "")}">${esc(taskElapsed(liveStarted))}</span></span>
+        <span class="live-note"><span class="dot">●</span><span>${richInline(liveSummary)}</span></span>
       </summary>${previousActivities.length ? `<div style="margin-top:.3rem">${previousActivities.map(note =>
         `<div class="live-note"><span class="dot">●</span><b>${esc(String(note.name).toUpperCase())}</b><div>${rich(note.summary)}</div></div>`
       ).join("")}</div>` : ""}</details>` : `<section class="live-work" aria-live="polite"></section>`;
@@ -1087,12 +1385,16 @@ async function paint(tab, el) {
       const kind = speaker === "SYNCHRI" ? "system" : (speaker === "YOU" ? "you" : "");
       const recipient = m.target && speaker !== "SYNCHRI"
         ? ` → ${String(m.target).toUpperCase()}` : "";
+      const approvalText = m.metadata?.approval_request || "This agent needs your decision before it can continue.";
+      const approvalCapability = m.metadata?.approval_capability || "";
+      const decision = m.target === "human" && m.response_status === "blocked" && speaker !== "YOU"
+        ? `<div class="decision-actions"><span class="small muted">${esc(approvalText)}</span><div><button data-decision="approve" data-agent="${esc(m.sender)}" data-capability="${esc(approvalCapability)}" data-detail="${esc(approvalText)}">Approve</button><button data-decision="deny" data-agent="${esc(m.sender)}" data-capability="${esc(approvalCapability)}" data-detail="${esc(approvalText)}">Deny</button></div></div>` : "";
       return `<div class="msg ${kind}"><div class="who">${esc(speaker + recipient)}</div>
         <div class="body">${rich(m.content)}</div>
         ${responseState ? `<div class="response-state">${esc(responseState)}</div>` : ""}
-        ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}</div>`;
+        ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}${decision}</div>`;
     }).join("") : `<span class="muted">Nothing said yet.</span>`;
-    el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork;
+    el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork + timeboxNudge(d);
     const list = el.querySelector(".message-list");
     requestAnimationFrame(() => list.scrollTo({ top: list.scrollHeight, behavior: "smooth" }));
     if (d.session.status !== "active") {
@@ -1117,6 +1419,25 @@ async function paint(tab, el) {
       input.value = "";
       await api("message", { session: S.session, content: v, interrupt: true });
       paint("conversation", el);
+    });
+    el.querySelectorAll("[data-decision]").forEach(button => button.onclick = guard(async () => {
+      const approved = button.dataset.decision === "approve";
+      const target = button.dataset.agent;
+      await api("approval", {
+        session: S.session,
+        target,
+        approved,
+        capability: button.dataset.capability,
+        detail: button.dataset.detail,
+      });
+      paint("conversation", el);
+    }));
+    el.querySelectorAll("[data-extend]").forEach(button => button.onclick = guard(async () => {
+      await api("control", {session:S.session, action:"extend_deadline", duration:button.dataset.extend});
+      S.dash = await api("dashboard" + q); renderSession();
+    }));
+    el.querySelector("[data-dismiss-timebox]")?.addEventListener("click", () => {
+      S.dismissedTimebox = d.session.session_id; paint("conversation", el);
     });
   } else if (tab === "changelog") {
     const r = await api("changelog" + q);

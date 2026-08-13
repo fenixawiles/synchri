@@ -270,6 +270,26 @@ def validate(
         raise StateError(
             f"{tree} does not look like its own working tree", code="worktree_invalid"
         )
+    # ``.git`` alone is not enough: an arbitrary checkout must never become a
+    # mutation target for this repository.  Linked worktrees share the primary
+    # checkout's git common directory, whether the worktree's .git is a file
+    # or a directory.
+    common_dir = git(tree, "rev-parse", "--git-common-dir", check=False)
+    expected_common_dir = git(root, "rev-parse", "--git-common-dir", check=False)
+    if not common_dir or not expected_common_dir:
+        raise StateError(f"{tree} is not attached to this repository", code="worktree_invalid")
+    common_path = Path(common_dir)
+    expected_path = Path(expected_common_dir)
+    if not common_path.is_absolute():
+        common_path = (tree / common_path).resolve()
+    else:
+        common_path = common_path.resolve()
+    if not expected_path.is_absolute():
+        expected_path = (root / expected_path).resolve()
+    else:
+        expected_path = expected_path.resolve()
+    if common_path != expected_path:
+        raise StateError(f"{tree} is not attached to this repository", code="worktree_invalid")
     branch = git(tree, "rev-parse", "--abbrev-ref", "HEAD", check=False) or name
     head = git(tree, "rev-parse", "HEAD", check=False) or None
 
@@ -306,8 +326,14 @@ def remove(worktree: Worktree, *, force: bool = False, delete_branch: bool = Fal
     git(worktree.repo_root, "worktree", "prune", check=False)
 
 
-def list_session_worktrees(repo_root: str | Path) -> list[dict]:
-    """Every Synchri-created worktree in this repository, for cleanup UIs."""
+def list_worktrees(repo_root: str | Path) -> list[dict]:
+    """List selectable non-primary worktrees belonging to a repository.
+
+    The primary checkout is deliberately omitted: it is never a safe target
+    for an agent session.  Everything else Git has registered is selectable,
+    including worktrees created before Synchri.
+    """
+    root = Path(repo_root).resolve()
     raw = git(repo_root, "worktree", "list", "--porcelain", check=False)
     found: list[dict] = []
     current: dict = {}
@@ -322,7 +348,28 @@ def list_session_worktrees(repo_root: str | Path) -> list[dict]:
             current["head"] = line.split(" ", 1)[1]
     if current:
         found.append(current)
-    return [w for w in found if Path(w.get("path", "")).name.startswith("synchri-")]
+    selectable: list[dict] = []
+    for item in found:
+        path = Path(item.get("path", "")).resolve()
+        if path == root:
+            continue
+        if not path.exists():
+            continue
+        selectable.append({
+            "name": path.name,
+            "path": str(path),
+            "branch": item.get("branch") or "detached HEAD",
+            "head": item.get("head"),
+        })
+    return selectable
+
+
+def list_session_worktrees(repo_root: str | Path) -> list[dict]:
+    """Every Synchri-created worktree in this repository, for cleanup UIs."""
+    return [
+        tree for tree in list_worktrees(repo_root)
+        if tree["name"].startswith("synchri-")
+    ]
 
 
 def _rev_exists(repo_root: str | Path, ref: str) -> bool:

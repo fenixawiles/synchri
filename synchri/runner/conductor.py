@@ -163,7 +163,7 @@ class Conductor:
             self.broker.publish_activity(
                 self.room_id,
                 credential=credential,
-                summary="Reading the assigned task and working through the next step.",
+                summary="Planning the next step. This can take a few minutes.",
             )
         except SynchriError:
             # A human can interrupt between turn inspection and this note. The
@@ -257,7 +257,16 @@ class Conductor:
                     handoff_target=directives.handoff,
                     response_status=_response_status(directives.status, bool(directives.to)),
                     confidence=directives.confidence,
-                    metadata={"conductor": True},
+                    metadata={
+                        "conductor": True,
+                        **(
+                            {
+                                "approval_request": directives.approval_request,
+                                "approval_capability": directives.approval_capability,
+                            }
+                            if directives.approval_request else {}
+                        ),
+                    },
                 ),
             )
             outcome = {
@@ -395,10 +404,12 @@ class Conductor:
                 "--- how to reply ---",
                 "Do the work, then print your reply on stdout. Everything you print becomes",
                 "your message in the room, so do not print progress chatter.",
-                "Synchri has already published a short live work note for this turn. During",
-                "meaningful changes, publish a short public semantic update with:",
+                "Synchri has published “Planning” for this turn. Before any skill or long-running",
+                "tool use, replace it with one concise public semantic update, for example:",
                 f"  {activity_command} activity --as {shlex.quote(name)} -m \"…\"",
-                "Do not put private reasoning or tool-by-tool progress in your reply.",
+                "Use phrases such as “Inspecting the auth module” or “Running the focused tests.”",
+                "Do not publish private reasoning or tool-by-tool chatter. The live note clears",
+                "when you respond, hand off, or pass.",
                 "",
                 "You may end your output with any of these control lines:",
                 "  SYNCHRI-TO: <participant>        address them directly (blocks everyone else)",
@@ -410,11 +421,13 @@ class Conductor:
                 "  SYNCHRI-EVIDENCE: <artifact or observation for the preceding gate>",
                 "  SYNCHRI-TEST: <test command or test name for the preceding gate>",
                 "  SYNCHRI-COMMIT: <commit sha for the preceding gate>",
+                "  SYNCHRI-APPROVAL: <ASK capability>|<specific decision needed from the human>",
                 "  SYNCHRI-COMPLETE              Primary Builder: request final completion when evidence is complete",
                 "",
                 "Keep the collaboration moving. When another agent should act next, use the",
                 "direct-address control line above. For a human decision, direct it to human",
-                "and mark the response blocked. Gate reports update the shared progress view immediately.",
+                "and mark the response blocked. Add SYNCHRI-APPROVAL so the app can show clear",
+                "Approve and Deny buttons. Gate reports update the shared progress view immediately.",
             ]
         )
         return "\n".join(parts)

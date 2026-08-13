@@ -109,6 +109,29 @@ class Deadline:
             duration_seconds=seconds,
         )
 
+    def extend(self, duration: str, *, now: datetime | None = None) -> "Deadline":
+        """Extend an active timebox without interrupting a live collaboration.
+
+        A timebox is an advisory pacing preference, so a user adding time must
+        not unexpectedly revoke the agents' current contract or require them
+        to repeat their acknowledgments.  The audit trail is written by the
+        session manager that calls this method.
+        """
+        extra = parse_duration(duration)
+        current = now or datetime.now(timezone.utc)
+        existing_end = _parse(self.ends_at)
+        base = existing_end if existing_end > current else current
+        new_end = base + timedelta(seconds=extra)
+        # Keep the persisted duration coherent even if the original timebox
+        # already elapsed before the human chose to add time.
+        total = max(1, int((new_end - _parse(self.started_at)).total_seconds()))
+        return Deadline(
+            ends_at=_stamp(new_end),
+            started_at=self.started_at,
+            source=self.source,
+            duration_seconds=total,
+        )
+
     # -- state ---------------------------------------------------------
 
     def seconds_remaining(self, *, now: datetime | None = None) -> int:

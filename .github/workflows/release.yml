@@ -36,9 +36,10 @@ jobs:
           path: dist/
 
   mac-app:
-    # Apple Silicon is the supported first-download path. Intel builds are
-    # intentionally produced separately so a scarce legacy runner can never
-    # hold a signed release hostage.
+    # Build on Apple Silicon, not an Intel image cross-compiling for it. The
+    # bundled Python engine and the Tauri shell must receive the same native
+    # Developer ID signature for hardened runtime to allow them to load each
+    # other on a customer's Mac.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -47,13 +48,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
       - run: python -m pip install --upgrade pyinstaller
+      - run: test "$(uname -m)" = arm64
+      - run: npm ci
+        working-directory: desktop
       - name: Configure Apple signing certificate
         env:
           CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        if: ${{ env.CERTIFICATE != '' }}
         run: |
+          test -n "$CERTIFICATE"
           KEYCHAIN="$RUNNER_TEMP/synchri-release.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
           CERTIFICATE_PATH="$RUNNER_TEMP/synchri-release.p12"
@@ -64,34 +73,42 @@ jobs:
           security import "$CERTIFICATE_PATH" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN"
-      - run: scripts/build_macos_app.sh
-        env:
-          SYNCHRI_ARCH: arm64
-          CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-      - name: Smoke-test the packaged app
-        run: sh scripts/smoke_macos_app.sh release/macos/dist/Synchri.app
-      - name: Notarize and staple the signed app
+      - name: Build, sign, and notarize the native DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           SYNCHRI_ARCH: arm64
-        if: ${{ env.APPLE_ID != '' && env.APPLE_PASSWORD != '' && env.APPLE_TEAM_ID != '' && env.CODESIGN_IDENTITY != '' }}
+          SYNCHRI_TARGET_TRIPLE: aarch64-apple-darwin
+          SYNCHRI_TAURI_TARGET_DIR: ${{ runner.temp }}/synchri-tauri-target
+        run: scripts/build_tauri_macos.sh
+      - name: Verify the signed native bundle
         run: |
-          ARCHIVE="release/macos/Synchri-macos-$SYNCHRI_ARCH.zip"
-          APP="release/macos/dist/Synchri.app"
-          xcrun notarytool submit "$ARCHIVE" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
-          xcrun stapler staple "$APP"
-          rm -f "$ARCHIVE" "$ARCHIVE.sha256"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARCHIVE"
-          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          APP="$RUNNER_TEMP/synchri-tauri-target/release/bundle/macos/Synchri.app"
+          DMG="release/tauri/Synchri-macos-arm64.dmg"
+          test -x "$APP/Contents/MacOS/synchri-desktop"
+          test -x "$APP/Contents/Resources/engine/synchri-core"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          xcrun stapler validate "$DMG"
+          hdiutil imageinfo "$DMG" | grep -q 'Class: CUDIFDiskImage'
+      - name: Build the signed update manifest
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          python scripts/make_tauri_update_manifest.py "$VERSION" "$TAG" release/tauri/latest.json
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
           path: |
-            release/macos/Synchri-macos-arm64.zip
-            release/macos/Synchri-macos-arm64.zip.sha256
+            release/tauri/Synchri-macos-arm64.dmg
+            release/tauri/Synchri-macos-arm64.dmg.sha256
+            release/tauri/Synchri-macos-arm64.app.tar.gz
+            release/tauri/Synchri-macos-arm64.app.tar.gz.sig
+            release/tauri/latest.json
 
   github-release:
     needs: [python-package, mac-app]

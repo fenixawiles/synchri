@@ -12,10 +12,13 @@ already have.
 
 ## The supported first-run path
 
-1. Download the signed `Synchri.app` that matches the Mac's processor from the
-   GitHub release linked at `synchri.com/download`.
-2. Move it to Applications and open it. No Python, package manager, shell PATH,
+1. Download the signed Apple Silicon `.dmg` from the GitHub release linked at
+   `synchri.com/download`.
+2. Open it, move `Synchri.app` to Applications, then open it. No Python, package manager, shell PATH,
    account, or repository clone is required.
+   Future releases are offered from inside Synchri. Tauri verifies the update
+   signature before installing and reopening the native app, so users do not
+   download or replace applications by hand after this first installation.
 3. Synchri checks Git and the local coding tools it can find. It calls a tool
    *ready* only when it can launch it; provider authentication and contract
    agreement are verified when the session starts.
@@ -52,7 +55,7 @@ test before it appears behind **Start agents**.
 
 | Audience | Channel | Promise |
 |---|---|---|
-| Most Mac users | Signed, notarized `Synchri.app` | Download, open, start a room |
+| Most Mac users | Signed, notarized Apple Silicon `.dmg` | Download, drag to Applications, start a room |
 | Developers and automation | PyPI wheel | `pipx install synchri` or the provided installer |
 | Source users | GitHub source archive | Reproducible source and tests |
 
@@ -62,8 +65,8 @@ Linux, CI, and for contributors; it is not the onboarding story on the site.
 ## Release checklist
 
 - Tag a tested version as `vX.Y.Z`.
-- The release workflow builds the Apple Silicon application and a wheel, plus
-  SHA-256 checksums. Intel builds are intentionally released independently so
+- The release workflow builds the Apple Silicon DMG, its Tauri update manifest,
+  and a wheel. Intel builds are intentionally released independently so
   limited legacy runner capacity cannot delay a signed public download.
 - Configure these repository secrets before calling the Mac download supported:
   `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`,
@@ -75,6 +78,9 @@ Linux, CI, and for contributors; it is not the onboarding story on the site.
 - Point `synchri.com/download` at the current GitHub release; managed TLS from
   the hosting provider is sufficient—there is no separate certificate purchase
   for the download page.
+- Direct-distribution updates use the release's signed Tauri metadata and the
+  Apple Silicon app payload. The app verifies the update signature before
+  accepting it; the public DMG remains the first-download installer.
 
 ## The recovery rule
 

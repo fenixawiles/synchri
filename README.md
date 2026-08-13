@@ -4,7 +4,7 @@
 
 *Stop being the clipboard between your coding agents.*
 
-> **Status: v0.1, early prototype.** Synchri is a local app with a deterministic broker, persistent state, a browser interface, and managed local launches for supported agent tools. Nothing here is affiliated with or endorsed by Anthropic, OpenAI, GitHub, or Google.
+> **Status: v0.2, early prototype.** Synchri is a local app with a deterministic broker, persistent state, a native macOS interface, and managed local launches for supported agent tools. Nothing here is affiliated with or endorsed by Anthropic, OpenAI, GitHub, or Google.
 
 ---
 
@@ -42,10 +42,12 @@ A participant is any *process* that can run the CLI. The room is a SQLite file: 
 
 ## The app
 
-`synchri ui` starts a local server on `127.0.0.1`, opens your browser, and gives you the
-wizard and a mission-control dashboard: gates, tests, diff, commits, worktree, memory, raw
-event log, and the contract with each agent's acknowledgment. It is the **only** part of
-Synchri that opens a socket — loopback-only, token-gated per launch, and opt-in. See
+The signed macOS app opens Synchri in its own window; `synchri ui` remains the
+developer and automation path that opens the same interface in a browser. Both
+use the same mission-control dashboard: gates, tests, diff, commits, worktree,
+memory, raw event log, and each agent's acknowledgment. It is the **only** part
+of Synchri that opens a socket — loopback-only, token-gated per launch, and
+opt-in. See
 [`docs/ui.md`](docs/ui.md).
 
 ## Sessions
@@ -73,7 +75,9 @@ For a normal Mac user, download and open **Synchri.app** from
 runtime: no Python, package manager, PATH setup, Synchri account, or API key.
 Choose a repository and the local coding tools you already use, then click
 **Start agents**. Synchri verifies that each managed tool joined and accepted
-the contract before work starts.
+the contract before work starts. Later releases appear in the app itself and
+install through the native, signature-verified macOS updater—no fresh download
+or app replacement is required.
 
 The Python package is a developer and automation channel, not the primary
 onboarding flow. It requires Python 3.10+ and has no runtime dependencies:

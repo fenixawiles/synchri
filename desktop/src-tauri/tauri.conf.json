@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Synchri",
+  "version": "0.2.0",
+  "identifier": "com.synchri.desktop",
+  "build": {
+    "frontendDist": "../placeholder"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Synchri",
+        "url": "index.html",
+        "width": 1320,
+        "height": 900,
+        "minWidth": 940,
+        "minHeight": 640,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "icon": ["../../assets/Synchri.icns"],
+    "resources": {
+      "engine/aarch64-apple-darwin": "engine"
+    },
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "infoPlist": "Info.plist",
+      "minimumSystemVersion": "13.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/fenixawiles/synchri/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU0RjEwODg4NjA5RDgzMkUKUldRdWc1MWdpQWp4VkFoamV1eVdFOUNwQkgvWUNmSW5HNW1Lbm9CeDdqOTFGemFMQVJOc3hseFMK"
+    }
+  }
+}

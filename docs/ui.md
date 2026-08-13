@@ -1,8 +1,8 @@
 # The Synchri app
 
-`synchri ui` starts a local server, opens your browser, and gives you the wizard
-and a live dashboard. It is a desktop app in the way that matters — you click
-through it, it is fast, it is yours — without shipping a browser engine.
+Opening the signed `Synchri.app` starts a native macOS window and a live
+dashboard. `synchri ui` remains available for developers and automation: it
+starts that same loopback interface in the browser.
 
 ```bash
 cd ~/your-project
@@ -17,17 +17,18 @@ Synchri is running at
 Press Ctrl+C to stop.
 ```
 
-## Why a local server and not Electron
+## Why the native app still uses a local server
 
-Electron or Tauri would mean a 100&nbsp;MB download, a build toolchain, a signing
-certificate per platform, and a second language in the repo. Serving a page to
-the browser you already have costs a 33&nbsp;KB HTML file and keeps the whole
-project a zero-dependency Python wheel. §22's local-first rule stays intact:
-nothing is hosted, nothing phones home, the page loads no external resource.
+The signed macOS app uses a small Tauri shell to provide the dock icon, native
+window, notarized DMG, and verified updates users expect. Its bundled Synchri
+engine still serves the exact same loopback-only, token-gated page. The Python
+package stays a zero-dependency CLI for terminals and automation. §22's
+local-first rule stays intact: nothing is hosted, nothing phones home, and the
+page loads no external resource.
 
-The trade is real and worth stating: it is a browser tab, not a dock icon. If
-that matters later, the same server can be wrapped in Tauri without changing a
-line of the API.
+The native wrapper owns no room state and opens no listening socket. It merely
+starts the bundled engine, reads its private launch URL, and presents that page
+inside the application window.
 
 ## This is the one socket Synchri opens
 
@@ -91,8 +92,8 @@ not. Nothing changes silently.
 
 - **Polling, not push.** The dashboard refreshes every 4 seconds. Fine locally;
   a websocket would be better and is a small change.
-- **One browser at a time is assumed.** Two tabs work, but they do not
-  coordinate their wizard drafts.
+- **One interface at a time is assumed.** Multiple app windows or browser tabs
+  work, but they do not coordinate unfinished workflow drafts.
 - **Wizard drafts live in memory.** Restarting `synchri ui` loses an unfinished
   wizard. Started sessions are fully durable — that is the part that matters.
 - **No dark/light toggle.** It follows your OS.

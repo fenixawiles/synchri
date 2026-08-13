@@ -191,6 +191,16 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     assert boot["sessions"] == [] and "workspace" in boot
 
 
+def test_the_client_uses_native_updates_only_from_the_packaged_desktop_app():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "window.__TAURI__?.core?.invoke" in source
+    assert 'nativeInvoke("check_for_update")' in source
+    assert 'nativeInvoke("install_update")' in source
+    assert "Download the signed Synchri update" in source
+
+
 def test_local_repositories_do_not_wait_for_github(ui, monkeypatch):
     from synchri.session import discovery
 

@@ -1,8 +1,8 @@
 """The local Synchri app.
 
-A single-page UI served from ``127.0.0.1`` by the stdlib HTTP server, opened in
-the user's browser. This is the "desktop app" without shipping a browser engine:
-no Electron, no Tauri toolchain, no code signing, and the core stays dependency-free.
+A single-page UI served from ``127.0.0.1`` by the stdlib HTTP server. The CLI
+opens it in the user's browser; the signed macOS app loads the same capability
+URL in its native Tauri window. The core stays dependency-free either way.
 
 **This is the one place Synchri opens a socket**, and it is opt-in (`synchri ui`),
 loopback-only, and token-gated. The broker itself still binds nothing — see
@@ -284,7 +284,11 @@ def serve(
     server, url = create_server(
         broker, host=host, port=port, allow_remote=allow_remote, default_repo=default_repo
     )
-    print(f"Synchri is running at\n\n    {url}\n")
+    # The native desktop shell consumes this capability URL from the bundled
+    # engine's stdout. Flush it explicitly: a frozen sidecar writes to a pipe,
+    # where Python would otherwise wait to fill its output buffer before the
+    # window could open.
+    print(f"Synchri is running at\n\n    {url}\n", flush=True)
     if host != DEFAULT_HOST:
         print("!! This is NOT loopback-only. Anything that can reach this host can drive it.\n")
     print("Press Ctrl+C to stop.")

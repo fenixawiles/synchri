@@ -4,6 +4,14 @@ __pycache__/
 build/
 dist/
 release/
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/
+desktop/src-tauri/engine/*
+!desktop/src-tauri/engine/.gitkeep
+graphify-out/
+synchri/graphify-out/
 .pytest_cache/
 .venv/
 venv/

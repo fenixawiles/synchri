@@ -110,6 +110,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)
   <div class="brand">synchri<span>.</span></div>
   <div class="row">
     <span id="ctx" class="small muted"></span>
+    <button class="ghost hide" id="app-update"></button>
     <button class="ghost" id="nav-home">Sessions</button>
     <button id="nav-new">Run a workflow</button>
   </div>
@@ -189,8 +190,44 @@ const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
             agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null,
             workflowName:"", workflowOriginal:"", workflowAgents:null,
-            workflowPermissions:null, workflowDeadline:"" };
+            workflowPermissions:null, workflowDeadline:"", update:null };
 const app = () => document.getElementById("app");
+
+/* --------------------------------------------------------- application update */
+const nativeInvoke = (command, args) => window.__TAURI__?.core?.invoke(command, args);
+
+function renderUpdate() {
+  const button = document.getElementById("app-update");
+  const update = S.update;
+  button.className = "ghost hide";
+  button.onclick = null;
+  if (!update) return;
+  if (update.status === "available") {
+    button.className = "ghost";
+    button.textContent = `Update to v${update.release.version}`;
+    button.title = "Download the signed Synchri update and reopen the app";
+    button.onclick = guard(async () => {
+      S.update = {status:"installing", release:update.release};
+      renderUpdate();
+      await nativeInvoke("install_update");
+    });
+  } else if (update.status === "installing") {
+    button.className = "ghost";
+    button.disabled = true;
+    button.textContent = "Updating…";
+  }
+}
+
+async function checkForUpdate() {
+  if (!window.__TAURI__?.core?.invoke) return;
+  try {
+    const release = await nativeInvoke("check_for_update");
+    S.update = release ? {status:"available", release} : null;
+    renderUpdate();
+  } catch (_) {
+    // Update availability must never get in the way of opening local work.
+  }
+}
 
 /* ------------------------------------------------------------------ home */
 async function home() {
@@ -267,6 +304,7 @@ async function home() {
     row.onclick = () => openSession(s.session_id);
     app().append(row);
   }
+  void checkForUpdate();
 }
 
 /* ------------------------------------------------------------- quick start */

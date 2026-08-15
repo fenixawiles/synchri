@@ -88,12 +88,15 @@ while :; do
 done
 mv -f "$DMG_STAGING" "$DMG"
 
-# Tauri deliberately signs a tarball of the app bundle on macOS. Updating from
-# a DMG is not supported because a DMG is an installation medium, not an app.
+# Tauri's macOS updater consumes a gzip-compressed tarball of the app bundle.
+# Updating from a DMG is not supported because a DMG is an installation medium,
+# not an app.  Do not use ``ditto -c -k`` here: it creates a ZIP archive even
+# when the filename ends in ``.tar.gz``, which the updater correctly rejects.
 # The DMG is the first-download asset; this tarball is the verified updater
 # payload users never need to handle themselves.
 UPDATE="$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app.tar.gz"
-ditto -c -k --sequesterRsrc --keepParent "$FINAL_APP" "$UPDATE"
+rm -f "$UPDATE" "$UPDATE.sig"
+tar -czf "$UPDATE" -C "$FINAL_DIR" Synchri.app
 (cd "$ROOT/desktop" && npm exec tauri signer sign -- "$UPDATE")
 SIG="$UPDATE.sig"
 [ -f "$SIG" ] || { echo "Synchri did not produce an updater signature" >&2; exit 1; }

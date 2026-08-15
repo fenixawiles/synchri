@@ -98,11 +98,14 @@ jobs:
         run: |
           APP="$RUNNER_TEMP/synchri-tauri-target/release/final/Synchri.app"
           DMG="release/tauri/Synchri-macos-arm64.dmg"
+          UPDATE="release/tauri/Synchri-macos-arm64.app.tar.gz"
           test -x "$APP/Contents/MacOS/synchri-desktop"
           test -x "$APP/Contents/Resources/engine/synchri-core"
           codesign --verify --deep --strict --verbose=2 "$APP"
           xcrun stapler validate "$DMG"
           hdiutil imageinfo "$DMG" | grep -Eq 'Class Name: (CUDIFDiskImage|CRawDiskImage)'
+          test "$(od -An -tx1 -N2 "$UPDATE" | tr -d '[:space:]')" = "1f8b"
+          tar -tzf "$UPDATE" | grep -qx 'Synchri.app/'
       - name: Build the signed update manifest
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

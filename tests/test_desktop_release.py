@@ -37,10 +37,14 @@ def test_desktop_release_versions_are_kept_in_lockstep():
 def test_release_build_installs_the_declared_runtime_dependencies():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     sidecar = (ROOT / "scripts" / "build_tauri_sidecar.sh").read_text(encoding="utf-8")
+    desktop_build = (ROOT / "scripts" / "build_tauri_macos.sh").read_text(encoding="utf-8")
 
     assert "python -m pip install --upgrade pyinstaller ." in workflow
     assert "--collect-data certifi" in sidecar
     assert "make_tauri_update_manifest.py" in workflow
+    assert 'tar -czf "$UPDATE" -C "$FINAL_DIR" Synchri.app' in desktop_build
+    assert 'ditto -c -k --sequesterRsrc --keepParent "$FINAL_APP" "$UPDATE"' not in desktop_build
+    assert 'tr -d \'[:space:]\')" = "1f8b"' in workflow
 
 
 def test_authenticated_loopback_ui_has_only_its_explicit_native_actions():

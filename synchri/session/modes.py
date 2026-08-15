@@ -400,11 +400,11 @@ def runtime_status(runtime: str) -> dict:
     installed = bool(path)
     managed = bool(path and definition.get("managed_command"))
     if managed:
-        detail = "Installed on this Mac. Synchri can launch it after it agrees to the session."
+        detail = "Installed. Synchri can launch it after it agrees to the session."
     elif installed:
         detail = "Installed. Use the ready-to-paste prompt to connect this agent."
     elif executable:
-        detail = f"{definition['label']} was not found on this Mac."
+        detail = f"{definition['label']} was not detected."
     else:
         detail = "Use a ready-to-paste prompt, or add a managed command in Advanced setup."
     return {

@@ -239,7 +239,7 @@ class Api:
         from ..session import github_auth
 
         github_auth.delete_credentials(self.broker.workspace)
-        return {"disconnected": True, "message": "GitHub is disconnected from this Mac."}
+        return {"disconnected": True, "message": "GitHub is disconnected."}
 
     @staticmethod
     def _valid_repository(path: str | None) -> str | None:

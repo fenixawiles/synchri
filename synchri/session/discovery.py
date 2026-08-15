@@ -332,13 +332,13 @@ def github_status(workspace: Workspace | None = None) -> dict:
             "installed": True,
             "authenticated": True,
             "account": github_auth.account(active_workspace),
-            "message": "GitHub is signed in on this Mac. Repository access is managed separately.",
+            "message": "GitHub is signed in. Repository access is managed separately.",
         }
     return {
         "installed": True,
         "authenticated": False,
         "account": None,
-        "message": "Sign in with GitHub to create this Mac's Synchri profile.",
+        "message": "Sign in with GitHub to create your Synchri profile.",
         "resolution": {"kind": "connect_github"},
     }
 

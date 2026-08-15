@@ -2,119 +2,522 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Synchri</title>
+<script>
+/* Apply the saved theme before first paint so the choice never flashes. */
+try {
+  const savedTheme = localStorage.getItem("synchri-theme");
+  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+} catch (e) { /* storage may be unavailable; the System theme still applies */ }
+</script>
 <style>
+/* ------------------------------------------------------------------ tokens
+   Every theme-dependent value is a token. Bare :root is Terminal (dark).
+   With no explicit choice, the OS light preference switches to Daylight.
+   An explicit data-theme (from the header picker, kept in localStorage)
+   always wins. Each block also sets color-scheme for native controls. */
 :root{
-  --bg:#fbfbfa; --panel:#fff; --line:#ebe9e5; --ink:#1c1b19; --dim:#6b6862;
-  --accent:#2f6f4f; --accent-soft:#e8f2ec; --warn:#8a5a00; --warn-soft:#fdf3e0;
-  --bad:#a3352a; --bad-soft:#fbeceb; --radius:18px;
+  color-scheme:dark;
+  --bg:#0b0d10; --panel:#12151a; --panel2:#161a20; --raise:#1b2027;
+  --line:#222933; --line2:#2e3844;
+  --ink:#d7dee9; --dim:#8b95a6; --faint:#5f6a7a;
+  --accent:#2fd287; --accent-ink:#052b1a;
+  --accent-soft:rgba(47,210,135,.09); --accent-line:rgba(47,210,135,.38);
+  --warn:#e0b34c; --warn-ink:#231a05; --warn-soft:rgba(224,179,76,.1); --warn-line:rgba(224,179,76,.38);
+  --bad:#f2756b; --bad-soft:rgba(242,117,107,.1); --bad-line:rgba(242,117,107,.38);
+  --info:#5fb2e6;
+  --sel:rgba(47,210,135,.22);
+  --shadow:0 16px 40px rgba(3,6,10,.5);
+  --a0:#62b8dd; --a1:#a99bea; --a2:#d9ab5e; --a3:#5ec9a8; --a4:#dd8fb4;
+  --diff-add:#7ee0a8; --diff-add-bg:rgba(47,210,135,.13);
+  --diff-del:#f5928a; --diff-del-bg:rgba(242,117,107,.13);
+  --gh-bg:#eef1f4; --gh-ink:#1f2328; --gh-line:#eef1f4;
+  --radius:8px; --radius-s:5px;
   --sans:"SF Pro Text","Avenir Next",Inter,ui-sans-serif,system-ui,sans-serif;
-  --mono:"SF Mono",Berkeley Mono,JetBrains Mono,ui-monospace,SFMono-Regular,Menlo,monospace;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
 }
-@media (prefers-color-scheme:dark){:root{
-  --bg:#16171a; --panel:#1e2024; --line:#2f3237; --ink:#e9e8e4; --dim:#9b9892;
-  --accent:#6dbd93; --accent-soft:#1d2f26; --warn:#e0aa5a; --warn-soft:#2e2519;
-  --bad:#e0736a; --bad-soft:#2e1d1c;
+/* Daylight — light instrument panel. Defined twice on purpose: once for the
+   System default (OS light, no explicit choice) and once as an explicit
+   theme. Keep the two blocks identical. */
+@media (prefers-color-scheme:light){:root:not([data-theme]){
+  color-scheme:light;
+  --bg:#f4f5f7; --panel:#ffffff; --panel2:#f6f7f9; --raise:#ffffff;
+  --line:#e3e6eb; --line2:#cad0d9;
+  --ink:#1b222c; --dim:#5c6675; --faint:#8d96a5;
+  --accent:#0e8f60; --accent-ink:#ffffff;
+  --accent-soft:rgba(14,143,96,.08); --accent-line:rgba(14,143,96,.35);
+  --warn:#96690a; --warn-ink:#ffffff; --warn-soft:rgba(150,105,10,.09); --warn-line:rgba(150,105,10,.32);
+  --bad:#c73f36; --bad-soft:rgba(199,63,54,.08); --bad-line:rgba(199,63,54,.32);
+  --info:#0b6bbd;
+  --sel:rgba(14,143,96,.18);
+  --shadow:0 14px 34px rgba(23,30,40,.14);
+  --a0:#0973a5; --a1:#6d52c9; --a2:#99660c; --a3:#0c7d5c; --a4:#b13d78;
+  --diff-add:#0b6b45; --diff-add-bg:rgba(14,143,96,.1);
+  --diff-del:#a8322a; --diff-del-bg:rgba(199,63,54,.1);
+  --gh-bg:#24292f; --gh-ink:#ffffff; --gh-line:#24292f;
 }}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.6 var(--sans)}
-h1,h2,h3{margin:0;font-weight:640;letter-spacing:-.01em}
-button{font:inherit;cursor:pointer;border-radius:12px;border:1px solid var(--line);
-  background:var(--panel);color:var(--ink);padding:.5rem .9rem}
-button:hover{border-color:var(--dim);transform:translateY(-1px)}
-button{transition:border-color .18s ease,background-color .18s ease,transform .18s ease,box-shadow .18s ease}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
-button.primary:disabled{opacity:.45;cursor:not-allowed}
-button.ghost{background:none;border-color:transparent;color:var(--dim);padding:.35rem .6rem}
-input,textarea,select{font:inherit;width:100%;padding:.6rem .75rem;border-radius:12px;
-  border:1px solid var(--line);background:var(--panel);color:var(--ink)}
-textarea{min-height:14rem;resize:vertical;font-family:var(--sans);font-size:14px}
-code,pre,.mono{font-family:var(--mono);font-size:13px}
-pre{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
-  border-radius:var(--radius);padding:1rem;margin:0}
-a{color:var(--accent)}
-.wrap{max-width:76rem;margin:0 auto;padding:2rem 2rem 5rem}
-.wrap.session-app{max-width:none;margin:0;padding:0}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.25rem;box-shadow:0 1px 2px rgba(25,30,27,.025)}
+:root[data-theme="daylight"]{
+  color-scheme:light;
+  --bg:#f4f5f7; --panel:#ffffff; --panel2:#f6f7f9; --raise:#ffffff;
+  --line:#e3e6eb; --line2:#cad0d9;
+  --ink:#1b222c; --dim:#5c6675; --faint:#8d96a5;
+  --accent:#0e8f60; --accent-ink:#ffffff;
+  --accent-soft:rgba(14,143,96,.08); --accent-line:rgba(14,143,96,.35);
+  --warn:#96690a; --warn-ink:#ffffff; --warn-soft:rgba(150,105,10,.09); --warn-line:rgba(150,105,10,.32);
+  --bad:#c73f36; --bad-soft:rgba(199,63,54,.08); --bad-line:rgba(199,63,54,.32);
+  --info:#0b6bbd;
+  --sel:rgba(14,143,96,.18);
+  --shadow:0 14px 34px rgba(23,30,40,.14);
+  --a0:#0973a5; --a1:#6d52c9; --a2:#99660c; --a3:#0c7d5c; --a4:#b13d78;
+  --diff-add:#0b6b45; --diff-add-bg:rgba(14,143,96,.1);
+  --diff-del:#a8322a; --diff-del-bg:rgba(199,63,54,.1);
+  --gh-bg:#24292f; --gh-ink:#ffffff; --gh-line:#24292f;
+}
+/* Midnight — dark slate-blue with a cool accent. */
+:root[data-theme="midnight"]{
+  color-scheme:dark;
+  --bg:#0a0e17; --panel:#101625; --panel2:#141b2c; --raise:#182136;
+  --line:#1e2a44; --line2:#2a3a5c;
+  --ink:#d9e1f2; --dim:#8b98b8; --faint:#5d6a8a;
+  --accent:#6ea8ff; --accent-ink:#061530;
+  --accent-soft:rgba(110,168,255,.1); --accent-line:rgba(110,168,255,.4);
+  --warn:#e3b341; --warn-ink:#231a05; --warn-soft:rgba(227,179,65,.1); --warn-line:rgba(227,179,65,.38);
+  --bad:#f47768; --bad-soft:rgba(244,119,104,.1); --bad-line:rgba(244,119,104,.38);
+  --info:#59c2ff;
+  --sel:rgba(110,168,255,.25);
+  --shadow:0 16px 40px rgba(2,5,12,.55);
+  --a0:#5fd0c7; --a1:#b39df2; --a2:#e0b076; --a3:#7ddba0; --a4:#e893b9;
+  --diff-add:#7ee0a8; --diff-add-bg:rgba(63,185,120,.12);
+  --diff-del:#f5928a; --diff-del-bg:rgba(244,119,104,.12);
+  --gh-bg:#eef1f4; --gh-ink:#1f2328; --gh-line:#eef1f4;
+}
+/* Sage — light warm paper with the original Synchri green. */
+:root[data-theme="sage"]{
+  color-scheme:light;
+  --bg:#faf9f7; --panel:#ffffff; --panel2:#f5f4f1; --raise:#ffffff;
+  --line:#e8e5df; --line2:#d3cfc6;
+  --ink:#201f1c; --dim:#6b6862; --faint:#98948b;
+  --accent:#2f6f4f; --accent-ink:#ffffff;
+  --accent-soft:rgba(47,111,79,.08); --accent-line:rgba(47,111,79,.35);
+  --warn:#8a5a00; --warn-ink:#ffffff; --warn-soft:rgba(138,90,0,.09); --warn-line:rgba(138,90,0,.32);
+  --bad:#a3352a; --bad-soft:rgba(163,53,42,.08); --bad-line:rgba(163,53,42,.32);
+  --info:#22668a;
+  --sel:rgba(47,111,79,.18);
+  --shadow:0 14px 34px rgba(35,30,20,.14);
+  --a0:#1c6e8f; --a1:#5f51a8; --a2:#8a5a00; --a3:#587c3f; --a4:#9c4368;
+  --diff-add:#22623f; --diff-add-bg:rgba(47,111,79,.1);
+  --diff-del:#93362c; --diff-del-bg:rgba(163,53,42,.1);
+  --gh-bg:#24292f; --gh-ink:#ffffff; --gh-line:#24292f;
+}
+
+/* ------------------------------------------------------------------- base */
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:8px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+::selection{background:var(--sel)}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.55 var(--sans);
+  -webkit-font-smoothing:antialiased}
+h1{margin:0;font-size:16px;font-weight:650;letter-spacing:-.01em}
+h2{margin:0;font-size:14.5px;font-weight:650;letter-spacing:-.005em}
+h3{margin:0;font-size:13px;font-weight:600}
+p{margin:.45rem 0}
+a{color:var(--accent);text-decoration-thickness:1px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:3px}
+
+button{font:500 12.5px/1.35 var(--sans);cursor:pointer;border-radius:var(--radius-s);
+  border:1px solid var(--line2);background:var(--panel2);color:var(--ink);padding:.42rem .8rem;
+  transition:background-color .12s ease,border-color .12s ease,color .12s ease}
+button:hover{background:var(--raise);border-color:var(--faint)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:650;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 1px 2px rgba(0,0,0,.18)}
+button.primary:hover{filter:brightness(1.08)}
+button.primary:disabled{box-shadow:none}
+button.ghost{background:transparent;border-color:transparent;color:var(--dim)}
+button.ghost:hover{background:var(--panel2);color:var(--ink)}
+
+input,textarea,select{font:13px/1.45 var(--sans);width:100%;padding:.5rem .65rem;
+  border-radius:var(--radius-s);border:1px solid var(--line2);background:var(--bg);color:var(--ink)}
+input.mono{font-family:var(--mono);font-size:12px}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+textarea{min-height:12rem;resize:vertical}
+label>b{display:block;margin-bottom:.3rem;font-size:12px;font-weight:600}
+::placeholder{color:var(--faint)}
+
+code,pre,.mono{font-family:var(--mono);font-size:12px}
+pre{overflow:auto;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius-s);padding:.8rem .9rem;margin:0;line-height:1.55}
 .muted{color:var(--dim)}
-.small{font-size:13px}
-.row{display:flex;gap:.75rem;align-items:center}
+.faint{color:var(--faint)}
+.small{font-size:12px}
+.row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 .between{display:flex;justify-content:space-between;align-items:center;gap:1rem}
-.stack>*+*{margin-top:.85rem}
-.grid{display:grid;gap:.75rem}
+.stack>*+*{margin-top:.8rem}
+.grid{display:grid;gap:.6rem}
 .hide{display:none !important}
-.pill{display:inline-block;padding:.12rem .55rem;border-radius:999px;font-size:12px;font-weight:600;
-  background:var(--accent-soft);color:var(--accent)}
-.pill.warn{background:var(--warn-soft);color:var(--warn)}
-.pill.bad{background:var(--bad-soft);color:var(--bad)}
-.pill.dim{background:var(--line);color:var(--dim)}
-/* header */
+.kicker{font:700 10.5px/1.2 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem}
+
+.pill{display:inline-flex;align-items:center;gap:.3rem;padding:.13rem .42rem;border-radius:4px;
+  font:700 10px/1.4 var(--mono);letter-spacing:.05em;text-transform:uppercase;
+  background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent)}
+.pill.warn{background:var(--warn-soft);border-color:var(--warn-line);color:var(--warn)}
+.pill.bad{background:var(--bad-soft);border-color:var(--bad-line);color:var(--bad)}
+.pill.dim{background:var(--panel2);border-color:var(--line2);color:var(--dim)}
+
+.led{width:7px;height:7px;border-radius:50%;background:var(--line2);display:inline-block;flex:none}
+.led.live{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),0 0 8px var(--accent);
+  animation:pulse 2.2s ease-in-out infinite}
+.led.warn{background:var(--warn)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+
+.note{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:.6rem .8rem;border-radius:var(--radius-s);font-size:12.5px}
+.note.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+.note.bad{border-left-color:var(--bad);background:var(--bad-soft)}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:700 10px/1.4 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+
+/* ----------------------------------------------------------------- header
+   Left: identity + navigation. Right: status and account. One primary CTA. */
 header{border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:10}
-header .wrap{padding:.9rem 1.5rem;display:flex;justify-content:space-between;align-items:center}
-.brand{font-weight:700;letter-spacing:-.02em;font-size:17px}
-.brand span{color:var(--accent)}
-/* wizard */
-.steps{display:flex;flex-wrap:wrap;gap:.35rem;margin-bottom:1.5rem}
-.steps button{border:none;background:none;padding:.3rem .6rem;border-radius:6px;color:var(--dim);
-  font-size:13px}
-.steps button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
-.steps button.done{color:var(--ink)}
-.steps button:disabled{opacity:.4;cursor:not-allowed}
-.choice{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;cursor:pointer;
-  background:var(--panel);text-align:left;width:100%;display:block}
-.choice:hover{border-color:var(--accent)}
-.choice.on{border-color:var(--accent);background:var(--accent-soft)}
-.choice b{display:block;margin-bottom:.15rem}
-.repo-row{display:flex;justify-content:space-between;gap:1rem;align-items:baseline}
+header .wrap{max-width:none;margin:0;padding:0 1rem;height:46px;display:flex;
+  justify-content:space-between;align-items:center}
+.brand{font:700 13px var(--mono);letter-spacing:-.01em;display:inline-flex;align-items:center;gap:.1rem;
+  margin-right:.9rem}
+.brand i{font-style:normal;color:var(--accent);animation:cursorblink 1.6s steps(2) infinite}
+@keyframes cursorblink{50%{opacity:0}}
+#ctx{font:11px var(--mono);color:var(--faint)}
+header .row{gap:.3rem;flex-wrap:nowrap}
+header button{font-size:12px;padding:.34rem .6rem;white-space:nowrap}
+header nav{display:inline-flex;gap:.15rem}
+
+/* shared dropdown menu (workflow ⋯, theme picker) */
+details.menu{position:relative}
+details.menu>summary{list-style:none;cursor:pointer;border:1px solid transparent;
+  border-radius:var(--radius-s);padding:.34rem .6rem;line-height:1.35;color:var(--dim);font-size:12px;
+  display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap}
+details.menu>summary:hover{background:var(--panel2);color:var(--ink)}
+details.menu>summary::-webkit-details-marker{display:none}
+details.menu>div{position:absolute;right:0;top:calc(100% + .35rem);z-index:40;min-width:11rem;
+  padding:.3rem;background:var(--raise);border:1px solid var(--line2);border-radius:var(--radius-s);
+  box-shadow:var(--shadow)}
+details.menu>div button{display:flex;align-items:center;gap:.5rem;width:100%;text-align:left;
+  border:0;background:none;padding:.42rem .5rem;font-size:12.5px;border-radius:4px}
+details.menu>div button:hover{background:var(--panel2)}
+.swatch{width:12px;height:12px;border-radius:50%;flex:none;border:1px solid var(--line2)}
+.theme-check{margin-left:auto;color:var(--accent);font-weight:700}
+
+/* branded GitHub button */
+.btn-github{display:inline-flex;align-items:center;gap:.45rem;background:var(--gh-bg);
+  color:var(--gh-ink);border:1px solid var(--gh-line);font-weight:600}
+.btn-github:hover{background:var(--gh-bg);border-color:var(--gh-line);filter:brightness(.94)}
+.btn-github svg{width:15px;height:15px;flex:none;fill:currentColor}
+
+/* ------------------------------------------------------------------ pages */
+.wrap{max-width:74rem;margin:0 auto;padding:1.6rem 1.5rem 4rem}
+.wrap.session-app{max-width:none;margin:0;padding:0}
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem;margin-bottom:1.2rem}
+.page-head .row button{white-space:nowrap}
+.page-head .sub{font-size:12px;color:var(--dim);margin-top:.35rem;max-width:44rem}
+.section-head{display:flex;align-items:center;gap:.7rem;margin:1.8rem 0 .6rem}
+.section-head::after{content:"";flex:1;height:1px;background:var(--line)}
+.hero{max-width:38rem;margin:9vh auto 0;padding:1.5rem 1.6rem}
+
+/* home: session rows */
+.sess-list{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel)}
+.sess-row{display:flex;justify-content:space-between;gap:1rem;padding:.7rem .95rem;
+  border-bottom:1px solid var(--line);align-items:center}
+.sess-row:last-child{border-bottom:none}
+.sess-row:hover{background:var(--panel2)}
+.sess-main{min-width:0}
+.sess-title{display:flex;gap:.55rem;align-items:center;font-size:13px}
+.sess-meta{font:11.5px var(--mono);color:var(--dim);margin-top:.3rem;display:flex;gap:1rem;flex-wrap:wrap}
+.sess-brief{font-size:12px;color:var(--faint);margin-top:.22rem;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:44rem}
+.sess-actions{flex:none;display:flex;gap:.4rem}
+
+/* home: two-column — sessions lead, workflows are a compact defaults panel */
+.home-grid{display:grid;grid-template-columns:minmax(0,1fr) 18rem;gap:1.4rem;align-items:start}
+.wf-panel{padding:.85rem .95rem}
+.wf-row{display:flex;align-items:center;justify-content:space-between;gap:.6rem;
+  padding:.6rem 0;border-top:1px solid var(--line)}
+.wf-row:first-child{border-top:none}
+.wf-row button[data-run]{font-size:11.5px;padding:.3rem .6rem}
+.workflow-chain{font:11.5px var(--mono);color:var(--dim);margin-top:.3rem;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.workflow-menu>summary{border:1px solid var(--line2);padding:.28rem .45rem;line-height:1}
+.workflow-menu button.danger{color:var(--bad)}
+.workflow-editor .perm{padding:.55rem 0}
+.profile-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.5rem;margin-top:.7rem}
+
+/* new session: numbered field groups */
+.fieldset{margin-top:1.5rem}
+.fieldset-head{display:flex;gap:.55rem;align-items:baseline;margin-bottom:.55rem}
+.fieldset-num{font:700 10.5px var(--mono);color:var(--accent);letter-spacing:.06em}
+.fieldset-title{font-weight:650;font-size:13px}
+.repo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));gap:.5rem}
+.sel-repo{display:flex;justify-content:space-between;align-items:center;gap:.8rem;
+  border:1px solid var(--accent-line);background:var(--accent-soft);border-radius:var(--radius-s);
+  padding:.55rem .75rem;margin-bottom:.55rem}
+details.adv{margin-top:.55rem}
+details.adv summary{cursor:pointer;color:var(--dim);font-size:12px}
+details.adv summary:hover{color:var(--ink)}
+
+.choice{border:1px solid var(--line);border-radius:var(--radius-s);padding:.6rem .75rem;cursor:pointer;
+  background:var(--panel);text-align:left;width:100%;display:block;color:var(--ink);font:inherit}
+.choice:hover{border-color:var(--line2);background:var(--panel2)}
+.choice.on{border-color:var(--accent-line);background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
+.choice b{display:block;margin-bottom:.15rem;font-size:12.5px}
+.choice > span{display:block;margin-top:.1rem}
+.repo-row{display:flex;justify-content:space-between;gap:.8rem;align-items:baseline}
+.repo-row b{margin-bottom:0}
+
+/* permissions */
 .perm{display:flex;justify-content:space-between;align-items:center;gap:1rem;
-  padding:.45rem 0;border-bottom:1px solid var(--line)}
+  padding:.5rem 0;border-bottom:1px solid var(--line)}
 .perm:last-child{border-bottom:none}
-.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;flex:none}
-.seg button{border:none;border-radius:0;padding:.3rem .7rem;font-size:12.5px;background:none;
-  color:var(--dim)}
-.seg button.on{background:var(--accent);color:#fff;font-weight:600}
-.seg button.on.risky{background:var(--bad)}
-.note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:.7rem 1rem;
-  border-radius:0 14px 14px 0}
-.note.warn{border-color:var(--warn);background:var(--warn-soft)}
-.note.bad{border-color:var(--bad);background:var(--bad-soft)}
-.quick textarea{min-height:7rem}
-.agent-card{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--panel)}
-.agent-card pre{margin-top:.75rem;white-space:pre-wrap;word-break:break-word}
-.workflow-list{display:grid;gap:.7rem;margin-top:1.15rem}.workflow-card{display:flex;align-items:center;justify-content:space-between;gap:1rem}.workflow-card .row{flex:none}.workflow-menu{position:relative}.workflow-menu summary{list-style:none;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:.34rem .55rem;line-height:1}.workflow-menu summary::-webkit-details-marker{display:none}.workflow-menu > div{position:absolute;right:0;top:calc(100% + .35rem);z-index:4;width:10rem;padding:.35rem;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 28px rgba(25,30,27,.12)}.workflow-menu button{display:block;width:100%;text-align:left;border:0;background:none;padding:.42rem .5rem;font-size:13px}.workflow-menu button.danger{color:var(--bad)}.workflow-editor{max-width:52rem}.workflow-editor .perm{padding:.6rem 0}.reassurance{color:var(--accent);font-size:13px}.success{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;max-width:38rem;z-index:50;border-color:var(--accent)!important}
-/* focused session view: a fixed rail and a contained, breathing chat surface */
-.session-layout{display:grid;grid-template-columns:15.5rem minmax(0,1fr);height:calc(100vh - 58px);min-height:34rem;background:var(--panel);overflow:hidden}
-.session-rail{position:sticky;top:0;height:calc(100vh - 58px);padding:1.35rem 1rem;border-right:1px solid var(--line);background:#fafaf8;display:flex;flex-direction:column;gap:1.15rem;overflow-y:auto}
-.rail-kicker{font-size:11px;font-weight:700;letter-spacing:.09em;color:var(--dim);text-transform:uppercase}.rail-title{font-size:15px;font-weight:680;line-height:1.3}.rail-status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:.4rem}.rail-status i{width:.45rem;height:.45rem;border-radius:50%;background:var(--line);display:inline-block}.rail-status i.live{background:var(--accent)}
-.rail-clock{font-size:12px;color:var(--dim);margin-top:-.6rem}.rail-progress{display:grid;gap:.35rem;padding:.7rem .6rem;background:var(--bg);border-radius:10px}.rail-progress-line{display:flex;justify-content:space-between;gap:.5rem;font-size:11px;color:var(--dim)}.rail-progress-track{height:4px;background:var(--line);border-radius:99px;overflow:hidden}.rail-progress-track i{display:block;height:100%;background:var(--accent);border-radius:inherit;transition:width .25s ease}.rail-nav{display:grid;gap:.15rem}.rail-nav button{text-align:left;border:0;background:transparent;padding:.48rem .55rem;border-radius:6px;color:var(--dim);font-size:13px}.rail-nav button:hover{background:var(--bg);color:var(--ink)}.rail-nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
-.rail-team{border-top:1px solid var(--line);padding-top:.85rem;margin-top:auto}.team-line{display:flex;align-items:center;justify-content:space-between;gap:.45rem;font-size:12px;padding:.16rem 0}.presence{display:inline-flex;align-items:center;gap:.42rem;min-width:0}.presence i{width:.46rem;height:.46rem;border-radius:50%;background:var(--line);display:inline-block;flex:none}.presence i.live{background:var(--accent)}
-.rail-controls{display:grid;grid-template-columns:1fr 1fr;gap:.45rem;border-top:1px solid var(--line);padding-top:.85rem}.rail-controls button{font-size:12px;padding:.45rem .55rem;text-align:left}.rail-controls .control-complete{grid-column:1/-1;background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:700}.rail-controls .control-stop{color:var(--bad)}
-.conversation-shell{position:relative;min-width:0;min-height:0;height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--panel)}.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.2rem clamp(2rem,4vw,5rem) 1rem;border-bottom:1px solid var(--line)}.chat-title{font-size:17px;font-weight:680}.chat-subtitle{font-size:12px;color:var(--dim);margin-top:.1rem}.chat-time{font-size:12px;color:var(--dim);white-space:nowrap}
-.conversation-feed{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto auto;overflow:hidden}.message-list{min-height:0;overflow-y:auto;padding:1rem clamp(2rem,4vw,5rem) .6rem;scroll-behavior:smooth}.message-list .msg{padding:1rem 0;border-bottom:0;max-width:62rem}.conversation-feed .msg .who{font-size:11px;letter-spacing:.075em;font-weight:750;color:var(--dim)}.conversation-feed .msg .body{white-space:normal;margin-top:.28rem;line-height:1.62}.msg.you .who{color:var(--accent)}.msg.system .body{color:var(--dim);font-size:13px}.handoff{margin:.52rem 0 0;font-size:10px;font-weight:750;letter-spacing:.08em;color:var(--accent)}.response-state{margin-top:.45rem;font-size:10px;font-weight:700;letter-spacing:.07em;color:var(--dim)}
-.live-work{margin:0;padding:.3rem clamp(2rem,4vw,5rem) .45rem;max-width:none;background:transparent}.live-work-label{font-size:10px;font-weight:750;letter-spacing:.09em;color:var(--accent);margin-bottom:.18rem}.live-work summary{cursor:pointer;list-style:none}.live-work summary::-webkit-details-marker{display:none}.live-work summary::after{content:"Show trail";margin-left:.5rem;color:var(--dim);font-size:10px;font-weight:500;letter-spacing:0}.live-work[open] summary::after{content:"Hide trail"}.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.55rem;align-items:baseline;font-size:13px;padding:.08rem 0;max-width:62rem}.live-note b{font-size:11px;letter-spacing:.06em}.live-note .dot{color:var(--accent)}
-.timebox-nudge{margin:0 clamp(2rem,4vw,5rem) .5rem;padding:.6rem .8rem;border-left:3px solid var(--warn);background:var(--warn-soft);border-radius:0 12px 12px 0;font-size:12px;color:var(--ink)}.timebox-nudge .row{margin-top:.5rem;flex-wrap:wrap}.timebox-nudge button{font-size:12px;padding:.3rem .55rem}.decision-actions{display:flex;gap:.45rem;margin-top:.65rem}.decision-actions button{font-size:12px;padding:.32rem .65rem}.decision-actions button[data-decision="approve"]{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:700}.decision-actions button[data-decision="deny"]{color:var(--bad)}
-.rich{max-width:62rem}.rich h3,.rich h4{font-size:14px;margin:.65rem 0 .2rem}.rich h4{font-size:13px}.rich p{margin:.45rem 0}.rich .rich-list{margin:.42rem 0;padding-left:1.1rem}.rich .rich-list div{margin:.16rem 0}.rich .rich-quote{margin:.6rem 0;padding:.15rem 0 .15rem .8rem;border-left:2px solid var(--line);color:var(--dim)}.rich code{font-size:.88em;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:.1rem .28rem}.rich .rich-code{margin:.65rem 0;padding:.75rem .85rem;border:1px solid var(--line);background:#f7f7f5;border-radius:7px;overflow:auto;line-height:1.5}.rich .rich-code code{padding:0;border:0;background:transparent}.rich a{color:var(--accent);text-decoration-thickness:1px}.live-note .rich{display:inline}.live-note .rich p{display:inline;margin:0}.live-note .rich .rich-code{display:block}
-.chat-compose{display:flex;gap:.55rem;margin:0;padding:.7rem clamp(2rem,4vw,5rem) 1.7rem;max-width:none}.chat-compose input{min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:.55rem .05rem;background:transparent;max-width:62rem}.chat-compose input:focus{outline:none;border-color:var(--accent)}.chat-compose button{padding:.45rem .8rem}
-.details-panel{position:absolute;inset:1rem clamp(1rem,3vw,3rem);z-index:5;margin:0;padding:1.2rem clamp(1.25rem,3vw,2.5rem);border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);box-shadow:0 18px 50px rgba(25,30,27,.16);overflow:auto}.detail-heading{font-size:11px;letter-spacing:.08em;color:var(--dim);font-weight:750;margin-bottom:.7rem}.detail-close{float:right;border:0;background:transparent;color:var(--dim);padding:.1rem .3rem}
-@media(max-width:760px){.wrap{padding-left:1rem;padding-right:1rem}.wrap.session-app{padding:0}.session-layout{grid-template-columns:1fr;height:auto;min-height:calc(100vh - 58px)}.session-rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:.6rem}.rail-nav{grid-column:1/-1;display:flex;overflow:auto}.rail-nav button{white-space:nowrap}.rail-team,.rail-controls{display:none}.conversation-shell{min-height:32rem}.message-list{padding-left:1rem;padding-right:1rem}.live-work,.chat-compose{padding-left:1rem;padding-right:1rem}.chat-header{padding-left:1rem;padding-right:1rem}.details-panel{inset:1rem;border-radius:14px}}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:var(--radius-s);overflow:hidden;
+  flex:none;background:var(--bg)}
+.seg button{border:0;border-radius:0;padding:.3rem .6rem;font:600 10.5px var(--mono);
+  letter-spacing:.05em;text-transform:uppercase;background:none;color:var(--faint)}
+.seg button + button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--accent);color:var(--accent-ink)}
+.seg button.on[data-v="ask"],.seg button.on[data-value="ask"]{background:var(--warn);color:var(--warn-ink)}
+.seg button.on[data-v="deny"],.seg button.on[data-value="deny"]{background:var(--line2);color:var(--ink)}
+
+/* wizard steps (retired flow — kept styled so nothing ever renders broken) */
+.steps{display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:1.2rem}
+.steps button{border:1px solid transparent;background:none;padding:.3rem .55rem;
+  border-radius:var(--radius-s);color:var(--faint);font-size:12px}
+.steps button.on{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent);font-weight:650}
+.steps button.done{color:var(--dim)}
+.steps button:disabled{opacity:.4;cursor:not-allowed}
+.quick textarea{min-height:9rem}
+
+/* preflight: one panel — status, agent checklist, isolated action bar */
+.preflight{max-width:46rem;padding:1.1rem 1.2rem}
+.statusline{display:flex;gap:.7rem;align-items:baseline;padding:.55rem .75rem;margin-top:.9rem;
+  background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-s)}
+.statusline b{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.checklist{margin-top:.9rem;border-top:1px solid var(--line)}
+.check-row{display:flex;gap:.9rem;padding:.7rem 0;border-bottom:1px solid var(--line);align-items:flex-start}
+.check-row:last-child{border-bottom:none}
+.check-status{flex:none;width:8.5rem;padding-top:.1rem}
+.check-main{min-width:0;flex:1}
+.check-main pre{margin-top:.5rem;white-space:pre-wrap;word-break:break-word;background:var(--bg);max-height:16rem}
+.check-main details.adv{margin-top:.35rem}
+.actionbar{border-top:1px solid var(--line);margin-top:.2rem;padding-top:.9rem}
+
+/* new session: form + sticky launch plan (the one CTA on the page) */
+.quick-grid{display:grid;grid-template-columns:minmax(0,1fr) 19rem;gap:1.5rem;align-items:start;max-width:66rem}
+.quick{min-width:0}
+.launch-plan{position:sticky;top:calc(46px + 1.2rem);padding:.95rem 1rem}
+.plan-rows{margin-top:.5rem}
+.plan-row{display:flex;justify-content:space-between;gap:.7rem;font-size:12px;padding:.3rem 0;
+  border-bottom:1px solid var(--line)}
+.plan-row:last-child{border-bottom:none}
+.plan-row span{color:var(--faint);flex:none}
+.plan-row b{font-weight:600;text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* toast */
+.err{position:fixed;right:1.25rem;bottom:1.25rem;max-width:min(26rem,calc(100vw - 2rem));z-index:60;
+  animation:toast-in .18s ease}
+.err.card{background:var(--raise);border:1px solid var(--line2);border-left-width:3px;
+  padding:.8rem .95rem;font-size:12.5px;box-shadow:var(--shadow)}
+@keyframes toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.success{border-left-color:var(--accent) !important}
+
+/* dialogs (GitHub sign-in, account) */
+.dialog{position:fixed;z-index:70;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:min(30rem,calc(100vw - 2rem));max-height:min(34rem,calc(100vh - 3rem));overflow:auto;
+  background:var(--raise);border:1px solid var(--line2);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:1.1rem 1.2rem}
+.dialog .detail-close{position:absolute;top:.55rem;right:.55rem}
+.detail-close{border:1px solid transparent;background:transparent;color:var(--dim);
+  font-size:12px;padding:.25rem .5rem}
+.detail-close:hover{color:var(--ink);background:var(--panel2);border-color:transparent}
+.code-big{font:700 1.5rem var(--mono);text-align:center;letter-spacing:.14em;padding:.9rem;
+  background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius-s)}
+
+/* ---------------------------------------------------------------- session */
+.session-layout{display:grid;grid-template-columns:16rem minmax(0,1fr);height:calc(100vh - 47px);
+  min-height:34rem;background:var(--bg);overflow:hidden}
+.session-rail{height:calc(100vh - 47px);padding:1rem .9rem;border-right:1px solid var(--line);
+  background:var(--panel);display:flex;flex-direction:column;gap:1rem;overflow-y:auto}
+.rail-title{font-size:13.5px;font-weight:650;line-height:1.35;margin-top:.3rem}
+.rail-status{font:11.5px var(--mono);color:var(--dim);display:flex;align-items:center;gap:.45rem}
+.rail-clock{font-size:12px;color:var(--dim);margin-top:-.5rem;letter-spacing:.02em}
+.rail-progress{display:grid;gap:.4rem;padding:.6rem;background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius-s)}
+.rail-progress-line{display:flex;justify-content:space-between;gap:.5rem;
+  font:600 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.rail-progress-line b{color:var(--ink)}
+.rail-progress-track{height:3px;background:var(--line);border-radius:99px;overflow:hidden}
+.rail-progress-track i{display:block;height:100%;background:var(--accent);border-radius:inherit;
+  transition:width .25s ease}
+.rail-nav{display:grid;gap:1px}
+.rail-nav button{text-align:left;border:0;background:transparent;padding:.42rem .55rem;
+  border-radius:var(--radius-s);color:var(--dim);font-size:12.5px}
+.rail-nav button:hover{background:var(--panel2);color:var(--ink)}
+.rail-nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:650;
+  box-shadow:inset 2px 0 0 var(--accent)}
+.rail-team{border-top:1px solid var(--line);padding-top:.8rem;margin-top:auto}
+.team-line{display:flex;align-items:center;justify-content:space-between;gap:.45rem;
+  font-size:12px;padding:.18rem 0}
+.team-line [data-team-state]{font:11px var(--mono);color:var(--faint)}
+.presence{display:inline-flex;align-items:center;gap:.45rem;min-width:0;
+  font:11.5px var(--mono);overflow:hidden;text-overflow:ellipsis}
+.presence i{width:6px;height:6px;border-radius:50%;background:var(--line2);display:inline-block;flex:none}
+.presence i.live{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.rail-controls{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;border-top:1px solid var(--line);
+  padding-top:.8rem}
+.rail-controls button{font-size:11.5px;padding:.42rem .5rem;text-align:center}
+.rail-controls .control-complete{grid-column:1/-1;background:var(--accent-soft);
+  border-color:var(--accent-line);color:var(--accent);font-weight:700}
+.rail-controls .control-stop{color:var(--bad);border-color:var(--bad-line)}
+
+.conversation-shell{position:relative;min-width:0;min-height:0;height:100%;display:grid;
+  grid-template-rows:auto minmax(0,1fr);background:var(--bg)}
+.chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  padding:.7rem clamp(1.25rem,3vw,2.5rem);border-bottom:1px solid var(--line);background:var(--panel)}
+.chat-title{font-size:13.5px;font-weight:650}
+.chat-subtitle{font:11px var(--mono);color:var(--faint);margin-top:.18rem}
+.chat-time{font:11px var(--mono);color:var(--faint);white-space:nowrap}
+
+.conversation-feed{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto auto;
+  grid-auto-rows:auto;overflow:hidden}
+.message-list{min-height:0;overflow-y:auto;padding:.9rem clamp(1.25rem,3vw,2.5rem) .6rem;
+  scroll-behavior:smooth}
+.message-list .msg{padding:.7rem 0;max-width:56rem}
+.msg-head{display:flex;align-items:baseline;gap:.55rem;max-width:56rem}
+.msg .who{font:700 10.5px var(--mono);letter-spacing:.07em;color:var(--dim)}
+.msg.you .who{color:var(--accent)}
+.msg.system .who{color:var(--faint)}
+.msg .to{font:600 10.5px var(--mono);letter-spacing:.05em;color:var(--faint)}
+.msg .when{margin-left:auto;font-size:10.5px;color:var(--faint)}
+.msg .body{margin-top:.3rem;line-height:1.6;font-size:13.5px;white-space:normal}
+.msg.system .body{color:var(--dim);font-size:12.5px}
+.who.a0{color:var(--a0)}.who.a1{color:var(--a1)}.who.a2{color:var(--a2)}.who.a3{color:var(--a3)}.who.a4{color:var(--a4)}
+.handoff{margin:.5rem 0 0;font:700 10px var(--mono);letter-spacing:.08em;color:var(--accent)}
+.response-state{margin-top:.4rem;font:700 10px var(--mono);letter-spacing:.07em;color:var(--faint)}
+.decision-actions{display:flex;gap:.7rem;margin-top:.6rem;align-items:center;flex-wrap:wrap;
+  justify-content:space-between;border:1px solid var(--warn-line);background:var(--warn-soft);
+  border-radius:var(--radius-s);padding:.55rem .7rem;max-width:56rem}
+.decision-actions > div{display:flex;gap:.4rem;flex:none}
+.decision-actions button{font-size:11.5px;padding:.32rem .65rem}
+.decision-actions button[data-decision="approve"]{background:var(--accent);border-color:var(--accent);
+  color:var(--accent-ink);font-weight:650}
+.decision-actions button[data-decision="deny"]{color:var(--bad);border-color:var(--bad-line)}
+
+.live-work{margin:0;padding:.5rem clamp(1.25rem,3vw,2.5rem);border-top:1px solid var(--line);
+  background:var(--panel)}
+.live-work-label{font:700 10px var(--mono);letter-spacing:.08em;color:var(--accent)}
+.live-work summary{cursor:pointer;list-style:none}
+.live-work summary::-webkit-details-marker{display:none}
+.live-work summary::after{content:"Show trail";margin-left:.5rem;color:var(--faint);
+  font:500 10px var(--mono);letter-spacing:.02em}
+.live-work[open] summary::after{content:"Hide trail"}
+.live-note{display:grid;grid-template-columns:auto max-content minmax(0,1fr);gap:.5rem;
+  align-items:baseline;font-size:12.5px;padding:.1rem 0;max-width:56rem}
+.live-note b{font:700 10.5px var(--mono);letter-spacing:.05em}
+.live-note .dot{color:var(--accent);font-size:9px}
+
+.timebox-nudge{margin:.5rem clamp(1.25rem,3vw,2.5rem);padding:.6rem .8rem;
+  border:1px solid var(--warn-line);border-left:3px solid var(--warn);background:var(--warn-soft);
+  border-radius:var(--radius-s);font-size:12.5px}
+.timebox-nudge .row{margin-top:.5rem}
+.timebox-nudge button{font-size:11.5px;padding:.3rem .55rem}
+
+.chat-compose{display:flex;gap:.55rem;align-items:center;margin:0;
+  padding:.6rem clamp(1.25rem,3vw,2.5rem) .9rem;border-top:1px solid var(--line);background:var(--panel)}
+.compose-prefix{color:var(--accent);font:700 13px var(--mono);flex:none}
+.chat-compose input{min-width:0;border:0;background:transparent;padding:.45rem .1rem;border-radius:0}
+.chat-compose input:focus{outline:none;box-shadow:none}
+.chat-compose button{flex:none}
+
+/* inspector: detail tabs presented as a full working surface, not a modal */
+.inspector{position:absolute;inset:0;z-index:5;display:grid;grid-template-rows:auto minmax(0,1fr);
+  background:var(--bg)}
+.inspector-head{display:flex;align-items:center;justify-content:space-between;
+  padding:.6rem clamp(1.25rem,3vw,2.5rem);border-bottom:1px solid var(--line);background:var(--panel)}
+.inspector-head .detail-close{border:1px solid var(--line2);background:var(--panel2)}
+.detail-heading{font:700 11px var(--mono);letter-spacing:.09em;color:var(--ink)}
+.details-panel{overflow:auto;padding:1rem clamp(1.25rem,3vw,2.5rem) 2rem}
+select.gate-status{width:auto}
+.stat-num{font:650 22px/1.2 var(--mono);letter-spacing:-.01em}
+
+/* diff coloring — presentation of the raw diff text only */
+pre.diff{background:var(--bg)}
+.d-add{color:var(--diff-add);background:var(--diff-add-bg)}
+.d-del{color:var(--diff-del);background:var(--diff-del-bg)}
+.d-hunk{color:var(--info)}
+.d-file{color:var(--ink);font-weight:700}
+.d-meta{color:var(--faint)}
+
+/* rich text (safe mini-markdown) */
+.rich{max-width:56rem}
+.rich h3,.rich h4{font-size:13px;margin:.65rem 0 .2rem}
+.rich h4{font-size:12.5px}
+.rich .rich-title{font-size:14.5px;margin:.75rem 0 .3rem}
+.rich p{margin:.4rem 0}
+.rich .rich-list{margin:.35rem 0;padding-left:1.1rem}
+.rich .rich-list div{margin:.15rem 0}
+.rich .rich-quote{margin:.55rem 0;padding:.15rem 0 .15rem .8rem;border-left:2px solid var(--line2);color:var(--dim)}
+.rich code{font-size:.9em;background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:.08rem .28rem}
+.rich .rich-code{margin:.6rem 0;padding:.7rem .85rem;border:1px solid var(--line);background:var(--bg);
+  border-radius:var(--radius-s);overflow:auto;line-height:1.5}
+.rich .rich-code code{padding:0;border:0;background:transparent}
+.rich a{color:var(--accent);text-decoration-thickness:1px}
+.live-note .rich{display:inline}
+.live-note .rich p{display:inline;margin:0}
+.live-note .rich .rich-code{display:block}
+
+/* legacy message fallbacks (kept for any view that renders bare .msg rows) */
 .msg{border-bottom:1px solid var(--line);padding:.7rem 0}
 .msg:last-child{border-bottom:none}
-.msg .who{font-weight:640}
-.msg .body{white-space:pre-wrap;margin-top:.2rem}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
-th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-weight:600}
-.err{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;max-width:38rem;z-index:50}
+
+/* --------------------------------------------------------------- responsive */
+@media(max-width:940px){
+  .home-grid,.quick-grid{grid-template-columns:1fr}
+  .launch-plan{position:static}
+}
+@media(max-width:760px){
+  .wrap{padding-left:1rem;padding-right:1rem}
+  .wrap.session-app{padding:0}
+  .page-head{flex-direction:column;align-items:flex-start}
+  .session-layout{grid-template-columns:1fr;height:auto;min-height:calc(100vh - 47px)}
+  .session-rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);
+    display:grid;grid-template-columns:1fr auto;gap:.6rem}
+  .rail-nav{grid-column:1/-1;display:flex;overflow:auto}
+  .rail-nav button{white-space:nowrap}
+  .rail-team,.rail-controls{display:none}
+  .conversation-shell{min-height:32rem}
+  .message-list,.live-work,.chat-compose,.chat-header,.inspector-head{padding-left:1rem;padding-right:1rem}
+  .details-panel{padding:1rem 1rem 2rem}
+  .sess-row{flex-direction:column;align-items:flex-start}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important}
+  .message-list{scroll-behavior:auto}
+}
 </style>
 
 <header><div class="wrap">
-  <div class="brand">synchri<span>.</span></div>
   <div class="row">
-    <span id="ctx" class="small muted"></span>
-    <button class="ghost" id="github-account">Sign in with GitHub</button>
+    <div class="brand">synchri<i>▊</i></div>
+    <nav aria-label="Primary">
+      <button class="ghost" id="nav-home">Sessions</button>
+      <button class="primary" id="nav-new">New session</button>
+    </nav>
+    <span id="ctx" class="hide"></span>
+  </div>
+  <div class="row">
     <button class="ghost" id="app-update">Check for updates</button>
-    <button class="ghost" id="nav-home">Sessions</button>
-    <button id="nav-new">Run a workflow</button>
+    <details class="menu" id="theme-menu"><summary aria-label="Choose theme">◐ Theme</summary><div id="theme-options"></div></details>
+    <button class="btn-github" id="github-account"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-label">Sign in with GitHub</span></button>
   </div>
 </div></header>
 
@@ -146,6 +549,7 @@ function rich(value) {
     if (block) return blocks[Number(block[1])];
     if (/^###\s+/.test(line)) return `<h4>${line.replace(/^###\s+/, "")}</h4>`;
     if (/^##\s+/.test(line)) return `<h3>${line.replace(/^##\s+/, "")}</h3>`;
+    if (/^#\s+/.test(line)) return `<h3 class="rich-title">${line.replace(/^#\s+/, "")}</h3>`;
     if (/^>\s?/.test(line)) return `<div class="rich-quote">${line.replace(/^>\s?/, "")}</div>`;
     if (/^\d+[.)]\s+/.test(line)) return `<div class="rich-list">${line.replace(/^(\d+[.)])\s+/, "$1 ")}</div>`;
     if (/^[-*]\s+/.test(line)) return `<div class="rich-list">${line.replace(/^[-*]\s+/, "• ")}</div>`;
@@ -161,6 +565,32 @@ function richInline(value) {
   text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   return text.replace(/\n+/g, " ");
+}
+
+/* Presentation helpers: wall-clock stamps, stable per-agent hues, and diff
+   line coloring. All three only re-shape data the API already returns. */
+const fmtClock = (value) => {
+  if (!value) return "";
+  const time = new Date(value);
+  return isNaN(time) ? "" : time.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+};
+
+function hueFor(name) {
+  let hash = 0;
+  for (const ch of String(name || "")) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return "a" + (hash % 5);
+}
+
+function renderDiff(diff) {
+  return String(diff).split("\n").map(line => {
+    const text = esc(line);
+    if (line.startsWith("+++") || line.startsWith("---")) return `<span class="d-file">${text}</span>`;
+    if (line.startsWith("@@")) return `<span class="d-hunk">${text}</span>`;
+    if (line.startsWith("+")) return `<span class="d-add">${text}</span>`;
+    if (line.startsWith("-")) return `<span class="d-del">${text}</span>`;
+    if (line.startsWith("diff ") || line.startsWith("index ")) return `<span class="d-meta">${text}</span>`;
+    return text;
+  }).join("\n");
 }
 
 async function api(path, body) {
@@ -183,7 +613,7 @@ function flash(error) {
   const message = typeof error === "string" ? error : error?.message;
   const resolution = typeof error === "object" ? error?.resolution : null;
   const box = document.getElementById("err");
-  box.className = "err card"; box.style.borderColor = "var(--bad)";
+  box.className = "err card"; box.style.borderLeftColor = "var(--bad)";
   const action = resolution?.kind === "connect_github" || resolution?.kind === "retry_github_login"
     ? `<button id="error-connect-github" style="margin-top:.65rem">Connect GitHub</button>`
     : resolution?.kind === "github_app_settings"
@@ -220,11 +650,51 @@ function flash(error) {
 }
 function confirmNotice(message) {
   const box = document.getElementById("err");
-  box.className = "err card success"; box.style.borderColor = "var(--accent)";
+  box.className = "err card success"; box.style.borderLeftColor = "var(--accent)";
   box.innerHTML = `<b>Saved</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
   clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 4200);
 }
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e); } };
+
+/* ------------------------------------------------------------------ themes
+   Purely client-side: the choice lives in localStorage and swaps the token
+   set via data-theme. "System" clears the choice and follows the OS. */
+const THEMES = [
+  {key: "", label: "System", swatch: ["#0b0d10", "#f4f5f7"]},
+  {key: "terminal", label: "Terminal", swatch: ["#0b0d10", "#2fd287"]},
+  {key: "midnight", label: "Midnight", swatch: ["#0a0e17", "#6ea8ff"]},
+  {key: "daylight", label: "Daylight", swatch: ["#f4f5f7", "#0e8f60"]},
+  {key: "sage", label: "Sage", swatch: ["#faf9f7", "#2f6f4f"]},
+];
+
+function currentTheme() {
+  try { return localStorage.getItem("synchri-theme") || ""; } catch (e) { return ""; }
+}
+
+function applyTheme(key) {
+  try {
+    if (key) localStorage.setItem("synchri-theme", key);
+    else localStorage.removeItem("synchri-theme");
+  } catch (e) { /* private mode: the choice still applies for this window */ }
+  if (key) document.documentElement.dataset.theme = key;
+  else delete document.documentElement.dataset.theme;
+  renderThemeMenu();
+}
+
+function renderThemeMenu() {
+  const menu = document.getElementById("theme-menu");
+  const options = document.getElementById("theme-options");
+  if (!menu || !options) return;
+  const active = currentTheme();
+  options.innerHTML = "";
+  for (const theme of THEMES) {
+    const row = $(`<button type="button">
+      <span class="swatch" style="background:linear-gradient(135deg, ${theme.swatch[0]} 50%, ${theme.swatch[1]} 50%)"></span>
+      <span>${esc(theme.label)}</span>${theme.key === active ? `<span class="theme-check">✓</span>` : ""}</button>`);
+    row.onclick = () => { applyTheme(theme.key); menu.removeAttribute("open"); };
+    options.append(row);
+  }
+}
 
 const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
@@ -241,7 +711,7 @@ async function connectGitHub() {
     S.repos = null; S.githubReposRequest = null;
     S.boot = await api("bootstrap"); renderGitHubAccount();
     const account = login.account?.login ? `@${login.account.login}` : "GitHub";
-    confirmNotice(`${account} is already signed in on this Mac.`);
+    confirmNotice(`${account} is already signed in.`);
     if (S.view === "quick") { await loadQuickRepositories(); renderQuick(); }
     if (S.view === "wizard" && S.step === "repository") renderWizard();
     return;
@@ -258,12 +728,12 @@ async function showGitHubCode(login) {
   const previous = document.getElementById("github-device-login");
   previous?.remove();
   const expiresIn = Math.max(0, Math.ceil((Number(login.expires_at) * 1000 - Date.now()) / 1000));
-  const code = $(`<div class="details-panel stack" id="github-device-login" role="dialog" aria-modal="true">
+  const code = $(`<div class="dialog stack" id="github-device-login" role="dialog" aria-modal="true">
     <button class="detail-close" aria-label="Close">×</button>
-    <div class="detail-heading">CONNECT GITHUB</div>
+    <div class="kicker">CONNECT GITHUB</div>
     <h2>Enter this code in GitHub</h2>
-    <p class="muted">GitHub opened in your browser. Sign in if needed, then enter this one-time code to create your Synchri profile on this Mac. Repository access is chosen separately.</p>
-    <pre style="font-size:1.6rem;text-align:center;letter-spacing:.12em;padding:1rem">${esc(login.user_code)}</pre>
+    <p class="muted small" style="margin:.2rem 0 0">GitHub opened in your browser. Sign in if needed, then enter this one-time code to link your Synchri profile. Repository access is chosen separately.</p>
+    <div class="code-big">${esc(login.user_code)}</div>
     <div class="small muted">Waiting for GitHub — this closes on its own after approval. Expires in about ${expiresIn} seconds.</div>
     <div class="row"><button class="primary" data-open>Open GitHub again</button><button data-close>Cancel</button></div>
   </div>`);
@@ -297,15 +767,16 @@ async function showGitHubCode(login) {
 
 function renderGitHubAccount() {
   const button = document.getElementById("github-account");
+  const label = button.querySelector(".gh-label") || button;
   const github = S.boot?.github || {};
   const account = github.account || {};
   if (github.authenticated) {
-    button.textContent = account.login ? `@${account.login}` : "GitHub connected";
-    button.title = "Signed in to Synchri with GitHub on this Mac";
+    label.textContent = account.login ? `@${account.login}` : "GitHub connected";
+    button.title = "Signed in to Synchri with GitHub";
     button.onclick = () => showGitHubAccount();
     return;
   }
-  button.textContent = "Sign in with GitHub";
+  label.textContent = "Sign in with GitHub";
   button.title = "Create or open your Synchri profile with GitHub";
   button.onclick = guard(connectGitHub);
 }
@@ -315,11 +786,11 @@ function showGitHubAccount() {
   const account = github.account || {};
   const previous = document.getElementById("github-account-details");
   previous?.remove();
-  const details = $(`<div class="details-panel stack" id="github-account-details" role="dialog" aria-modal="true">
+  const details = $(`<div class="dialog stack" id="github-account-details" role="dialog" aria-modal="true">
     <button class="detail-close" aria-label="Close">×</button>
-    <div class="detail-heading">GITHUB ACCOUNT</div>
+    <div class="kicker">GITHUB ACCOUNT</div>
     <h2>${esc(account.login ? `@${account.login}` : "GitHub connected")}</h2>
-    <p class="muted">Connected locally on this Mac. Repository access remains under your control in GitHub.</p>
+    <p class="muted small" style="margin:.2rem 0 0">Signed in with GitHub. Repository access stays under your control on GitHub.</p>
     <div class="row"><button data-close>Done</button><button class="ghost" data-disconnect>Disconnect GitHub</button></div>
   </div>`);
   document.body.append(details);
@@ -329,14 +800,14 @@ function showGitHubAccount() {
   details.querySelector("[data-disconnect]").onclick = guard(async () => {
     await api("github/disconnect", {});
     S.repos = null; S.githubReposRequest = null; S.boot = await api("bootstrap");
-    close(); renderGitHubAccount(); confirmNotice("GitHub was disconnected from this Mac.");
+    close(); renderGitHubAccount(); confirmNotice("GitHub was disconnected.");
   });
 }
 
 async function openRepositoryAccess(access) {
   const destination = access?.install_url;
   if (!destination) {
-    flash({message:"Repository selection is being finished for Synchri. You are already signed in; local repositories remain available in the meantime.", resolution:{kind:"github_app_settings"}});
+    flash({message:"Repository selection is being finished for Synchri. You are already signed in; your existing repositories remain available in the meantime.", resolution:{kind:"github_app_settings"}});
     return;
   }
   await openGitHub(destination);
@@ -423,73 +894,92 @@ async function home() {
   const list = S.boot.sessions;
   const workflows = S.boot.presets || [];
   app().innerHTML = "";
+  const sessionRows = () => {
+    const rows = $(`<div class="sess-list"></div>`);
+    for (const s of list) {
+      const done = ["complete","timed_out","stopped","failed"].includes(s.status);
+      const cls = s.status === "active" ? "" : (done ? "dim" : "warn");
+      const led = s.status === "active" ? "live" : (done ? "" : "warn");
+      const brief = (s.spec?.text || s.spec?.canonical_text || "").trim().split("\n").find(Boolean) || "No saved brief";
+      const started = String(s.created_at || "").slice(0, 10);
+      const row = $(`<div class="sess-row">
+        <div class="sess-main">
+          <div class="sess-title"><i class="led ${led}"></i><b>${esc(s.name)}</b> <span class="pill ${cls}">${esc(s.status.replace("_"," "))}</span></div>
+          <div class="sess-meta"><span>${esc(s.repository.name)}</span><span>${esc(s.worktree ? (s.worktree.branch || s.worktree.name) : "no worktree")}</span>${started ? `<span>${esc(started)}</span>` : ""}</div>
+          <div class="sess-brief">${esc(brief.slice(0, 160))}</div>
+        </div>
+        <div class="sess-actions"><button data-open>Open</button><button class="ghost" data-new>New in this repo</button></div>
+      </div>`);
+      row.querySelector("[data-open]").onclick = () => openSession(s.session_id);
+      row.querySelector("[data-new]").onclick = () => quickStartFromRepository(s.repository.root);
+      rows.append(row);
+    }
+    return rows;
+  };
   if (!workflows.length) {
-    const welcome = $(`<div class="card stack" style="max-width:48rem;padding:3rem 2rem">
-      <div><h2>Configure your autonomous workflow</h2>
-        <p class="muted">Choose the agents and defaults you want Synchri to use. You can adjust every setting later — nothing starts until you choose work for the team.</p></div>
-      <div class="reassurance">Start with a sensible pair. This is a reusable workflow, not a commitment to your next session.</div>
+    const welcome = $(`<div class="card hero stack">
+      <div class="kicker">First run</div>
+      <div><h1>Define a workflow</h1>
+        <p class="muted small" style="margin:.45rem 0 0;line-height:1.6">A workflow is a saved default: which agents run,
+        what they may do, and how they pace themselves. Define one once — after that every session is just
+        <span class="mono">repo → brief → launch</span>.</p></div>
       <div class="row"><button class="primary" id="create-workflow">Create workflow</button></div>
     </div>`);
     welcome.querySelector("#create-workflow").onclick = () => configureWorkflow();
     app().append(welcome);
-  } else {
-    const title = $(`<div class="between" style="margin-bottom:1rem"><div><h2>Autonomous workflows</h2>
-      <div class="small muted">Reusable agent teams and defaults. Adjust them whenever you need to.</div></div>
-      <div class="row"><button id="new-workflow">Create workflow</button><button class="primary" id="run-workflow">Run a workflow</button></div></div>`);
-    title.querySelector("#new-workflow").onclick = () => configureWorkflow();
-    title.querySelector("#run-workflow").onclick = () => quickStart();
-    app().append(title);
-    const cards = $(`<div class="workflow-list"></div>`);
-    for (const workflow of workflows) {
-      const agents = workflow.agents || [];
-      const card = $(`<div class="card workflow-card"><div><b>${esc(workflow.name)}</b>
-        <div class="small muted" style="margin-top:.18rem">Long horizon development · ${agents.length} agent${agents.length===1?"":"s"}</div></div>
-        <div class="row"><button class="primary" data-run>Run</button><details class="workflow-menu"><summary aria-label="Workflow options">•••</summary><div>
-          <button data-edit>Edit workflow</button><button data-rename>Rename</button><button class="danger" data-delete>Delete workflow</button>
-        </div></details></div></div>`);
-      card.querySelector("[data-run]").onclick = () => quickStart(workflow.name);
-      card.querySelector("[data-edit]").onclick = () => configureWorkflow(workflow.name);
-      card.querySelector("[data-rename]").onclick = guard(async () => {
-        const name = prompt("New workflow name", workflow.name)?.trim();
-        if (!name || name === workflow.name) return;
-        S.boot.presets = (await api("preset/rename", {name: workflow.name, new_name: name})).presets;
-        confirmNotice(`Renamed workflow to “${name}”.`); await home();
-      });
-      card.querySelector("[data-delete]").onclick = guard(async () => {
-        if (!confirm(`Delete workflow “${workflow.name}”? Previous sessions are not affected.`)) return;
-        S.boot.presets = (await api("preset/delete", {name: workflow.name})).presets;
-        confirmNotice(`Deleted workflow “${workflow.name}”.`); await home();
-      });
-      cards.append(card);
+    if (list.length) {
+      app().append($(`<div class="section-head" style="margin-top:2.2rem"><span class="kicker">Sessions</span></div>`));
+      app().append(sessionRows());
     }
-    app().append(cards);
+    return;
   }
-  if (!list.length) return;
-  const sessionsTitle = $(`<div class="between" style="margin:2.5rem 0 1rem"><h3>Previous sessions</h3>
-    <div class="row"><button id="session-workflow">Create workflow</button>${workflows.length?`<button class="primary" id="session-run">Run a workflow</button>`:""}</div></div>`);
-  sessionsTitle.querySelector("#session-workflow").onclick = () => configureWorkflow();
-  const run = sessionsTitle.querySelector("#session-run"); if (run) run.onclick = () => quickStart();
-  app().append(sessionsTitle);
-  for (const s of list) {
-    const done = ["complete","timed_out","stopped","failed"].includes(s.status);
-    const cls = s.status === "active" ? "" : (done ? "dim" : "warn");
-    const brief = (s.spec?.text || s.spec?.canonical_text || "").trim().split("\n").find(Boolean) || "No saved brief";
-    const row = $(`<div class="card" style="margin-bottom:.65rem">
-      <div class="between">
-        <div>
-          <b>${esc(s.name)}</b> <span class="pill ${cls}">${esc(s.status.replace("_"," "))}</span>
-          <div class="small muted" style="margin-top:.2rem">
-            ${esc(s.mode_label)} · ${esc(s.repository.name)} ·
-            ${esc(s.worktree ? s.worktree.name : "no worktree")}
-          </div>
-          <div class="small muted" style="margin-top:.25rem">${esc(brief.slice(0, 180))}</div>
-        </div>
-        <div class="row"><button data-open>Open</button><button class="ghost" data-new>New session in this repo</button></div>
-      </div></div>`);
-    row.querySelector("[data-open]").onclick = () => openSession(s.session_id);
-    row.querySelector("[data-new]").onclick = () => quickStartFromRepository(s.repository.root);
-    app().append(row);
+  const grid = $(`<div class="home-grid"><div class="home-main"></div><aside class="home-aside"></aside></div>`);
+  const main = grid.querySelector(".home-main");
+  const aside = grid.querySelector(".home-aside");
+  main.append($(`<div class="page-head"><div><h1>Sessions</h1>
+    <div class="sub">Agent collaborations in this workspace, each in its own isolated worktree.</div></div></div>`));
+  if (list.length) {
+    main.append(sessionRows());
+  } else {
+    const empty = $(`<div class="card" style="text-align:center;padding:2.4rem 1rem">
+      <div class="mono muted">no sessions yet</div>
+      <div class="small faint" style="margin-top:.4rem">Choose a repository, write the brief, launch the agents.</div>
+      <button class="primary" style="margin-top:.9rem" id="empty-run">New session</button></div>`);
+    empty.querySelector("#empty-run").onclick = () => quickStart();
+    main.append(empty);
   }
+  const panel = $(`<div class="card wf-panel">
+    <div class="between" style="margin-bottom:.2rem"><span class="kicker">Workflows</span>
+      <button class="ghost" id="new-workflow" title="Create a workflow">+ New</button></div>
+    <div class="small faint" style="margin-bottom:.3rem">Saved defaults: team, permissions, pacing.</div>
+    <div class="wf-rows"></div></div>`);
+  panel.querySelector("#new-workflow").onclick = () => configureWorkflow();
+  const rows = panel.querySelector(".wf-rows");
+  for (const workflow of workflows) {
+    const agents = workflow.agents || [];
+    const chain = agents.map(agent => agent.name).join(" → ") || "no agents yet";
+    const row = $(`<div class="wf-row"><div style="min-width:0"><b style="font-size:12.5px">${esc(workflow.name)}</b>
+      <div class="workflow-chain">${esc(chain)}${workflow.deadline_duration ? ` · ${esc(workflow.deadline_duration)}` : ""}</div></div>
+      <div class="row" style="flex:none;flex-wrap:nowrap;gap:.25rem"><button data-run>Run</button><details class="menu workflow-menu"><summary aria-label="Workflow options">•••</summary><div>
+        <button data-edit>Edit workflow</button><button data-rename>Rename</button><button class="danger" data-delete>Delete workflow</button>
+      </div></details></div></div>`);
+    row.querySelector("[data-run]").onclick = () => quickStart(workflow.name);
+    row.querySelector("[data-edit]").onclick = () => configureWorkflow(workflow.name);
+    row.querySelector("[data-rename]").onclick = guard(async () => {
+      const name = prompt("New workflow name", workflow.name)?.trim();
+      if (!name || name === workflow.name) return;
+      S.boot.presets = (await api("preset/rename", {name: workflow.name, new_name: name})).presets;
+      confirmNotice(`Renamed workflow to “${name}”.`); await home();
+    });
+    row.querySelector("[data-delete]").onclick = guard(async () => {
+      if (!confirm(`Delete workflow “${workflow.name}”? Previous sessions are not affected.`)) return;
+      S.boot.presets = (await api("preset/delete", {name: workflow.name})).presets;
+      confirmNotice(`Deleted workflow “${workflow.name}”.`); await home();
+    });
+    rows.append(row);
+  }
+  aside.append(panel);
+  app().append(grid);
 }
 
 async function quickStartFromRepository(repoPath) {
@@ -588,22 +1078,24 @@ async function configureWorkflow(name) {
 function renderWorkflow() {
   const agents = S.workflowAgents;
   app().innerHTML = "";
-  const box = $(`<div class="workflow-editor stack">
-    <div><h2>Configure your autonomous workflow</h2>
-      <p class="muted">Set up the team Synchri will reuse whenever you start work. Nothing launches from this page, and every choice can be changed later.</p></div>
-    <div class="reassurance">Start with the defaults if they fit. You can refine this workflow after seeing it in action.</div>
-    <label><b>Workflow name</b><input id="workflow-name" value="${esc(S.workflowName)}" placeholder="e.g. Product build review"></label>
-    <div class="card stack"><div><b>Agent team</b><div class="small muted">The builder works first. The reviewer follows with an adversarial pass, then both continue the conversation until the work is verified.</div></div>
-      <div id="workflow-agents" class="stack"></div><div><button id="workflow-add">Add an agent</button></div></div>
-    <details class="card"><summary><b>Permissions and pacing</b> <span class="small muted">Optional defaults</span></summary>
-      <div class="small muted" style="margin:.65rem 0">Synchri starts cautiously. These are defaults for sessions using this workflow, and remain adjustable later.</div>
-      <div id="workflow-profiles" class="grid"></div>
-      <div class="small muted" style="margin:.7rem 0">A profile is a starting point; the controls below remain available for a custom setup. Synchri never overrides provider, operating-system, or GitHub approvals.</div>
-      <div id="workflow-permissions"></div>
-      <label style="display:block;margin-top:1rem"><b>Suggested timebox</b><input id="workflow-deadline" value="${esc(S.workflowDeadline)}" placeholder="Optional, e.g. 2 hours"></label>
-      <div class="small muted" style="margin-top:.35rem">The clock begins only when collaboration begins. It guides pace; it never cuts work off.</div>
-    </details>
-    <div class="row"><button class="primary" id="workflow-save">Save workflow</button><button id="workflow-cancel">Cancel</button></div>
+  const box = $(`<div class="workflow-editor" style="max-width:54rem">
+    <div class="page-head"><div><div class="kicker">Workflow settings</div>
+      <h1 style="margin-top:.35rem">${S.workflowOriginal ? "Edit workflow" : "New workflow"}</h1>
+      <div class="sub">Saved defaults for the agent team, its permission ceiling, and pacing.
+      Sessions start from these; every choice stays adjustable per session.</div></div>
+      <div class="row" style="flex-wrap:nowrap"><button class="ghost" id="workflow-cancel">Cancel</button><button class="primary" id="workflow-save">Save workflow</button></div></div>
+    <label style="max-width:24rem;display:block"><b>Name</b><input id="workflow-name" value="${esc(S.workflowName)}" placeholder="e.g. build + adversarial review"></label>
+    <div class="section-head"><span class="kicker">Agent team</span></div>
+    <div class="small muted">The builder works first. The reviewer follows with an adversarial pass, then both continue until the work is verified.</div>
+    <div id="workflow-agents" class="stack" style="margin-top:.7rem"></div>
+    <div style="margin-top:.6rem"><button id="workflow-add">+ Add agent</button></div>
+    <div class="section-head"><span class="kicker">Permissions</span></div>
+    <div class="small muted">Pick a profile as the starting point. Synchri's grant is a ceiling — provider, operating-system, and GitHub approvals always apply on top.</div>
+    <div id="workflow-profiles" class="profile-grid"></div>
+    <details class="adv" style="margin-top:.7rem"><summary class="small muted">Fine-tune individual capabilities</summary><div id="workflow-permissions"></div></details>
+    <div class="section-head"><span class="kicker">Pacing</span></div>
+    <label style="max-width:24rem;display:block"><b>Suggested timebox</b><input id="workflow-deadline" value="${esc(S.workflowDeadline)}" placeholder="optional — e.g. 2 hours"></label>
+    <div class="small faint" style="margin-top:.35rem">The clock begins only when collaboration begins. It guides pace; it never cuts work off.</div>
   </div>`);
   app().append(box);
   const list = box.querySelector("#workflow-agents");
@@ -611,7 +1103,7 @@ function renderWorkflow() {
     list.innerHTML = "";
     agents.forEach((agent, index) => {
       const row = $(`<div class="grid" style="grid-template-columns:minmax(8rem,1fr) minmax(11rem,1.2fr) minmax(11rem,1.2fr) auto;align-items:center">
-        <input value="${esc(agent.name)}" placeholder="agent name">
+        <input class="mono" value="${esc(agent.name)}" placeholder="agent name">
         <select>${S.boot.runtimes.map(runtime => `<option value="${runtime.key}" ${runtime.key===agent.runtime?"selected":""}>${esc(runtime.label)}</option>`).join("")}</select>
         <select>${S.boot.roles.map(role => `<option value="${role.key}" ${role.key===agent.role?"selected":""}>${esc(role.label)}</option>`).join("")}</select>
         <button class="ghost">Remove</button></div>`);
@@ -630,7 +1122,7 @@ function renderWorkflow() {
   const permissions = box.querySelector("#workflow-permissions");
   const profiles = box.querySelector("#workflow-profiles");
   for (const profile of S.boot.permission_profiles || []) {
-    const choice = $(`<button class="choice" data-profile="${esc(profile.key)}"><b>${esc(profile.label)}</b><span class="small muted">${esc(profile.description)}</span><span class="small muted" style="display:block;margin-top:.25rem">Best for: ${esc(profile.best_for)}</span>${profile.warning ? `<span class="small" style="display:block;margin-top:.25rem;color:var(--warn)">${esc(profile.warning)}</span>` : ""}</button>`);
+    const choice = $(`<button class="choice" data-profile="${esc(profile.key)}"><b>${esc(profile.label)}</b><span class="small muted">${esc(profile.description)}</span><span class="small faint" style="display:block;margin-top:.25rem">Best for: ${esc(profile.best_for)}</span>${profile.warning ? `<span class="small" style="display:block;margin-top:.25rem;color:var(--warn)">${esc(profile.warning)}</span>` : ""}</button>`);
     choice.onclick = () => {
       S.workflowPermissions = {...profile.permissions};
       renderWorkflow();
@@ -638,11 +1130,11 @@ function renderWorkflow() {
     profiles.append(choice);
   }
   for (const group of S.boot.permissions) {
-    const groupEl = $(`<div style="margin-top:.8rem"><div class="small muted" style="font-weight:700;letter-spacing:.06em">${esc(group.group.toUpperCase())}</div></div>`);
+    const groupEl = $(`<div style="margin-top:.9rem"><div class="kicker">${esc(group.group.toUpperCase())}</div></div>`);
     for (const capability of group.capabilities) {
       const value = S.workflowPermissions[capability.key] || capability.default;
       const row = $(`<div class="perm"><div><div>${esc(capability.label)}</div><div class="small muted">${esc(capability.description)}</div></div>
-        <div class="seg"><button data-value="allow" class="${value==="allow"?"on":""}">Yes</button><button data-value="ask" class="${value==="ask"?"on":""}">Ask</button><button data-value="deny" class="${value==="deny"?"on":""}">No</button></div></div>`);
+        <div class="seg"><button data-value="allow" class="${value==="allow"?"on":""}">Allow</button><button data-value="ask" class="${value==="ask"?"on":""}">Ask</button><button data-value="deny" class="${value==="deny"?"on":""}">Deny</button></div></div>`);
       row.querySelectorAll("button").forEach(button => button.onclick = () => {
         S.workflowPermissions[capability.key] = button.dataset.value;
         row.querySelectorAll("button").forEach(item => item.classList.toggle("on", item === button));
@@ -676,7 +1168,8 @@ function renderQuick() {
     || repos.github.find(repo => repo.local_path === q.repo_path);
   const worktrees = S.worktreeChoices?.repository === q.repo_path
     ? S.worktreeChoices.worktrees : [];
-  const workspacePicker = q.repo_path ? `<details>
+  const chain = (workflow?.agents || []).map(agent => agent.name).join(" → ") || "saved team";
+  const workspacePicker = q.repo_path ? `<details class="adv">
       <summary class="small muted">Workspace: ${q.existing_worktree_path ? "existing worktree selected" : "new isolated worktree (default)"}</summary>
       <div class="stack" style="margin-top:.55rem">
         <div class="small muted">Use an existing worktree only when you deliberately want this session to continue work already in it.</div>
@@ -684,45 +1177,68 @@ function renderQuick() {
           <option value="" ${q.existing_worktree_path ? "" : "selected"}>Create a new isolated worktree</option>
           ${worktrees.map(tree => `<option value="${esc(tree.path)}" ${tree.path===q.existing_worktree_path ? "selected" : ""}>${esc(tree.name)} · ${esc(tree.branch)}</option>`).join("")}
         </select>
-        ${!worktrees.length ? `<div class="small muted">${S.worktreeLoading ? "Looking for existing worktrees…" : "No existing worktrees found."}</div>` : ""}
+        ${!worktrees.length ? `<div class="small muted">${S.worktreeLoading ? "Scanning for existing worktrees…" : "No existing worktrees found."}</div>` : ""}
       </div>
     </details>` : "";
   const repoChoices = [...repos.local.slice(0, 8).map(repo =>
     `<button class="choice ${repo.path===q.repo_path?"on":""}" data-repo="${esc(repo.path)}">
-      <div class="repo-row"><b>${esc(repo.name)}</b><span class="small muted">${esc(repo.branch || "")}</span></div>
-      <span class="small muted mono">${esc(repo.path)}</span></button>`),
+      <div class="repo-row"><b>${esc(repo.name)}</b><span class="mono small muted">${esc(repo.branch || "")}</span></div>
+      <span class="mono small faint">${esc(repo.path)}</span></button>`),
     ...repos.github.slice(0, 8).map(repo =>
       `<button class="choice ${repo.local_path===q.repo_path?"on":""}" data-repo="${esc(repo.full_name)}">
-        <div class="repo-row"><b>${esc(repo.full_name)}</b><span class="small muted">${repo.local_path ? "on this machine" : "prepare a local checkout"}</span></div>
+        <div class="repo-row"><b>${esc(repo.full_name)}</b><span class="small muted">${repo.local_path ? "cloned" : "will clone"}</span></div>
         ${repo.description ? `<span class="small muted">${esc(repo.description)}</span>` : ""}</button>`)].join("");
   const githubState = !repos.github_status?.authenticated
-    ? `<div class="note small"><b>Sign in with GitHub</b><div>${esc(repos.github_status?.message || "Create your Synchri profile, then decide which repositories it may access.")}</div><button id="quick-connect-github" style="margin-top:.55rem">Sign in with GitHub</button></div>`
+    ? `<div class="note small" style="margin-top:.55rem"><b>Sign in with GitHub</b><div style="margin-top:.15rem">${esc(repos.github_status?.message || "Create your Synchri profile, then decide which repositories it may access.")}</div><button id="quick-connect-github" style="margin-top:.55rem">Sign in with GitHub</button></div>`
     : !repos.github_access?.authorized
-      ? `<div class="note small"><b>Choose repository access</b><div>You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
+      ? `<div class="note small" style="margin-top:.55rem"><b>Choose repository access</b><div style="margin-top:.15rem">You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
       : "";
-  app().append($(`<div class="quick stack" style="max-width:48rem">
-    <div><h2>Run a workflow</h2>
-      <p class="muted">Choose the project and describe the work. Synchri uses your saved team, makes an isolated workspace, and prepares the agent prompts.</p></div>
-    <label><b>Workflow</b><select id="quick-workflow">${workflows.map(item =>
-      `<option value="${esc(item.name)}" ${item.name===workflow.name?"selected":""}>${esc(item.name)}</option>`).join("")}</select></label>
-    <div class="note"><b>${esc(workflow.agents?.map(agent => agent.name).join(" + ") || "Saved team")}</b>
-      <div class="small">These settings are adjustable. Edit this workflow if you want to change the team or its defaults.</div></div>
-    <div><b>Project</b><div class="small muted" style="margin-top:.2rem">Choose a reusable source repository. New isolated worktrees are the default.</div></div>
-    ${selectedRepo ? `<div class="note"><b>${esc(selectedRepo.name || selectedRepo.full_name || q.repo_path)}</b><div class="small muted mono">${esc(q.repo_path)}</div></div>` : ""}
-    <div id="quick-repositories" class="stack">${repoChoices || `<div class="small muted">Looking for local repositories…</div>`}</div>
-    ${repos.github_status?.authenticated && S.githubReposLoading ? `<div class="small muted">Loading GitHub repositories…</div>` : ""}
-    ${githubState}
-    <details><summary class="small muted">Paste a repository link or local path instead</summary><div class="row" style="margin-top:.55rem"><input id="quick-repo" value="${esc(q.repo_path)}" placeholder="owner/repository, GitHub URL, or local folder"><button id="quick-use-repo">Use</button></div></details>
-    ${workspacePicker}
-    <label><b>What should they work on?</b>
-      <textarea id="quick-goal" placeholder="Paste a spec, ticket, notes, or plain-language brief. Any text works.">${esc(q.goal)}</textarea></label>
-    <div class="small muted">Your text is kept exactly as you wrote it. Add acceptance criteria if you want Synchri to track them individually.</div>
-    <details><summary class="small muted">Pacing and advanced setup</summary>
-      <div class="row" style="margin-top:.6rem"><input id="quick-deadline" value="${esc(q.deadline||"")}" placeholder="Optional timebox, e.g. 2 hours"></div>
-      <div class="small muted" style="margin-top:.35rem">The clock starts when collaboration begins, and never ends the work by itself.</div>
-    </details>
-    <div class="row"><button class="primary" id="quick-go">Generate agent prompts</button>
-      <button id="quick-advanced">Edit workflow</button></div>
+  const planRepo = selectedRepo
+    ? (selectedRepo.name || selectedRepo.full_name)
+    : (q.repo_path ? q.repo_path.split("/").filter(Boolean).pop() : "");
+  const planTimebox = q.deadline?.trim() || workflow?.deadline_duration || "open-ended";
+  app().append($(`<div class="quick-grid">
+    <div class="quick">
+    <div><div class="kicker">New session</div>
+      <h1 style="margin-top:.35rem">Start a collaboration</h1>
+      <div class="small muted" style="margin-top:.35rem">Repository → brief → launch. Agents work in an isolated worktree and start only after preflight.</div></div>
+
+    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">01</span><span class="fieldset-title">Workflow</span><span class="small faint">saved defaults</span></div>
+      <div class="row"><select id="quick-workflow" style="max-width:18rem">${workflows.map(item =>
+        `<option value="${esc(item.name)}" ${item.name===workflow.name?"selected":""}>${esc(item.name)}</option>`).join("")}</select>
+        <button class="ghost" id="quick-advanced">Edit workflow</button></div>
+      <div class="mono small muted" style="margin-top:.45rem">${esc(chain)}</div></div>
+
+    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">02</span><span class="fieldset-title">Repository</span></div>
+      ${selectedRepo ? `<div class="sel-repo"><div style="min-width:0"><b style="font-size:12.5px">${esc(selectedRepo.name || selectedRepo.full_name || q.repo_path)}</b>
+        <div class="mono small muted" style="margin-top:.18rem">${esc(q.repo_path)}</div></div><span class="pill">selected</span></div>` : ""}
+      <div id="quick-repositories" class="repo-grid">${repoChoices || `<div class="small muted">Scanning for repositories…</div>`}</div>
+      ${repos.github_status?.authenticated && S.githubReposLoading ? `<div class="small muted" style="margin-top:.45rem">Loading GitHub repositories…</div>` : ""}
+      ${githubState}
+      <details class="adv"><summary class="small muted">Paste a repository link or path instead</summary><div class="row" style="margin-top:.5rem;flex-wrap:nowrap"><input id="quick-repo" class="mono" value="${esc(q.repo_path)}" placeholder="owner/repository, GitHub URL, or folder path"><button id="quick-use-repo">Use</button></div></details>
+      ${workspacePicker}</div>
+
+    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">03</span><span class="fieldset-title">Brief</span></div>
+      <textarea id="quick-goal" placeholder="Paste a spec, ticket, notes, or a plain-language brief — any text works.">${esc(q.goal)}</textarea>
+      <div class="small faint" style="margin-top:.35rem">Kept verbatim as the contract's source of truth. Gate IDs like <span class="mono">AUTH-01</span> become individually tracked acceptance gates.</div></div>
+
+    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">04</span><span class="fieldset-title">Pacing</span><span class="small faint">optional</span></div>
+      <div class="row"><input id="quick-deadline" value="${esc(q.deadline||"")}" placeholder="timebox — e.g. 2 hours" style="max-width:14rem"></div>
+      <div class="small faint" style="margin-top:.35rem">The clock starts when collaboration begins, and never ends the work by itself.</div></div>
+    </div>
+
+    <aside class="launch-plan card">
+      <div class="kicker">Launch plan</div>
+      <div class="plan-rows">
+        <div class="plan-row"><span>Workflow</span><b>${esc(workflow?.name || "—")}</b></div>
+        <div class="plan-row"><span>Team</span><b class="mono" style="font-weight:500">${esc(chain)}</b></div>
+        <div class="plan-row"><span>Repository</span><b>${planRepo ? esc(planRepo) : `<span class="faint">not selected</span>`}</b></div>
+        <div class="plan-row"><span>Workspace</span><b>${q.existing_worktree_path ? "existing worktree" : "new worktree"}</b></div>
+        <div class="plan-row"><span>Timebox</span><b id="plan-timebox">${esc(planTimebox)}</b></div>
+      </div>
+      <button class="primary" id="quick-go" style="width:100%;margin-top:.9rem">Create session</button>
+      <div class="small faint" style="margin-top:.55rem">Writes the contract and an isolated worktree, then opens preflight. Agents launch only after your go.</div>
+    </aside>
   </div>`));
   document.getElementById("quick-workflow").onchange = event => { q.preset = event.target.value; renderQuick(); };
   document.getElementById("quick-advanced").onclick = () => configureWorkflow(q.preset);
@@ -735,6 +1251,14 @@ function renderQuick() {
   document.getElementById("quick-worktree")?.addEventListener("change", event => {
     q.existing_worktree_path = event.target.value || null; renderQuick();
   });
+  // Typed text survives every repaint (repo selection, the GitHub repository
+  // list arriving, workflow switches) by living in state, not just the DOM.
+  document.getElementById("quick-goal").oninput = event => { q.goal = event.target.value; };
+  document.getElementById("quick-deadline").oninput = event => {
+    q.deadline = event.target.value;
+    const plan = document.getElementById("plan-timebox");
+    if (plan) plan.textContent = q.deadline.trim() || workflow?.deadline_duration || "open-ended";
+  };
   document.getElementById("quick-go").onclick = guard(async () => {
     q.repo_path = document.getElementById("quick-repo")?.value.trim() || q.repo_path;
     if (S.worktreeChoices?.repository !== q.repo_path) await loadWorktreeChoices(q.repo_path);
@@ -784,27 +1308,39 @@ function renderLaunch() {
   const managed = l.managed || {readiness:{available:false,agents:[]},run:{phase:"not_started"}};
   const run = managed.run;
   const allManaged = managed.readiness.available;
-  const heading = run.alive ? "Starting your agents" : (allManaged ? "Ready when you are" : "Invite your agents");
-  app().append($(`<div class="stack"><div class="between"><div>
-    <h2>${heading}</h2>
-    <div class="muted small">${esc(l.agents.length)} agent${l.agents.length===1?"":"s"} · isolated worktree ready</div></div>
-    <button id="refresh">Refresh</button></div>
-    <div class="note"><b>${esc(run.phase.replaceAll("_"," "))}</b><div class="small">${esc(run.detail || (allManaged
-      ? "Synchri can run these agents locally."
-      : "Use the prompt only for tools Synchri cannot launch yet."))}</div></div>
-  </div>`));
-  if (l.clone) app().append($(`<div class="note"><b>Repository cloned</b>
-    <div class="small mono">${esc(l.clone.path)}</div></div>`));
+  const heading = run.alive ? "Starting your agents" : (allManaged ? "Ready to launch" : "Connect your agents");
+  const shell = $(`<div class="preflight card">
+    <div class="between"><div><div class="kicker">Preflight</div>
+      <h1 style="margin-top:.35rem">${heading}</h1>
+      <div class="small muted" style="margin-top:.35rem">${esc(l.agents.length)} agent${l.agents.length===1?"":"s"} · isolated worktree ready</div></div>
+      <button class="ghost" id="refresh">Refresh</button></div>
+    <div class="statusline"><b class="mono">${esc(run.phase.replaceAll("_"," "))}</b><span class="small muted">${esc(run.detail || (allManaged
+      ? "Synchri can launch these agents for you."
+      : "Use the prompts below for tools Synchri cannot launch yet."))}</span></div>
+    ${l.clone ? `<div class="small muted" style="margin-top:.55rem">Repository cloned · <span class="mono">${esc(l.clone.path)}</span></div>` : ""}
+    <div id="preflight-agents" class="checklist"></div>
+    <div id="preflight-actions" class="actionbar"></div>
+  </div>`);
+  app().append(shell);
   document.getElementById("refresh").onclick = guard(refreshLaunch);
 
   if (allManaged) {
-    const action = $(`<div class="card stack"><div><b>Let Synchri start them here</b>
-      <div class="small muted">Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.</div>
-      </div><div class="row"><button class="primary" id="managed-start" ${run.alive?"disabled":""}>${run.alive ? "Starting…" : "Start my agents"}</button>
-      <button id="external">Send prompts instead</button></div></div>`);
-    action.querySelector("#managed-start").onclick = guard(startManaged);
-    action.querySelector("#external").onclick = () => renderExternalSetup(l);
-    app().append(action);
+    const list = document.getElementById("preflight-agents");
+    for (const agent of l.agents) {
+      const status = agent.joined
+        ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">reading agreement</span>`)
+        : `<span class="pill dim">not connected</span>`;
+      list.append($(`<div class="check-row"><div class="check-status">${status}</div>
+        <div class="check-main"><b class="mono">${esc(agent.name)}</b>
+        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div></div>`));
+    }
+    const actions = document.getElementById("preflight-actions");
+    const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0"><button class="ghost" id="external">Send prompts instead</button>
+      <span class="small faint">Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.</span></div>
+      <button class="primary" id="managed-start" ${run.alive?"disabled":""}>${run.alive ? "Starting…" : "Start my agents"}</button></div>`);
+    bar.querySelector("#managed-start").onclick = guard(startManaged);
+    bar.querySelector("#external").onclick = () => renderExternalSetup(l);
+    actions.append(bar);
     if (run.alive) pollManagedLaunch();
     return;
   }
@@ -830,31 +1366,37 @@ function pollManagedLaunch() {
 function renderExternalSetup(l) {
   const a = l.acknowledgments;
   const external = l.agents.filter(agent => !agent.managed_ready || !l.managed.readiness.available);
-  const note = $(`<div class="note">Paste one short prompt into each agent. They will join, read the agreement, and remain available without status chatter.</div>`);
-  app().append(note);
+  const list = document.getElementById("preflight-agents");
+  const actions = document.getElementById("preflight-actions");
+  if (!list || !actions) return;
+  list.innerHTML = `<div class="small muted" style="padding:.65rem 0 .3rem">Paste one short prompt into each agent's terminal. It joins the room, reads the agreement, and stays available without status chatter.</div>`;
   for (const agent of l.agents) {
     const status = agent.joined
       ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">reading agreement</span>`)
       : `<span class="pill dim">not connected</span>`;
-    const card = $(`<div class="agent-card"><div class="between"><div><b>${esc(agent.name)}</b>
-      <span class="small muted">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>${status}</div>
-      <pre>${esc(agent.setup_prompt)}</pre>
-      <div class="row" style="margin-top:.75rem"><button class="primary">Copy for ${esc(agent.name)}</button></div></div>`);
-    const [setup] = card.querySelectorAll("button");
+    const row = $(`<div class="check-row"><div class="check-status">${status}</div>
+      <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
+        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>
+        <details class="adv" ${agent.joined ? "" : "open"}><summary class="small muted">Setup prompt</summary>
+          <pre>${esc(agent.setup_prompt)}</pre>
+          <div class="row" style="margin-top:.55rem"><button class="primary" data-copy>Copy for ${esc(agent.name)}</button></div>
+        </details></div></div>`);
+    const setup = row.querySelector("[data-copy]");
     setup.onclick = guard(async () => { await copyText(agent.setup_prompt); setup.textContent = "Copied"; });
-    app().append(card);
+    list.append(row);
   }
-  const action = $(`<div class="card stack" style="margin-top:1rem"><div>
-    <b>When everyone is here</b><div class="small muted">${l.ready_to_activate
-      ? "Both agents joined and acknowledged the agreement."
-      : `Waiting for: ${esc(a.waiting.join(", ") || l.agents.filter(x=>!x.joined).map(x=>x.name).join(", ") || "an acknowledgement")}`}
-    </div></div><div class="row"><button class="primary" id="activate" ${l.ready_to_activate?"":"disabled"}>Begin collaboration</button>
-      <button id="open">Open room</button></div></div>`);
-  action.querySelector("#activate").onclick = guard(async () => {
+  actions.innerHTML = "";
+  const waiting = l.ready_to_activate
+    ? "All agents joined and acknowledged the agreement."
+    : `Waiting for: ${a.waiting.join(", ") || l.agents.filter(x=>!x.joined).map(x=>x.name).join(", ") || "an acknowledgement"}`;
+  const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0"><button class="ghost" id="open">Open room</button>
+    <span class="small faint">${esc(waiting)}</span></div>
+    <button class="primary" id="activate" ${l.ready_to_activate?"":"disabled"}>Begin collaboration</button></div>`);
+  bar.querySelector("#activate").onclick = guard(async () => {
     await api("activate", {session:S.session}); await openSession(S.session);
   });
-  action.querySelector("#open").onclick = guard(() => openSession(S.session));
-  app().append(action);
+  bar.querySelector("#open").onclick = guard(() => openSession(S.session));
+  actions.append(bar);
 }
 
 /* ---------------------------------------------------------------- wizard */
@@ -1332,20 +1874,21 @@ function renderSession() {
   }).join("");
   const nav = ["conversation", ...DETAIL_TABS.filter(tab => tab !== "changelog" || s.status === "complete")];
   const layout = $(`<div class="session-layout"><aside class="session-rail">
-      <div><div class="rail-kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
-      <div class="rail-status"><i id="rail-current-dot" class="${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
+      <div><div class="kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
+      <div class="rail-status"><i id="rail-current-dot" class="led ${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
       <div id="timebox" class="rail-clock mono">${esc(["complete", "stopped", "failed", "timed_out"].includes(s.status) ? "Session ended" : timeboxText(s.deadline))}</div>
       <div class="rail-progress"><div class="rail-progress-line"><span>Acceptance gates</span><b id="rail-gates">${esc(g.satisfied + "/" + g.required)}</b></div><span class="rail-progress-track"><i id="rail-gates-bar" style="width:${gatePercent}%"></i></span></div>
       <nav class="rail-nav" aria-label="Session tools">${nav.map(tab =>
         `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
       ).join("")}</nav>
-      <div class="rail-team"><div class="rail-kicker" style="margin-bottom:.35rem">Team</div>${team}</div>
+      <div class="rail-team"><div class="kicker" style="margin-bottom:.35rem">Team</div>${team}</div>
       <div class="rail-controls">${s.status === "active" && d.managed?.readiness?.available && !d.managed?.run?.alive ? `<button id="c-continue">Continue agents</button>` : ""}${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${["active", "paused"].includes(s.status) ? `<button class="control-complete" id="c-complete">Complete session</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button class="control-stop" id="c-stop">Stop session</button>` : ""}</div>
     </aside><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
-      <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.repository.branch || "")}</div></div>
+      <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.worktree?.branch || s.repository.base_branch || "")}</div></div>
       <div class="chat-time">${esc(g.satisfied + "/" + g.required)} gates verified</div></div>
-      <div id="conversation-panel" class="conversation-feed"><span class="muted small">Loading conversation…</span></div>
-      <section id="detail-panel" class="details-panel hide"></section></main></div>`);
+      <div id="conversation-panel" class="conversation-feed"><span class="muted small" style="padding:1rem clamp(1.25rem,3vw,2.5rem)">Loading conversation…</span></div>
+      <section id="detail-wrap" class="inspector hide"><div class="inspector-head"><div class="detail-heading" id="detail-heading"></div><button class="detail-close">Close</button></div>
+      <section id="detail-panel" class="details-panel"></section></section></main></div>`);
   app().append(layout);
   const pause = document.getElementById("c-pause");
   if (pause) pause.onclick = guard(() => runSessionControl(pause, s.status === "active" ? "pause" : "resume"));
@@ -1369,10 +1912,12 @@ function renderSession() {
   paint("conversation", document.getElementById("conversation-panel"))
     .catch(error => document.getElementById("conversation-panel").innerHTML = `<span class="muted">${esc(error.message)}</span>`);
   if (S.tab !== "conversation") {
+    const wrap = document.getElementById("detail-wrap");
+    wrap.classList.remove("hide");
+    document.getElementById("detail-heading").textContent = S.tab.toUpperCase();
+    wrap.querySelector(".detail-close").onclick = () => { S.tab = "conversation"; renderSession(); };
     const panel = document.getElementById("detail-panel");
-    panel.classList.remove("hide");
-    panel.innerHTML = `<button class="detail-close" aria-label="Close">Close</button><div class="detail-heading">${esc(S.tab.toUpperCase())}</div><span class="muted small">Loading…</span>`;
-    panel.querySelector(".detail-close").onclick = () => { S.tab = "conversation"; renderSession(); };
+    panel.innerHTML = `<span class="muted small">Loading…</span>`;
     paint(S.tab, panel).catch(error => panel.innerHTML = `<span class="muted">${esc(error.message)}</span>`);
   }
   startClock(s.deadline, s.status);
@@ -1444,16 +1989,17 @@ async function paint(tab, el) {
         ? `${String(m.response_status || "complete").toUpperCase()} RESPONSE` : "";
       const kind = speaker === "SYNCHRI" ? "system" : (speaker === "YOU" ? "you" : "");
       const recipient = m.target && speaker !== "SYNCHRI"
-        ? ` → ${String(m.target).toUpperCase()}` : "";
+        ? `→ ${String(m.target).toUpperCase()}` : "";
       const approvalText = m.metadata?.approval_request || "This agent needs your decision before it can continue.";
       const approvalCapability = m.metadata?.approval_capability || "";
       const decision = m.target === "human" && m.response_status === "blocked" && speaker !== "YOU"
         ? `<div class="decision-actions"><span class="small muted">${esc(approvalText)}</span><div><button data-decision="approve" data-agent="${esc(m.sender)}" data-capability="${esc(approvalCapability)}" data-detail="${esc(approvalText)}">Approve</button><button data-decision="deny" data-agent="${esc(m.sender)}" data-capability="${esc(approvalCapability)}" data-detail="${esc(approvalText)}">Deny</button></div></div>` : "";
-      return `<div class="msg ${kind}"><div class="who">${esc(speaker + recipient)}</div>
+      const hue = kind ? "" : ` ${hueFor(m.sender)}`;
+      return `<div class="msg ${kind}"><div class="msg-head"><span class="who${hue}">${esc(speaker)}</span>${recipient ? `<span class="to">${esc(recipient)}</span>` : ""}<span class="when mono">${esc(fmtClock(m.timestamp))}</span></div>
         <div class="body">${rich(m.content)}</div>
         ${responseState ? `<div class="response-state">${esc(responseState)}</div>` : ""}
         ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}${decision}</div>`;
-    }).join("") : `<span class="muted">Nothing said yet.</span>`;
+    }).join("") : `<span class="muted small">Nothing said yet.</span>`;
     el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork + timeboxNudge(d);
     const list = el.querySelector(".message-list");
     requestAnimationFrame(() => list.scrollTo({ top: list.scrollHeight, behavior: "smooth" }));
@@ -1465,7 +2011,7 @@ async function paint(tab, el) {
       return;
     }
     const send = $(`<div class="chat-compose">
-      <input id="mm" placeholder="Message the agents">
+      <span class="compose-prefix mono">›</span><input id="mm" placeholder="Message the agents — Enter sends" autocomplete="off">
       <button class="primary" id="ms">Send</button></div>`);
     el.append(send);
     const input = send.querySelector("#mm");
@@ -1474,6 +2020,9 @@ async function paint(tab, el) {
       input.focus();
       input.setSelectionRange(caretStart, caretEnd);
     }
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.isComposing) send.querySelector("#ms").click();
+    });
     send.querySelector("#ms").onclick = guard(async () => {
       const v = input.value.trim(); if (!v) return;
       input.value = "";
@@ -1512,7 +2061,7 @@ async function paint(tab, el) {
           <select class="gate-status" ${editable?"":"disabled"}>${["pending","in_progress","pass","fail","unverified","waived"].map(status => `<option value="${status}" ${x.status===status?"selected":""}>${status.replace("_"," ")}</option>`).join("")}</select></div>
         <div class="small muted" style="margin-top:.65rem">${esc([...x.evidence,...x.tests,...x.commits].join(" · ") || "No evidence recorded yet.")}</div>
         <div class="small muted" style="margin-top:.25rem">Builder: ${esc(x.builder_assessment || "not recorded")} · Reviewer: ${esc(x.reviewer_assessment || "not recorded")}</div>
-        ${editable?`<details style="margin-top:.65rem"><summary class="small muted">Add evidence or override</summary><div class="grid" style="margin-top:.55rem"><input class="gate-evidence" placeholder="Evidence, test, or commit"><input class="gate-builder" placeholder="Builder assessment"><input class="gate-reviewer" placeholder="Reviewer assessment"><button class="primary gate-save">Save gate</button></div></details>`:""}
+        ${editable?`<details style="margin-top:.65rem"><summary class="small muted" style="cursor:pointer">Add evidence or override</summary><div class="grid" style="margin-top:.55rem"><input class="gate-evidence mono" placeholder="Evidence, test, or commit"><input class="gate-builder" placeholder="Builder assessment"><input class="gate-reviewer" placeholder="Reviewer assessment"><button class="primary gate-save">Save gate</button></div></details>`:""}
         ${x.blocker?`<div class="small" style="color:var(--warn);margin-top:.55rem">${esc(x.blocker)}</div>`:""}</div>`).join("")}</div>
       <div class="small muted" style="margin-top:.9rem">A gate passes only with evidence and both sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>`
       : `<span class="muted">No gates defined. Add acceptance criteria to the spec.</span>`;
@@ -1538,8 +2087,8 @@ async function paint(tab, el) {
   } else if (tab === "tests") {
     const t = d.tests;
     el.innerHTML = `<div class="between"><div>
-      ${t ? `<div class="v" style="font-size:22px">${t.passed} passed${t.failed?`, ${t.failed} failed`:""}</div>
-             <div class="small muted mono">${esc(t.command)} · exit ${t.exit_code}</div>`
+      ${t ? `<div class="stat-num">${t.passed} <span class="muted" style="font-size:13px">passed</span>${t.failed?`&ensp;<span style="color:var(--bad)">${t.failed}</span> <span class="muted" style="font-size:13px">failed</span>`:""}</div>
+             <div class="small muted mono" style="margin-top:.3rem">${esc(t.command)} · exit ${t.exit_code}</div>`
           : `<span class="muted">Not run yet.</span>`}
       </div><button class="primary" id="rt">Run tests</button></div>
       ${t && t.output_tail ? `<pre style="margin-top:1rem;max-height:22rem;overflow:auto">${esc(t.output_tail)}</pre>` : ""}
@@ -1552,9 +2101,9 @@ async function paint(tab, el) {
     });
   } else if (tab === "changes") {
     const r = await api("diff" + q);
-    el.innerHTML = `<div class="small muted">${d.changes.files_changed} file(s),
-      +${d.changes.insertions} −${d.changes.deletions}</div>
-      <pre style="margin-top:.8rem;max-height:30rem;overflow:auto">${esc(r.diff||"No changes yet.")}</pre>`;
+    el.innerHTML = `<div class="small muted mono">${d.changes.files_changed} file(s) ·
+      <span style="color:var(--accent)">+${d.changes.insertions}</span> <span style="color:var(--bad)">−${d.changes.deletions}</span></div>
+      <pre class="diff" style="margin-top:.8rem;max-height:30rem;overflow:auto">${r.diff ? renderDiff(r.diff) : "No changes yet."}</pre>`;
   } else if (tab === "commits") {
     const c = d.changes;
     el.innerHTML = c.recent.length ? `<table><thead><tr><th>Commit</th><th>Subject</th><th>Author</th>
@@ -1604,5 +2153,11 @@ async function paint(tab, el) {
 
 document.getElementById("nav-home").onclick = guard(home);
 document.getElementById("nav-new").onclick = guard(quickStart);
+renderThemeMenu();
+document.addEventListener("click", (event) => {
+  document.querySelectorAll("details.menu[open]").forEach(menu => {
+    if (!menu.contains(event.target)) menu.removeAttribute("open");
+  });
+});
 guard(home)();
 </script>

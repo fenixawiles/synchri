@@ -1202,9 +1202,11 @@ function renderQuick() {
         ${repo.description ? `<span class="small muted">${esc(repo.description)}</span>` : ""}</button>`)].join("");
   const githubState = !repos.github_status?.authenticated
     ? `<div class="note small" style="margin-top:.55rem"><b>Sign in with GitHub</b><div style="margin-top:.15rem">${esc(repos.github_status?.message || "Create your Synchri profile, then decide which repositories it may access.")}</div><button id="quick-connect-github" style="margin-top:.55rem">Sign in with GitHub</button></div>`
-    : !repos.github_access?.authorized
-      ? `<div class="note small" style="margin-top:.55rem"><b>Choose repository access</b><div style="margin-top:.15rem">You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
-      : "";
+    : repos.github_access?.unavailable
+      ? `<div class="note warn small" style="margin-top:.55rem"><b>GitHub did not answer</b><div style="margin-top:.15rem">${esc(repos.github_access.message || "GitHub could not load your repositories. Try again in a moment.")}</div><button id="quick-retry-github" style="margin-top:.55rem">Try again</button></div>`
+      : !repos.github_access?.authorized
+        ? `<div class="note small" style="margin-top:.55rem"><b>Choose repository access</b><div style="margin-top:.15rem">You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
+        : "";
   const planRepo = selectedRepo
     ? (selectedRepo.name || selectedRepo.full_name)
     : (q.repo_path ? q.repo_path.split("/").filter(Boolean).pop() : "");
@@ -1256,6 +1258,10 @@ function renderQuick() {
   document.getElementById("quick-advanced").onclick = () => configureWorkflow(q.preset);
   document.querySelectorAll("#quick-repositories [data-repo]").forEach(button => button.onclick = guard(() => selectQuickRepository(button.dataset.repo)));
   document.getElementById("quick-connect-github")?.addEventListener("click", guard(connectGitHub));
+  document.getElementById("quick-retry-github")?.addEventListener("click", guard(async () => {
+    S.repos = null; S.githubReposRequest = null;
+    await loadQuickRepositories(); renderQuick();
+  }));
   document.getElementById("quick-connect-repositories")?.addEventListener("click", guard(() => openRepositoryAccess(repos.github_access)));
   document.getElementById("quick-use-repo")?.addEventListener("click", guard(async () => {
     await selectQuickRepository(document.getElementById("quick-repo").value.trim());

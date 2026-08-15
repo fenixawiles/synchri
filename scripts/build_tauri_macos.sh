@@ -33,10 +33,19 @@ sign_final_app() {
   APP="$1"
   ENGINE="$APP/Contents/Resources/engine"
   [ -x "$ENGINE/synchri-core" ] || { echo "Synchri engine is missing from app resources" >&2; exit 1; }
-  # Sign concrete nested code first. The engine itself retains the narrow
-  # hardened-runtime entitlements Python needs to load extension modules.
-  find "$ENGINE" -type f -perm -111 ! -name synchri-core -print0 | xargs -0 -n 1 \
-    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY"
+  # Sign concrete nested Mach-O code first. The engine itself retains the
+  # narrow hardened-runtime entitlements Python needs to load extension
+  # modules. Do not use the executable bit as a proxy for code: PyInstaller
+  # can mark data such as certifi's cacert.pem executable. Signing that data
+  # attaches macOS code-signing xattrs; Tauri's updater faithfully treats the
+  # resulting AppleDouble record as a literal ._* resource and breaks the
+  # outer app seal after installation.
+  find "$ENGINE" -type f ! -name synchri-core -print0 | \
+    while IFS= read -r -d '' candidate; do
+      if file -b "$candidate" | grep -q 'Mach-O'; then
+        codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$candidate"
+      fi
+    done
   codesign --force --options runtime --entitlements "$ROOT/desktop/src-tauri/EngineEntitlements.plist" \
     --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$ENGINE/synchri-core"
   # Do not use `--deep`: every child is deliberately sealed above, and deep
@@ -50,11 +59,16 @@ sign_final_app() {
 FINAL_DIR="$TAURI_TARGET_DIR/release/final"
 FINAL_APP="$FINAL_DIR/Synchri.app"
 mkdir -p "$FINAL_DIR"
-ditto "$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app" "$FINAL_APP"
+# `ditto --norsrc` prevents macOS resource-fork/Finder metadata from becoming
+# AppleDouble sidecars during the copy. The app's code signatures are embedded
+# in its executables and CodeResources file, so they do not rely on that data.
+ditto --norsrc "$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app" "$FINAL_APP"
 # Finder metadata on the source checkout is not part of the app and cannot be
-# allowed to survive into a signed archive. This is a no-op on clean CI
-# worktrees, but keeps local release validation faithful to the public build.
+# allowed to survive into a signed archive. xattr cannot remove a literal
+# AppleDouble file, so purge those exact transport artifacts too before the
+# final app seal is made.
 xattr -cr "$FINAL_APP" 2>/dev/null || true
+find "$FINAL_APP" -name '._*' -type f -delete
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; then
   sign_final_app "$FINAL_APP"
 fi
@@ -66,7 +80,7 @@ DMG="$TAURI_TARGET_DIR/release/Synchri-macos-$ARCH.dmg"
 DMG_CONTENTS="$TAURI_TARGET_DIR/release/dmg-contents"
 rm -rf "$DMG_CONTENTS"
 mkdir -p "$DMG_CONTENTS"
-ditto "$FINAL_APP" "$DMG_CONTENTS/Synchri.app"
+ditto --norsrc "$FINAL_APP" "$DMG_CONTENTS/Synchri.app"
 ln -sfn /Applications "$DMG_CONTENTS/Applications"
 # ``hdiutil`` occasionally leaves the target file momentarily busy on hosted
 # macOS runners.  Build to a private, per-process path and retry the image
@@ -100,7 +114,16 @@ mv -f "$DMG_STAGING" "$DMG"
 # xattrs, ACLs, and file flags from the updater transport.
 UPDATE="$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app.tar.gz"
 rm -f "$UPDATE" "$UPDATE.sig"
-tar --no-xattrs --no-acls --no-fflags -czf "$UPDATE" -C "$FINAL_DIR" Synchri.app
+if find "$FINAL_APP" -name '._*' -print -quit | grep -q .; then
+  echo "Final app contains AppleDouble sidecars" >&2
+  exit 1
+fi
+# `--no-xattrs` alone controls pax attributes, not the separate AppleDouble
+# transport used by macOS's copyfile implementation.  Explicitly disable both
+# paths.  `COPYFILE_DISABLE` is the process-level guard; `--no-mac-metadata`
+# is the archive-level guard.
+env COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --no-acls --no-fflags \
+  -czf "$UPDATE" -C "$FINAL_DIR" Synchri.app
 (cd "$ROOT/desktop" && npm exec tauri signer sign -- "$UPDATE")
 SIG="$UPDATE.sig"
 [ -f "$SIG" ] || { echo "Synchri did not produce an updater signature" >&2; exit 1; }

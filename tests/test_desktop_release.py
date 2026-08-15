@@ -42,10 +42,17 @@ def test_release_build_installs_the_declared_runtime_dependencies():
     assert "python -m pip install --upgrade pyinstaller ." in workflow
     assert "--collect-data certifi" in sidecar
     assert "make_tauri_update_manifest.py" in workflow
-    assert 'tar --no-xattrs --no-acls --no-fflags -czf "$UPDATE" -C "$FINAL_DIR" Synchri.app' in desktop_build
+    assert (
+        'env COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --no-acls --no-fflags'
+        in desktop_build
+    )
     assert 'ditto -c -k --sequesterRsrc --keepParent "$FINAL_APP" "$UPDATE"' not in desktop_build
     assert 'tr -d \'[:space:]\')" = "1f8b"' in workflow
     assert "Updater archive must not contain macOS metadata records" in workflow
+    assert "--example verify_update_archive" in workflow
+    assert 'codesign --verify --deep --strict --verbose=2 "$VERIFY_DIR"' in workflow
+    assert "-perm -111" not in desktop_build
+    assert "file -b \"$candidate\" | grep -q 'Mach-O'" in desktop_build
 
 
 def test_authenticated_loopback_ui_has_only_its_explicit_native_actions():

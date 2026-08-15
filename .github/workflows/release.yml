@@ -110,6 +110,20 @@ jobs:
             echo "Updater archive must not contain macOS metadata records"
             exit 1
           fi
+          # BSD tar hides AppleDouble sidecars when listing an archive, but
+          # Tauri's Rust extractor writes them into the app. Reproduce that
+          # exact extraction path and verify the resulting bundle seal.
+          VERIFY_DIR="$RUNNER_TEMP/synchri-updater-verify"
+          mkdir -p "$VERIFY_DIR"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/synchri-tauri-target" \
+            cargo run --quiet --release --target aarch64-apple-darwin \
+              --manifest-path desktop/src-tauri/Cargo.toml \
+              --example verify_update_archive -- "$UPDATE" "$VERIFY_DIR"
+          if find "$VERIFY_DIR" -name '._*' -print -quit | grep -q .; then
+            echo "Updater archive produces AppleDouble sidecars under Tauri extraction"
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$VERIFY_DIR"
       - name: Build the signed update manifest
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

@@ -3248,10 +3248,12 @@ dependencies = [
 
 [[package]]
 name = "synchri-desktop"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
+ "flate2",
  "serde",
  "serde_json",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-updater",

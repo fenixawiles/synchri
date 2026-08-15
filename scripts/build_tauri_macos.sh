@@ -93,10 +93,14 @@ mv -f "$DMG_STAGING" "$DMG"
 # not an app.  Do not use ``ditto -c -k`` here: it creates a ZIP archive even
 # when the filename ends in ``.tar.gz``, which the updater correctly rejects.
 # The DMG is the first-download asset; this tarball is the verified updater
-# payload users never need to handle themselves.
+# payload users never need to handle themselves.  BSD tar archives macOS
+# extended attributes by default.  Tauri's Rust extractor turns those records
+# into AppleDouble `._*` files inside the installed app, which invalidates its
+# sealed code signature.  The signed app bundle is self-contained, so omit
+# xattrs, ACLs, and file flags from the updater transport.
 UPDATE="$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app.tar.gz"
 rm -f "$UPDATE" "$UPDATE.sig"
-tar -czf "$UPDATE" -C "$FINAL_DIR" Synchri.app
+tar --no-xattrs --no-acls --no-fflags -czf "$UPDATE" -C "$FINAL_DIR" Synchri.app
 (cd "$ROOT/desktop" && npm exec tauri signer sign -- "$UPDATE")
 SIG="$UPDATE.sig"
 [ -f "$SIG" ] || { echo "Synchri did not produce an updater signature" >&2; exit 1; }

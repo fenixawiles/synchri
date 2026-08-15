@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "loopback-ui",
+  "description": "Allows Synchri's authenticated local interface to use its three native desktop actions.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*"]
+  },
+  "permissions": [
+    "allow-check-for-update",
+    "allow-install-update",
+    "allow-open-github-url"
+  ]
+}

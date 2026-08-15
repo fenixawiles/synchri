@@ -41,3 +41,24 @@ def test_release_build_installs_the_declared_runtime_dependencies():
     assert "python -m pip install --upgrade pyinstaller ." in workflow
     assert "--collect-data certifi" in sidecar
     assert "make_tauri_update_manifest.py" in workflow
+
+
+def test_authenticated_loopback_ui_has_only_its_explicit_native_actions():
+    """The native window loads the UI from a token-protected loopback server.
+
+    Tauri treats that as a remote origin, so each native action has to be
+    deliberately granted.  Keep the authority tiny: GitHub's external browser
+    launch and the two updater actions, nothing else.
+    """
+    capability = json.loads(
+        (ROOT / "desktop" / "src-tauri" / "capabilities" / "loopback-ui.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert capability["remote"]["urls"] == ["http://127.0.0.1:*"]
+    assert capability["permissions"] == [
+        "allow-check-for-update",
+        "allow-install-update",
+        "allow-open-github-url",
+    ]

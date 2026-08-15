@@ -5,6 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "updater:default"
+    "updater:default",
+    "allow-check-for-update",
+    "allow-install-update",
+    "allow-open-github-url"
   ]
 }

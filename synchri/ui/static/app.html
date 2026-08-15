@@ -112,7 +112,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)
   <div class="row">
     <span id="ctx" class="small muted"></span>
     <button class="ghost" id="github-account">Sign in with GitHub</button>
-    <button class="ghost hide" id="app-update"></button>
+    <button class="ghost" id="app-update">Check for updates</button>
     <button class="ghost" id="nav-home">Sessions</button>
     <button id="nav-new">Run a workflow</button>
   </div>
@@ -201,9 +201,9 @@ function flash(error) {
                 : "";
   box.innerHTML = `<b>Here’s how to continue</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>${action}`;
   box.querySelector("#error-connect-github")?.addEventListener("click", guard(connectGitHub));
-  box.querySelector("#error-open-github-settings")?.addEventListener("click", () => {
-    window.open("https" + "://github.com/settings/apps", "_blank");
-  });
+  box.querySelector("#error-open-github-settings")?.addEventListener(
+    "click", guard(() => openGitHub("https" + "://github.com/settings/apps"))
+  );
   box.querySelector("#error-choose-repo")?.addEventListener("click", guard(async () => {
     if (!S.quick) await quickStart();
     if (resolution?.path) S.quick.repo_path = resolution.path;
@@ -239,8 +239,7 @@ async function connectGitHub() {
   const login = await api("github/connect", {});
   const githubDevicePage = "https" + "://github.com/login/device";
   const destination = login.verification_uri || githubDevicePage;
-  const opened = window.open(destination, "_blank");
-  if (!opened) window.location.assign(destination);
+  await openGitHub(destination);
   await showGitHubCode(login);
 }
 
@@ -264,7 +263,9 @@ async function showGitHubCode(login) {
   const close = () => { cancelled = true; code.remove(); };
   code.querySelector(".detail-close").onclick = close;
   code.querySelector("[data-close]").onclick = close;
-  code.querySelector("[data-open]").onclick = () => window.open(login.verification_uri || githubDevicePage, "_blank", "noopener,noreferrer");
+  code.querySelector("[data-open]").onclick = guard(
+    () => openGitHub(login.verification_uri || githubDevicePage)
+  );
   let interval = Math.max(2, Number(login.interval) || 5);
   while (!cancelled && Date.now() < Number(login.expires_at) * 1000) {
     await sleep(interval * 1000);
@@ -292,11 +293,7 @@ function renderGitHubAccount() {
   if (github.authenticated) {
     button.textContent = account.login ? `@${account.login}` : "GitHub connected";
     button.title = "Signed in to Synchri with GitHub on this Mac";
-    button.onclick = guard(async () => {
-      await api("github/disconnect", {});
-      S.repos = null; S.githubReposRequest = null; S.boot = await api("bootstrap");
-      renderGitHubAccount(); confirmNotice("GitHub was disconnected from this Mac.");
-    });
+    button.onclick = () => showGitHubAccount();
     return;
   }
   button.textContent = "Sign in with GitHub";
@@ -304,31 +301,72 @@ function renderGitHubAccount() {
   button.onclick = guard(connectGitHub);
 }
 
-function openRepositoryAccess(access) {
+function showGitHubAccount() {
+  const github = S.boot?.github || {};
+  const account = github.account || {};
+  const previous = document.getElementById("github-account-details");
+  previous?.remove();
+  const details = $(`<div class="details-panel stack" id="github-account-details" role="dialog" aria-modal="true">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="detail-heading">GITHUB ACCOUNT</div>
+    <h2>${esc(account.login ? `@${account.login}` : "GitHub connected")}</h2>
+    <p class="muted">Connected locally on this Mac. Repository access remains under your control in GitHub.</p>
+    <div class="row"><button data-close>Done</button><button class="ghost" data-disconnect>Disconnect GitHub</button></div>
+  </div>`);
+  document.body.append(details);
+  const close = () => details.remove();
+  details.querySelector(".detail-close").onclick = close;
+  details.querySelector("[data-close]").onclick = close;
+  details.querySelector("[data-disconnect]").onclick = guard(async () => {
+    await api("github/disconnect", {});
+    S.repos = null; S.githubReposRequest = null; S.boot = await api("bootstrap");
+    close(); renderGitHubAccount(); confirmNotice("GitHub was disconnected from this Mac.");
+  });
+}
+
+async function openRepositoryAccess(access) {
   const destination = access?.install_url;
   if (!destination) {
     flash({message:"Repository selection is being finished for Synchri. You are already signed in; local repositories remain available in the meantime.", resolution:{kind:"github_app_settings"}});
+    return;
+  }
+  await openGitHub(destination);
+}
+
+/* --------------------------------------------------------- application update */
+const nativeInvoke = (command, args) => window.__TAURI__?.core?.invoke(command, args);
+
+async function openGitHub(destination) {
+  if (window.__TAURI__?.core?.invoke) {
+    await nativeInvoke("open_github_url", {url: destination});
     return;
   }
   const opened = window.open(destination, "_blank", "noopener,noreferrer");
   if (!opened) window.location.assign(destination);
 }
 
-/* --------------------------------------------------------- application update */
-const nativeInvoke = (command, args) => window.__TAURI__?.core?.invoke(command, args);
-
 function renderUpdate() {
   const button = document.getElementById("app-update");
   const update = S.update;
-  button.className = "ghost hide";
-  button.onclick = null;
-  if (!update) return;
+  button.className = "ghost";
+  button.disabled = false;
+  button.onclick = () => guard(() => checkForUpdate({manual:true}))();
+  button.title = "Check for a signed Synchri update";
+  if (!update || update.status === "idle") {
+    button.textContent = "Check for updates";
+    return;
+  }
+  if (update.status === "checking") {
+    button.disabled = true;
+    button.textContent = "Checking for updates…";
+    return;
+  }
   if (update.status === "available") {
     button.className = "ghost";
-    button.textContent = `Update to v${update.release.version}`;
+    button.textContent = `Update to v${update.update.version}`;
     button.title = "Download the signed Synchri update and reopen the app";
     button.onclick = guard(async () => {
-      S.update = {status:"installing", release:update.release};
+      S.update = {status:"installing", update:update.update};
       renderUpdate();
       await nativeInvoke("install_update");
     });
@@ -336,17 +374,30 @@ function renderUpdate() {
     button.className = "ghost";
     button.disabled = true;
     button.textContent = "Updating…";
+  } else if (update.status === "current") {
+    button.textContent = `Synchri v${update.currentVersion} · Up to date`;
+    button.title = "Synchri is up to date. Click to check again.";
+  } else if (update.status === "move_to_applications") {
+    button.textContent = update.update ? "Move to Applications to update" : "Install Synchri in Applications";
+    button.title = update.message;
+    button.onclick = () => flash(update.message);
+  } else if (update.status === "error") {
+    button.textContent = "Update check unavailable";
+    button.title = update.message;
   }
 }
 
-async function checkForUpdate() {
+async function checkForUpdate({manual=false}={}) {
   if (!window.__TAURI__?.core?.invoke) return;
+  S.update = {status:"checking"}; renderUpdate();
   try {
-    const release = await nativeInvoke("check_for_update");
-    S.update = release ? {status:"available", release} : null;
+    S.update = await nativeInvoke("check_for_update");
     renderUpdate();
-  } catch (_) {
-    // Update availability must never get in the way of opening local work.
+    if (manual && S.update.status === "current") confirmNotice(S.update.message);
+  } catch (error) {
+    S.update = {status:"error", message:error.message || "Synchri could not check for updates."};
+    renderUpdate();
+    if (manual) flash(S.update.message);
   }
 }
 
@@ -359,6 +410,7 @@ async function home() {
   listen();
   document.getElementById("ctx").textContent = S.boot.workspace;
   renderGitHubAccount();
+  void checkForUpdate();
   const list = S.boot.sessions;
   const workflows = S.boot.presets || [];
   app().innerHTML = "";
@@ -429,7 +481,6 @@ async function home() {
     row.querySelector("[data-new]").onclick = () => quickStartFromRepository(s.repository.root);
     app().append(row);
   }
-  void checkForUpdate();
 }
 
 async function quickStartFromRepository(repoPath) {
@@ -668,7 +719,7 @@ function renderQuick() {
   document.getElementById("quick-advanced").onclick = () => configureWorkflow(q.preset);
   document.querySelectorAll("#quick-repositories [data-repo]").forEach(button => button.onclick = guard(() => selectQuickRepository(button.dataset.repo)));
   document.getElementById("quick-connect-github")?.addEventListener("click", guard(connectGitHub));
-  document.getElementById("quick-connect-repositories")?.addEventListener("click", () => openRepositoryAccess(repos.github_access));
+  document.getElementById("quick-connect-repositories")?.addEventListener("click", guard(() => openRepositoryAccess(repos.github_access)));
   document.getElementById("quick-use-repo")?.addEventListener("click", guard(async () => {
     await selectQuickRepository(document.getElementById("quick-repo").value.trim());
   }));
@@ -948,7 +999,7 @@ async function stepRepo() {
     const access = S.repos.github_access || {};
     const account = S.repos.github_status?.account?.login;
     const notice = $(`<div class="note small"><b>Choose repository access</b><div>${account ? `Signed in as @${esc(account)}. ` : ""}Select the repositories Synchri may open. This does not change your sign-in.</div><button style="margin-top:.55rem">Choose repositories</button></div>`);
-    notice.querySelector("button").onclick = () => openRepositoryAccess(access);
+    notice.querySelector("button").onclick = guard(() => openRepositoryAccess(access));
     box.append(notice);
   }
 }

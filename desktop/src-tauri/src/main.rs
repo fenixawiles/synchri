@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_updater::{Update, UpdaterExt};
+use url::Url;
 
 #[derive(Default)]
 struct SidecarState {
@@ -26,6 +27,16 @@ struct UpdateInfo {
     date: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCheck {
+    current_version: String,
+    status: String,
+    message: String,
+    update: Option<UpdateInfo>,
+    can_install: bool,
+}
+
 async fn available_update(app: &AppHandle) -> Result<Option<Update>, String> {
     app.updater()
         .map_err(|error| error.to_string())?
@@ -34,20 +45,97 @@ async fn available_update(app: &AppHandle) -> Result<Option<Update>, String> {
         .map_err(|error| error.to_string())
 }
 
+fn app_bundle_path() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Synchri could not locate its application bundle: {error}"))?;
+    let macos_dir = executable
+        .parent()
+        .ok_or("Synchri could not determine its application bundle path")?;
+    let contents_dir = macos_dir
+        .parent()
+        .ok_or("Synchri could not determine its application bundle path")?;
+    contents_dir
+        .parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| "Synchri could not determine its application bundle path".to_string())
+}
+
+fn can_install_update_in_place(bundle: &std::path::Path) -> bool {
+    // A downloaded app is commonly launched through App Translocation. Its
+    // path is a temporary, macOS-owned mount; replacing it makes the original
+    // download appear to disappear. Only update a normal Applications install.
+    if bundle
+        .components()
+        .any(|part| part.as_os_str() == "AppTranslocation")
+    {
+        return false;
+    }
+    if bundle.starts_with("/Applications") {
+        return true;
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| bundle.starts_with(home.join("Applications")))
+        .unwrap_or(false)
+}
+
+fn update_install_location_message() -> String {
+    "Move Synchri.app to Applications before installing updates. Synchri will never replace an app opened directly from a download.".to_string()
+}
+
 #[tauri::command]
-async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
-    let Some(update) = available_update(&app).await? else {
-        return Ok(None);
-    };
-    Ok(Some(UpdateInfo {
-        version: update.version,
-        notes: update.body,
-        date: update.date.map(|date| date.to_string()),
-    }))
+async fn check_for_update(app: AppHandle) -> UpdateCheck {
+    let current_version = app.package_info().version.to_string();
+    let can_install = app_bundle_path()
+        .map(|bundle| can_install_update_in_place(&bundle))
+        .unwrap_or(false);
+    // Do this before a network request. A downloaded or translocated app is
+    // never a safe update target, and the user needs that installation answer
+    // even while offline.
+    if !can_install {
+        return UpdateCheck {
+            current_version,
+            status: "move_to_applications".into(),
+            message: update_install_location_message(),
+            update: None,
+            can_install,
+        };
+    }
+    match available_update(&app).await {
+        Ok(Some(update)) => UpdateCheck {
+            current_version,
+            status: "available".into(),
+            message: format!("Synchri {} is ready to install.", update.version),
+            update: Some(UpdateInfo {
+                version: update.version,
+                notes: update.body,
+                date: update.date.map(|date| date.to_string()),
+            }),
+            can_install,
+        },
+        Ok(None) => UpdateCheck {
+            current_version,
+            status: "current".into(),
+            message: "Synchri is up to date.".into(),
+            update: None,
+            can_install,
+        },
+        Err(error) => UpdateCheck {
+            current_version,
+            status: "error".into(),
+            message: format!("Synchri could not check for updates: {error}"),
+            update: None,
+            can_install,
+        },
+    }
 }
 
 #[tauri::command]
 async fn install_update(app: AppHandle) -> Result<(), String> {
+    let bundle = app_bundle_path()?;
+    if !can_install_update_in_place(&bundle) {
+        return Err(update_install_location_message());
+    }
     let Some(update) = available_update(&app).await? else {
         return Ok(());
     };
@@ -56,6 +144,60 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?;
     app.restart();
+}
+
+fn github_https_url(value: &str) -> Result<Url, String> {
+    let parsed =
+        Url::parse(value).map_err(|_| "Synchri received an invalid GitHub address".to_string())?;
+    let host = parsed.host_str().unwrap_or_default();
+    if parsed.scheme() != "https" || !host.eq_ignore_ascii_case("github.com") {
+        return Err("Synchri can only open secure GitHub addresses from this action".into());
+    }
+    Ok(parsed)
+}
+
+#[tauri::command]
+fn open_github_url(url: String) -> Result<(), String> {
+    let url = github_https_url(&url)?;
+    let status = Command::new("open")
+        .arg(url.as_str())
+        .status()
+        .map_err(|error| format!("Synchri could not open GitHub in your browser: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Synchri could not open GitHub in your browser".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_install_update_in_place, github_https_url};
+    use std::path::Path;
+
+    #[test]
+    fn updater_refuses_translocated_and_downloaded_bundles() {
+        assert!(!can_install_update_in_place(Path::new(
+            "/private/var/folders/x/AppTranslocation/id/d/Synchri.app"
+        )));
+        assert!(!can_install_update_in_place(Path::new(
+            "/Users/person/Downloads/Synchri.app"
+        )));
+    }
+
+    #[test]
+    fn updater_accepts_applications_bundles() {
+        assert!(can_install_update_in_place(Path::new(
+            "/Applications/Synchri.app"
+        )));
+    }
+
+    #[test]
+    fn external_browser_only_receives_secure_github_urls() {
+        assert!(github_https_url("https://github.com/login/device").is_ok());
+        assert!(github_https_url("http://github.com/login/device").is_err());
+        assert!(github_https_url("https://example.com").is_err());
+    }
 }
 
 fn bundled_engine(_app: &AppHandle) -> Result<PathBuf, String> {
@@ -118,7 +260,10 @@ fn start_sidecar(app: AppHandle, state: Arc<SidecarState>) -> Result<(), String>
         .stderr
         .take()
         .ok_or("Synchri could not read its local engine diagnostics")?;
-    *state.child.lock().map_err(|_| "Synchri's local engine lock was poisoned")? = Some(child);
+    *state
+        .child
+        .lock()
+        .map_err(|_| "Synchri's local engine lock was poisoned")? = Some(child);
 
     // The server generates a fresh capability token for every launch. Wait
     // for that exact URL instead of guessing a port or ever showing an
@@ -150,28 +295,30 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::clone(&sidecar))
-        .invoke_handler(tauri::generate_handler![check_for_update, install_update])
+        .invoke_handler(tauri::generate_handler![
+            check_for_update,
+            install_update,
+            open_github_url
+        ])
         // A hidden local placeholder keeps macOS's application lifecycle alive
         // while the engine starts. It is navigated to the fresh, authenticated
         // loopback URL before the window is ever revealed.
         .build(tauri::generate_context!())
         .expect("error while building Synchri")
-        .run(move |app_handle, event| {
-            match event {
-                RunEvent::Ready => {
-                    if let Err(error) = start_sidecar(app_handle.clone(), Arc::clone(&sidecar)) {
-                        eprintln!("{error}");
-                        app_handle.exit(1);
-                    }
+        .run(move |app_handle, event| match event {
+            RunEvent::Ready => {
+                if let Err(error) = start_sidecar(app_handle.clone(), Arc::clone(&sidecar)) {
+                    eprintln!("{error}");
+                    app_handle.exit(1);
                 }
-                RunEvent::Exit | RunEvent::ExitRequested { .. } => {
-                    if let Ok(mut child) = sidecar.child.lock() {
-                        if let Some(mut child) = child.take() {
-                            let _ = child.kill();
-                        }
-                    }
-                }
-                _ => {}
             }
+            RunEvent::Exit | RunEvent::ExitRequested { .. } => {
+                if let Ok(mut child) = sidecar.child.lock() {
+                    if let Some(mut child) = child.take() {
+                        let _ = child.kill();
+                    }
+                }
+            }
+            _ => {}
         });
 }

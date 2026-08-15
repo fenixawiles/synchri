@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synchri"
-version = "0.2.2"
+version = "0.2.3"
 description = "Run two coding agents on one task, in one room, with an isolated worktree and a contract they both agree to."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,9 +26,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-# Zero runtime dependencies: stdlib only, on purpose. A broker that agents are
-# expected to install into arbitrary environments should not drag in a tree.
-dependencies = []
+# The broker stays deliberately lean. ``certifi`` is bundled for the desktop
+# app's GitHub OAuth flow so its embedded Python can verify GitHub's TLS chain
+# without ever weakening certificate validation.
+dependencies = ["certifi>=2024.2.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]

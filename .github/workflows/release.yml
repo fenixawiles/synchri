@@ -53,7 +53,10 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - run: python -m pip install --upgrade pyinstaller
+      # Install Synchri itself as well as PyInstaller so the signed embedded
+      # engine includes every declared runtime dependency (notably certifi for
+      # verified GitHub OAuth TLS).
+      - run: python -m pip install --upgrade pyinstaller .
       - run: test "$(uname -m)" = arm64
       - run: npm ci
         working-directory: desktop

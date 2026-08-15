@@ -463,7 +463,11 @@ def _github_get(path: str, token: str) -> dict[str, Any]:
         },
     )
     try:
-        with urlopen(request, timeout=GITHUB_TIMEOUT_SECONDS) as response:  # noqa: S310 - fixed API host
+        with urlopen(
+            request,
+            timeout=GITHUB_TIMEOUT_SECONDS,
+            context=github_auth.trusted_ssl_context(),
+        ) as response:  # noqa: S310 - fixed API host
             import json
 
             value = json.loads(response.read().decode("utf-8"))

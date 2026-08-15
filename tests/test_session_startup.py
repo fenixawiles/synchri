@@ -1522,6 +1522,34 @@ def test_device_authorization_returns_a_user_code(monkeypatch):
     assert login["verification_uri"] == "https://github.com/login/device"
 
 
+def test_device_authorization_explains_when_the_github_app_has_not_enabled_device_flow(monkeypatch):
+    from synchri.errors import StateError
+    from synchri.session import github_auth
+
+    monkeypatch.setattr(
+        github_auth,
+        "_post_form",
+        lambda _url, _fields: {"error": "device_flow_disabled"},
+    )
+
+    with pytest.raises(StateError) as exc:
+        github_auth.start_device_authorization()
+
+    assert exc.value.code == "github_device_flow_disabled"
+    assert exc.value.details["resolution"] == {"kind": "github_app_settings"}
+
+
+def test_github_tls_context_requires_verified_certificates():
+    import ssl
+
+    from synchri.session import github_auth
+
+    context = github_auth.trusted_ssl_context()
+
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl.CERT_REQUIRED
+
+
 def test_device_authorization_persists_credentials_without_exposing_them(workspace, monkeypatch):
     from synchri.session import github_auth
 

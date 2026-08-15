@@ -1,0 +1,43 @@
+"""Release invariants for Synchri's self-updating macOS application."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import tomllib
+
+
+ROOT = Path(__file__).parents[1]
+
+
+def _cargo_version() -> str:
+    source = (ROOT / "desktop" / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version = "([^"]+)"$', source, flags=re.MULTILINE)
+    assert match, "desktop Cargo package must declare a version"
+    return match.group(1)
+
+
+def test_desktop_release_versions_are_kept_in_lockstep():
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    package = json.loads((ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "desktop" / "package-lock.json").read_text(encoding="utf-8"))
+    tauri = json.loads((ROOT / "desktop" / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    init = (ROOT / "synchri" / "__init__.py").read_text(encoding="utf-8")
+
+    assert package["version"] == version
+    assert lock["version"] == version
+    assert lock["packages"][""]["version"] == version
+    assert _cargo_version() == version
+    assert tauri["version"] == version
+    assert f'__version__ = "{version}"' in init
+
+
+def test_release_build_installs_the_declared_runtime_dependencies():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    sidecar = (ROOT / "scripts" / "build_tauri_sidecar.sh").read_text(encoding="utf-8")
+
+    assert "python -m pip install --upgrade pyinstaller ." in workflow
+    assert "--collect-data certifi" in sidecar
+    assert "make_tauri_update_manifest.py" in workflow

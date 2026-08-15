@@ -21,6 +21,7 @@ set -- \
   --clean \
   --onedir \
   --name synchri-engine \
+  --collect-data certifi \
   --add-data "$ROOT/synchri/ui/static:synchri/ui/static" \
   --add-data "$ROOT/synchri/storage/schema.sql:synchri/storage" \
   --paths "$ROOT" \

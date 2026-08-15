@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import hashlib
 import platform
+import ssl
 import subprocess
 import time
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+import certifi
 
 from ..config import Workspace, write_private
 from ..errors import StateError
@@ -50,6 +53,16 @@ KEYCHAIN_ACCOUNT_PREFIX = "github-app-user-token"
 REQUEST_TIMEOUT_SECONDS = 15.0
 
 
+def trusted_ssl_context() -> ssl.SSLContext:
+    """Return Synchri's verified public-root store for GitHub HTTPS requests.
+
+    The standalone macOS engine does not inherit a separately installed Python
+    certificate bundle.  Bundling ``certifi`` keeps the desktop app portable
+    without ever relaxing certificate or hostname verification.
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 @dataclass(frozen=True)
 class DeviceAuthorization:
     """A short-lived GitHub verification code shown inside the app."""
@@ -72,6 +85,15 @@ class DeviceAuthorization:
 def start_device_authorization() -> DeviceAuthorization:
     """Ask GitHub for a one-time device code without opening a terminal."""
     payload = _post_form(DEVICE_CODE_URL, {"client_id": GITHUB_APP_CLIENT_ID})
+    error = str(payload.get("error") or "")
+    if error == "device_flow_disabled":
+        _device_error(error, payload)
+    if error:
+        raise StateError(
+            "GitHub could not start sign-in. Check the Synchri GitHub App settings, then try again.",
+            code="github_login_failed",
+            resolution={"kind": "github_app_settings"},
+        )
     try:
         return DeviceAuthorization(
             device_code=str(payload["device_code"]),
@@ -264,7 +286,7 @@ def _save_credentials(workspace: Workspace, stored: dict[str, Any]) -> None:
                     "/usr/bin/security", "add-generic-password", "-U", "-a", _keychain_account(workspace),
                     "-s", KEYCHAIN_SERVICE, "-w",
                 ],
-                input=f"{serialized}\n{serialized}\n",
+                input=f"{serialized}\n",
                 capture_output=True,
                 text=True,
                 timeout=REQUEST_TIMEOUT_SECONDS,
@@ -306,7 +328,9 @@ def _account_for_token(access_token: str) -> dict[str, Any] | None:
         },
     )
     try:
-        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310 - fixed GitHub API host
+        with urlopen(
+            request, timeout=REQUEST_TIMEOUT_SECONDS, context=trusted_ssl_context()
+        ) as response:  # noqa: S310 - fixed GitHub API host
             value = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 401:
@@ -356,7 +380,9 @@ def _post_form(url: str, fields: dict[str, str]) -> dict[str, Any]:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310 - fixed GitHub URLs
+        with urlopen(
+            request, timeout=REQUEST_TIMEOUT_SECONDS, context=trusted_ssl_context()
+        ) as response:  # noqa: S310 - fixed GitHub URLs
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
         try:

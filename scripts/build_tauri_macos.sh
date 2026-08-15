@@ -60,6 +60,14 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" 
 fi
 
 DMG="$TAURI_TARGET_DIR/release/Synchri-macos-$ARCH.dmg"
+# Give first-time users the normal macOS installation gesture: drag Synchri
+# into Applications. Running the bundle directly from a mounted image invokes
+# App Translocation, where in-app replacement is intentionally refused.
+DMG_CONTENTS="$TAURI_TARGET_DIR/release/dmg-contents"
+rm -rf "$DMG_CONTENTS"
+mkdir -p "$DMG_CONTENTS"
+ditto "$FINAL_APP" "$DMG_CONTENTS/Synchri.app"
+ln -sfn /Applications "$DMG_CONTENTS/Applications"
 # ``hdiutil`` occasionally leaves the target file momentarily busy on hosted
 # macOS runners.  Build to a private, per-process path and retry the image
 # creation before publishing it under Synchri's stable download name.  This
@@ -68,7 +76,7 @@ DMG="$TAURI_TARGET_DIR/release/Synchri-macos-$ARCH.dmg"
 attempt=1
 while :; do
   DMG_STAGING="$TAURI_TARGET_DIR/release/.Synchri-macos-$ARCH-$$-$attempt.dmg"
-  if hdiutil create -volname Synchri -srcfolder "$FINAL_APP" -format UDZO "$DMG_STAGING" >/dev/null; then
+  if hdiutil create -volname Synchri -srcfolder "$DMG_CONTENTS" -format UDZO "$DMG_STAGING" >/dev/null; then
     break
   fi
   if [ "$attempt" -ge 3 ]; then

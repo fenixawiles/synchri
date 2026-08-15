@@ -200,6 +200,9 @@ def test_the_client_uses_native_updates_only_from_the_packaged_desktop_app():
     assert 'nativeInvoke("check_for_update")' in source
     assert 'nativeInvoke("install_update")' in source
     assert "Download the signed Synchri update" in source
+    assert "Check for updates" in source
+    assert "Install Synchri in Applications" in source
+    assert "move_to_applications" in source
 
 
 def test_the_client_uses_github_app_device_sign_in_without_a_cli_dependency():
@@ -209,6 +212,7 @@ def test_the_client_uses_github_app_device_sign_in_without_a_cli_dependency():
     assert 'api("github/connect", {})' in source
     assert 'api("github/poll", {request_id: login.request_id})' in source
     assert "Enter this code in GitHub" in source
+    assert 'nativeInvoke("open_github_url", {url: destination})' in source
     assert "GitHub CLI" not in source
 
 
@@ -221,6 +225,15 @@ def test_the_client_separates_github_profile_sign_in_from_repository_access():
     assert "Create your Synchri profile" in source
     assert "Choose repository access" in source
     assert "openRepositoryAccess" in source
+    assert "GITHUB ACCOUNT" in source
+    assert "Disconnect GitHub" in source
+
+
+def test_the_packaged_engine_includes_the_public_root_store_for_github_tls():
+    from pathlib import Path
+
+    build = (Path(__file__).parents[1] / "scripts" / "build_tauri_sidecar.sh").read_text()
+    assert "--collect-data certifi" in build
 
 
 def test_api_keeps_the_github_device_secret_out_of_the_browser(ui, monkeypatch):

@@ -55,6 +55,41 @@ def test_release_build_installs_the_declared_runtime_dependencies():
     assert "file -b \"$candidate\" | grep -q 'Mach-O'" in desktop_build
 
 
+def test_update_payload_is_notarized_assessed_and_published_safely():
+    """The update path must satisfy Gatekeeper end to end, not only codesign.
+
+    Each assertion pins one hard-won invariant: the app itself carries a
+    stapled ticket before either container is built; every Mach-O verifies
+    regardless of permission bits; Gatekeeper's own assessment gates the
+    release; the manifest uploads last so a mid-publish update check can
+    never pair it with missing or replaced bytes; and the engine never runs
+    with a working directory inside the sealed bundle.
+    """
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    desktop_build = (ROOT / "scripts" / "build_tauri_macos.sh").read_text(encoding="utf-8")
+    shell = (ROOT / "desktop" / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+
+    assert "verify_final_app" in desktop_build
+    assert 'xcrun stapler staple "$APP"' in desktop_build
+    assert desktop_build.index('xcrun stapler staple "$APP"') < desktop_build.index("hdiutil create")
+    assert desktop_build.index('xcrun stapler staple "$APP"') < desktop_build.index(
+        "env COPYFILE_DISABLE=1 tar"
+    )
+    assert "SYNCHRI_NOTARY_APPLE_ID" in workflow and "SYNCHRI_NOTARY_APPLE_ID" in desktop_build
+
+    assert 'xcrun stapler validate "$VERIFY_DIR"' in workflow
+    assert "spctl --assess --type exec" in workflow
+    assert "spctl --assess --type open" in workflow
+
+    assert 'gh release upload "$TAG" $payload --clobber' in workflow
+    assert workflow.index('gh release upload "$TAG" $payload --clobber') < workflow.index(
+        'gh release upload "$TAG" "$manifest" --clobber'
+    )
+
+    assert "current_dir(sidecar_working_directory())" in shell
+    assert "current_dir(engine_dir)" not in shell
+
+
 def test_authenticated_loopback_ui_has_only_its_explicit_native_actions():
     """The native window loads the UI from a token-protected loopback server.
 

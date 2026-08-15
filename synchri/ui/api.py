@@ -189,6 +189,16 @@ class Api:
     def connect_github(self, query: dict, body: dict) -> dict:
         from ..session import github_auth
 
+        # A stale click should never restart device authorization for a person
+        # who already has a valid local Synchri profile. The UI refreshes its
+        # account label from this response instead.
+        status = discovery.github_status(self.broker.workspace)
+        if status.get("authenticated"):
+            return {
+                "state": "connected",
+                "already_connected": True,
+                "account": status.get("account"),
+            }
         authorization = github_auth.start_device_authorization()
         request_id = secrets.token_urlsafe(24)
         with self._github_device_lock:

@@ -14,8 +14,9 @@ the public client ID, while GitHub shows the person the authorization screen.
 
 from __future__ import annotations
 
-import json
+import ctypes
 import hashlib
+import json
 import platform
 import ssl
 import subprocess
@@ -51,6 +52,7 @@ TOKEN_URL = f"{GITHUB_WEB_URL}/login/oauth/access_token"
 KEYCHAIN_SERVICE = "com.synchri.github"
 KEYCHAIN_ACCOUNT_PREFIX = "github-app-user-token"
 REQUEST_TIMEOUT_SECONDS = 15.0
+_KEYCHAIN_ITEM_NOT_FOUND = -25300
 
 
 def trusted_ssl_context() -> ssl.SSLContext:
@@ -249,20 +251,12 @@ def delete_credentials(workspace: Workspace) -> None:
 def _load_credentials(workspace: Workspace) -> dict[str, Any] | None:
     if _use_macos_keychain():
         try:
-            completed = subprocess.run(
-                [
-                    "/usr/bin/security", "find-generic-password", "-a", _keychain_account(workspace),
-                    "-s", KEYCHAIN_SERVICE, "-w",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.SubprocessError):
-            completed = None
-        if completed and completed.returncode == 0 and completed.stdout.strip():
+            serialized = _load_macos_keychain_secret(workspace)
+        except OSError:
+            serialized = None
+        if serialized:
             try:
-                value = json.loads(completed.stdout)
+                value = json.loads(serialized)
                 return value if isinstance(value, dict) else None
             except json.JSONDecodeError:
                 return None
@@ -278,32 +272,15 @@ def _load_credentials(workspace: Workspace) -> dict[str, Any] | None:
 def _save_credentials(workspace: Workspace, stored: dict[str, Any]) -> None:
     serialized = json.dumps(stored, separators=(",", ":"), sort_keys=True)
     if _use_macos_keychain():
-        # `security` securely prompts on stdin when -w has no value.  That
-        # avoids ever putting an OAuth or refresh token into a process argv.
         try:
-            completed = subprocess.run(
-                [
-                    "/usr/bin/security", "add-generic-password", "-U", "-a", _keychain_account(workspace),
-                    "-s", KEYCHAIN_SERVICE, "-w",
-                ],
-                input=f"{serialized}\n",
-                capture_output=True,
-                text=True,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
+            _save_macos_keychain_secret(workspace, serialized)
+            return
+        except OSError as exc:
             raise StateError(
                 "Synchri could not save your GitHub sign-in in Keychain. Try connecting again.",
                 code="github_credential_store_failed",
                 resolution={"kind": "retry_github_login"},
             ) from exc
-        if completed.returncode == 0:
-            return
-        raise StateError(
-            "Synchri could not save your GitHub sign-in in Keychain. Try connecting again.",
-            code="github_credential_store_failed",
-            resolution={"kind": "retry_github_login"},
-        )
     write_private(workspace.github_credentials_path, serialized + "\n")
 
 
@@ -315,6 +292,131 @@ def _keychain_account(workspace: Workspace) -> str:
     """Keep custom/test workspaces isolated while retaining one local login."""
     fingerprint = hashlib.sha256(str(workspace.home).encode("utf-8")).hexdigest()[:20]
     return f"{KEYCHAIN_ACCOUNT_PREFIX}:{fingerprint}"
+
+
+def _load_macos_keychain_secret(workspace: Workspace) -> str | None:
+    """Read one secret directly from Keychain without a token-bearing subprocess."""
+    security, core_foundation = _macos_keychain_frameworks()
+    service, account_name = _macos_keychain_identifiers(workspace)
+    password_length = ctypes.c_uint32()
+    password_data = ctypes.c_void_p()
+    item = ctypes.c_void_p()
+    status = security.SecKeychainFindGenericPassword(
+        None,
+        len(service),
+        service,
+        len(account_name),
+        account_name,
+        ctypes.byref(password_length),
+        ctypes.byref(password_data),
+        ctypes.byref(item),
+    )
+    if status == _KEYCHAIN_ITEM_NOT_FOUND:
+        return None
+    if status != 0:
+        raise OSError(f"Keychain could not read the Synchri GitHub sign-in (status {status}).")
+    try:
+        raw = ctypes.string_at(password_data, password_length.value)
+        return raw.decode("utf-8")
+    finally:
+        if password_data.value:
+            security.SecKeychainItemFreeContent(None, password_data)
+        if item.value:
+            core_foundation.CFRelease(item)
+
+
+def _save_macos_keychain_secret(workspace: Workspace, serialized: str) -> None:
+    """Upsert one Keychain item without putting OAuth credentials in argv.
+
+    Keychain Services is used instead of the ``security`` command because that
+    command only accepts the secret as a command-line argument when running
+    non-interactively.  This keeps both access and refresh tokens out of the
+    process list while retaining a dependency-free macOS implementation.
+    """
+    security, core_foundation = _macos_keychain_frameworks()
+    service, account_name = _macos_keychain_identifiers(workspace)
+    payload = serialized.encode("utf-8")
+    payload_buffer = ctypes.create_string_buffer(payload)
+    payload_pointer = ctypes.cast(payload_buffer, ctypes.c_void_p)
+    item = ctypes.c_void_p()
+    status = security.SecKeychainFindGenericPassword(
+        None,
+        len(service),
+        service,
+        len(account_name),
+        account_name,
+        None,
+        None,
+        ctypes.byref(item),
+    )
+    if status == 0:
+        try:
+            status = security.SecKeychainItemModifyAttributesAndData(
+                item, None, len(payload), payload_pointer
+            )
+        finally:
+            if item.value:
+                core_foundation.CFRelease(item)
+    elif status == _KEYCHAIN_ITEM_NOT_FOUND:
+        created_item = ctypes.c_void_p()
+        status = security.SecKeychainAddGenericPassword(
+            None,
+            len(service),
+            service,
+            len(account_name),
+            account_name,
+            len(payload),
+            payload_pointer,
+            ctypes.byref(created_item),
+        )
+        if created_item.value:
+            core_foundation.CFRelease(created_item)
+    if status != 0:
+        raise OSError(f"Keychain could not save the Synchri GitHub sign-in (status {status}).")
+
+
+def _macos_keychain_identifiers(workspace: Workspace) -> tuple[bytes, bytes]:
+    return KEYCHAIN_SERVICE.encode("utf-8"), _keychain_account(workspace).encode("utf-8")
+
+
+def _macos_keychain_frameworks() -> tuple[Any, Any]:
+    """Load the two system frameworks needed by the Keychain C API."""
+    security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+    core_foundation = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    security.SecKeychainFindGenericPassword.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    security.SecKeychainFindGenericPassword.restype = ctypes.c_int32
+    security.SecKeychainAddGenericPassword.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    security.SecKeychainAddGenericPassword.restype = ctypes.c_int32
+    security.SecKeychainItemModifyAttributesAndData.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    security.SecKeychainItemModifyAttributesAndData.restype = ctypes.c_int32
+    security.SecKeychainItemFreeContent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    security.SecKeychainItemFreeContent.restype = ctypes.c_int32
+    core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+    core_foundation.CFRelease.restype = None
+    return security, core_foundation
 
 
 def _account_for_token(access_token: str) -> dict[str, Any] | None:

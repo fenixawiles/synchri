@@ -1573,6 +1573,36 @@ def test_device_authorization_persists_credentials_without_exposing_them(workspa
     assert written["account"] == {"id": 42, "login": "fenixawiles"}
 
 
+def test_macos_keychain_credentials_round_trip_without_a_token_bearing_subprocess(workspace, monkeypatch):
+    import inspect
+
+    from synchri.session import github_auth
+
+    source = inspect.getsource(github_auth._save_macos_keychain_secret)
+    keychain = {}
+    monkeypatch.setattr(github_auth, "_use_macos_keychain", lambda: True)
+    monkeypatch.setattr(
+        github_auth,
+        "_load_macos_keychain_secret",
+        lambda _workspace: keychain.get("serialized"),
+    )
+    monkeypatch.setattr(
+        github_auth,
+        "_save_macos_keychain_secret",
+        lambda _workspace, serialized: keychain.update(serialized=serialized),
+    )
+
+    github_auth.save_credentials(
+        workspace,
+        {"access_token": "ghu_private", "refresh_token": "ghr_private", "expires_in": 28_800},
+        account={"login": "fenixawiles"},
+    )
+
+    assert github_auth.credentials(workspace)["access_token"] == "ghu_private"
+    assert "SecKeychainAddGenericPassword" in source
+    assert "subprocess" not in source
+
+
 def test_github_status_represents_identity_separately_from_repository_access(workspace, monkeypatch):
     from synchri.session import discovery, github_auth
 

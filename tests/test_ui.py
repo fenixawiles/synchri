@@ -216,6 +216,15 @@ def test_the_client_uses_github_app_device_sign_in_without_a_cli_dependency():
     assert "GitHub CLI" not in source
 
 
+def test_the_client_refreshes_a_stale_github_sign_in_click_instead_of_reauthorizing():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+
+    assert 'if (login.state === "connected")' in source
+    assert "already signed in on this Mac" in source
+
+
 def test_the_client_separates_github_profile_sign_in_from_repository_access():
     from pathlib import Path
 
@@ -261,6 +270,29 @@ def test_api_keeps_the_github_device_secret_out_of_the_browser(ui, monkeypatch):
     result = call(ui, "/api/github/poll", {"request_id": started["request_id"]})
     assert result == {"state": "connected"}
     assert seen[0][1] == "secret-device-code"
+
+
+def test_api_does_not_restart_github_authorization_for_an_existing_profile(ui, monkeypatch):
+    from synchri.session import discovery, github_auth
+
+    monkeypatch.setattr(
+        discovery,
+        "github_status",
+        lambda _workspace: {"authenticated": True, "account": {"login": "fenixawiles"}},
+    )
+    monkeypatch.setattr(
+        github_auth,
+        "start_device_authorization",
+        lambda: pytest.fail("already-connected account restarted device authorization"),
+    )
+
+    result = call(ui, "/api/github/connect", {})
+
+    assert result == {
+        "state": "connected",
+        "already_connected": True,
+        "account": {"login": "fenixawiles"},
+    }
 
 
 def test_local_repositories_do_not_wait_for_github(ui, monkeypatch):

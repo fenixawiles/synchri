@@ -237,6 +237,15 @@ const app = () => document.getElementById("app");
 /* ----------------------------------------------------------- GitHub sign-in */
 async function connectGitHub() {
   const login = await api("github/connect", {});
+  if (login.state === "connected") {
+    S.repos = null; S.githubReposRequest = null;
+    S.boot = await api("bootstrap"); renderGitHubAccount();
+    const account = login.account?.login ? `@${login.account.login}` : "GitHub";
+    confirmNotice(`${account} is already signed in on this Mac.`);
+    if (S.view === "quick") { await loadQuickRepositories(); renderQuick(); }
+    if (S.view === "wizard" && S.step === "repository") renderWizard();
+    return;
+  }
   const githubDevicePage = "https" + "://github.com/login/device";
   const destination = login.verification_uri || githubDevicePage;
   await openGitHub(destination);

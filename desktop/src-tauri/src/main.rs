@@ -198,6 +198,15 @@ mod tests {
         assert!(github_https_url("http://github.com/login/device").is_err());
         assert!(github_https_url("https://example.com").is_err());
     }
+
+    #[test]
+    fn sidecar_never_runs_from_inside_the_app_bundle() {
+        let cwd = super::sidecar_working_directory();
+        assert!(cwd.is_dir());
+        assert!(!cwd
+            .components()
+            .any(|part| part.as_os_str() == "Resources"));
+    }
 }
 
 fn bundled_engine(_app: &AppHandle) -> Result<PathBuf, String> {
@@ -234,6 +243,18 @@ fn open_desktop_window(app: AppHandle, url: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn sidecar_working_directory() -> PathBuf {
+    // Never run the engine from inside the sealed app bundle: a relative-path
+    // write from the engine (or any child that inherits the working
+    // directory) would land in Contents/Resources and permanently invalidate
+    // the app's code signature, which Gatekeeper then reports as a damaged
+    // app. The per-user temporary directory is always writable and is never a
+    // Git repository, so the engine's "preselect the launch directory's repo"
+    // convenience stays inert exactly as it was when the engine ran from the
+    // bundle.
+    std::env::temp_dir()
+}
+
 fn start_sidecar(app: AppHandle, state: Arc<SidecarState>) -> Result<(), String> {
     let engine = bundled_engine(&app)?;
     if !engine.is_file() {
@@ -242,12 +263,9 @@ fn start_sidecar(app: AppHandle, state: Arc<SidecarState>) -> Result<(), String>
             engine.display()
         ));
     }
-    let engine_dir = engine
-        .parent()
-        .ok_or("Synchri could not determine its engine directory")?;
     let mut child = Command::new(&engine)
         .args(["ui", "--no-open", "--port", "0"])
-        .current_dir(engine_dir)
+        .current_dir(sidecar_working_directory())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

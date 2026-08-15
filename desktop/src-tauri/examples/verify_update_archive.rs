@@ -5,6 +5,11 @@
 //! any sidecar in the transport becomes a literal `._*` file inside the app
 //! and invalidates its outer code signature. This helper deliberately mirrors
 //! `tauri-plugin-updater`'s extraction loop so CI validates the real consumer.
+//!
+//! This mirror is written against tauri-plugin-updater 2 as locked in
+//! Cargo.lock. If that plugin is ever upgraded, re-read its macOS install
+//! path and keep this loop identical — a silent divergence here would turn
+//! the release gate back into an approximation.
 
 use flate2::read::GzDecoder;
 use std::{env, fs::File, io, path::PathBuf};

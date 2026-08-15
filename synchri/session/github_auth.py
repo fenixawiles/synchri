@@ -44,7 +44,11 @@ GITHUB_APP_CLIENT_ID = "Iv23liG9lp0zV1zzOPcn"
 # usable. Once it is, this canonical URL lets every desktop build send people
 # straight to the selected-repository screen without a separate web service.
 GITHUB_APP_INSTALL_URL = "https://github.com/apps/synchri/installations/new"
-GITHUB_API_VERSION = "2026-03-10"
+# The GA calendar version GitHub documents for the REST API. Requesting an
+# unsupported version makes api.github.com reject every call with HTTP 400,
+# which this client surfaces as an empty repository list — so this constant
+# must only ever hold a version GitHub actually publishes.
+GITHUB_API_VERSION = "2022-11-28"
 GITHUB_WEB_URL = "https://github.com"
 GITHUB_API_URL = "https://api.github.com"
 DEVICE_CODE_URL = f"{GITHUB_WEB_URL}/login/device/code"

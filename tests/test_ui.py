@@ -307,6 +307,55 @@ def test_local_repositories_do_not_wait_for_github(ui, monkeypatch):
     assert result["github"] == [] and result["github_available"] is False
 
 
+def test_a_github_api_failure_is_distinguishable_from_missing_repository_access(ui, monkeypatch):
+    """A signed-in user with a failing API must not see the silent empty list.
+
+    Before this, an API fault produced the identical payload shape as "the app
+    is not installed anywhere", so the chooser told people to grant access they
+    may already have granted.
+    """
+    from synchri.errors import StateError
+    from synchri.session import discovery
+
+    signed_in = {
+        "installed": True,
+        "authenticated": True,
+        "account": {"login": "fenixawiles"},
+        "message": "GitHub is signed in. Repository access is managed separately.",
+    }
+    monkeypatch.setattr(discovery, "github_status", lambda workspace=None: signed_in)
+
+    def unavailable(workspace=None):
+        raise StateError(
+            "GitHub could not load your repositories. Try again in a moment.",
+            code="github_unavailable",
+        )
+
+    monkeypatch.setattr(discovery, "github_repository_access", unavailable)
+    result = call(ui, "/api/repositories")
+
+    assert result["github"] == []
+    assert result["github_available"] is False
+    assert result["github_access"]["unavailable"] is True
+    assert "could not load your repositories" in result["github_access"]["message"]
+
+
+def test_the_quick_start_surfaces_github_repository_errors_with_a_retry():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "github_access?.unavailable" in source
+    assert 'id="quick-retry-github"' in source
+
+
+def test_github_api_requests_pin_a_published_api_version():
+    """An unsupported X-GitHub-Api-Version makes every API call fail with 400,
+    which the chooser used to render as a permanently empty repository list."""
+    from synchri.session import github_auth
+
+    assert github_auth.GITHUB_API_VERSION == "2022-11-28"
+
+
 def test_agents_step_has_a_real_save_action_and_footer_navigation():
     from pathlib import Path
 

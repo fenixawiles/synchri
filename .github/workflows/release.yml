@@ -81,6 +81,13 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # SYNCHRI_-prefixed on purpose: exporting APPLE_ID/APPLE_PASSWORD here
+          # would make the Tauri bundler start its own notarization pass on the
+          # intermediate app. The build script staples the final app itself so
+          # both the DMG and the updater tarball carry a Gatekeeper ticket.
+          SYNCHRI_NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SYNCHRI_NOTARY_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SYNCHRI_NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SYNCHRI_ARCH: arm64
           SYNCHRI_TARGET_TRIPLE: aarch64-apple-darwin
           SYNCHRI_TAURI_TARGET_DIR: ${{ runner.temp }}/synchri-tauri-target
@@ -113,7 +120,7 @@ jobs:
           # BSD tar hides AppleDouble sidecars when listing an archive, but
           # Tauri's Rust extractor writes them into the app. Reproduce that
           # exact extraction path and verify the resulting bundle seal.
-          VERIFY_DIR="$RUNNER_TEMP/synchri-updater-verify"
+          VERIFY_DIR="$RUNNER_TEMP/synchri-updater-verify/Synchri.app"
           mkdir -p "$VERIFY_DIR"
           CARGO_TARGET_DIR="$RUNNER_TEMP/synchri-tauri-target" \
             cargo run --quiet --release --target aarch64-apple-darwin \
@@ -124,6 +131,12 @@ jobs:
             exit 1
           fi
           codesign --verify --deep --strict --verbose=2 "$VERIFY_DIR"
+          # What users receive through the updater must carry its own ticket
+          # and pass Gatekeeper's actual assessment, not only codesign's.
+          xcrun stapler validate "$APP"
+          xcrun stapler validate "$VERIFY_DIR"
+          spctl --assess --type exec --verbose=2 "$APP"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
       - name: Build the signed update manifest
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -156,10 +169,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
+          manifest="release-assets/latest.json"
+          test -f "$manifest"
+          payload=$(find release-assets -type f ! -name latest.json)
+          # The manifest must land last. Assets replace one at a time, so a
+          # client checking for updates mid-publish must never read a manifest
+          # that references bytes which are missing or just been replaced —
+          # that window is a signature mismatch reported as a corrupt update.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --clobber
+            gh release upload "$TAG" $payload --clobber
+            gh release upload "$TAG" "$manifest" --clobber
           else
-            gh release create "$TAG" release-assets/* --generate-notes --verify-tag
+            gh release create "$TAG" $payload --generate-notes --verify-tag
+            gh release upload "$TAG" "$manifest"
           fi
 
   publish-pypi:

@@ -204,11 +204,14 @@ details.menu>summary::-webkit-details-marker{display:none}
 details.menu>div{position:absolute;right:0;top:calc(100% + .35rem);z-index:40;min-width:11rem;
   padding:.3rem;background:var(--raise);border:1px solid var(--line2);border-radius:var(--radius-s);
   box-shadow:var(--shadow)}
-details.menu>div button{display:flex;align-items:center;gap:.5rem;width:100%;text-align:left;
-  border:0;background:none;padding:.42rem .5rem;font-size:12.5px;border-radius:4px}
-details.menu>div button:hover{background:var(--panel2)}
+details.menu>div>button{display:flex;align-items:center;gap:.5rem;width:100%;text-align:left;
+  border:0;background:none;padding:.42rem .5rem;font-size:12.5px;border-radius:4px;box-shadow:none}
+details.menu>div>button:hover{background:var(--panel2)}
 .swatch{width:12px;height:12px;border-radius:50%;flex:none;border:1px solid var(--line2)}
 .theme-check{margin-left:auto;color:var(--accent);font-weight:700}
+.share-panel{width:17.5rem;padding:.55rem .6rem}
+.share-link{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-s);
+  padding:.45rem .6rem;font:600 12.5px var(--mono);color:var(--accent);text-align:center;letter-spacing:.02em}
 
 /* branded GitHub button */
 .btn-github{display:inline-flex;align-items:center;gap:.45rem;background:var(--gh-bg);
@@ -515,6 +518,14 @@ pre.diff{background:var(--bg)}
     <span id="ctx" class="hide"></span>
   </div>
   <div class="row">
+    <details class="menu" id="share-menu"><summary aria-label="Share Synchri">↗ Share</summary>
+      <div class="share-panel">
+        <div class="kicker">Share Synchri</div>
+        <p class="small muted" style="margin:.45rem 0 .55rem">Autonomous agent teams for any repository. Anyone can sign in with GitHub and use Synchri with their own repos.</p>
+        <div class="share-link">synchri.com</div>
+        <div class="row" style="margin-top:.6rem;flex-wrap:nowrap"><button class="primary" id="share-copy" style="flex:1">Copy invite link</button><button class="ghost hide" id="share-native">Share…</button></div>
+      </div>
+    </details>
     <button class="ghost" id="app-update">Check for updates</button>
     <details class="menu" id="theme-menu"><summary aria-label="Choose theme">◐ Theme</summary><div id="theme-options"></div></details>
     <button class="btn-github" id="github-account"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-label">Sign in with GitHub</span></button>
@@ -648,10 +659,10 @@ function flash(error) {
   });
   clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 7000);
 }
-function confirmNotice(message) {
+function confirmNotice(message, title = "Saved") {
   const box = document.getElementById("err");
   box.className = "err card success"; box.style.borderLeftColor = "var(--accent)";
-  box.innerHTML = `<b>Saved</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
+  box.innerHTML = `<b>${esc(title)}</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
   clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 4200);
 }
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e); } };
@@ -922,7 +933,8 @@ async function home() {
       <div><h1>Define a workflow</h1>
         <p class="muted small" style="margin:.45rem 0 0;line-height:1.6">A workflow is a saved default: which agents run,
         what they may do, and how they pace themselves. Define one once — after that every session is just
-        <span class="mono">repo → brief → launch</span>.</p></div>
+        <span class="mono">repo → brief → launch</span>.</p>
+        <p class="small faint" style="margin:.5rem 0 0">Synchri is built to be shared: anyone can sign in with GitHub and use it with any repository.</p></div>
       <div class="row"><button class="primary" id="create-workflow">Create workflow</button></div>
     </div>`);
     welcome.querySelector("#create-workflow").onclick = () => configureWorkflow();
@@ -1190,9 +1202,11 @@ function renderQuick() {
         ${repo.description ? `<span class="small muted">${esc(repo.description)}</span>` : ""}</button>`)].join("");
   const githubState = !repos.github_status?.authenticated
     ? `<div class="note small" style="margin-top:.55rem"><b>Sign in with GitHub</b><div style="margin-top:.15rem">${esc(repos.github_status?.message || "Create your Synchri profile, then decide which repositories it may access.")}</div><button id="quick-connect-github" style="margin-top:.55rem">Sign in with GitHub</button></div>`
-    : !repos.github_access?.authorized
-      ? `<div class="note small" style="margin-top:.55rem"><b>Choose repository access</b><div style="margin-top:.15rem">You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
-      : "";
+    : repos.github_access?.unavailable
+      ? `<div class="note warn small" style="margin-top:.55rem"><b>GitHub did not answer</b><div style="margin-top:.15rem">${esc(repos.github_access.message || "GitHub could not load your repositories. Try again in a moment.")}</div><button id="quick-retry-github" style="margin-top:.55rem">Try again</button></div>`
+      : !repos.github_access?.authorized
+        ? `<div class="note small" style="margin-top:.55rem"><b>Choose repository access</b><div style="margin-top:.15rem">You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
+        : "";
   const planRepo = selectedRepo
     ? (selectedRepo.name || selectedRepo.full_name)
     : (q.repo_path ? q.repo_path.split("/").filter(Boolean).pop() : "");
@@ -1244,6 +1258,10 @@ function renderQuick() {
   document.getElementById("quick-advanced").onclick = () => configureWorkflow(q.preset);
   document.querySelectorAll("#quick-repositories [data-repo]").forEach(button => button.onclick = guard(() => selectQuickRepository(button.dataset.repo)));
   document.getElementById("quick-connect-github")?.addEventListener("click", guard(connectGitHub));
+  document.getElementById("quick-retry-github")?.addEventListener("click", guard(async () => {
+    S.repos = null; S.githubReposRequest = null;
+    await loadQuickRepositories(); renderQuick();
+  }));
   document.getElementById("quick-connect-repositories")?.addEventListener("click", guard(() => openRepositoryAccess(repos.github_access)));
   document.getElementById("quick-use-repo")?.addEventListener("click", guard(async () => {
     await selectQuickRepository(document.getElementById("quick-repo").value.trim());
@@ -2153,6 +2171,27 @@ async function paint(tab, el) {
 
 document.getElementById("nav-home").onclick = guard(home);
 document.getElementById("nav-new").onclick = guard(quickStart);
+/* Share: hand people the website link plus the one thing they need to know —
+   sign in with GitHub and Synchri works with any repository. Clipboard only;
+   the page itself still makes no external request. */
+const SYNCHRI_SITE = "https" + "://synchri.com";
+const shareMessage = () =>
+  `Synchri — autonomous agent teams for your repositories. Get it at ${SYNCHRI_SITE}. Sign in with GitHub to use it with any repo.`;
+document.getElementById("share-copy").onclick = guard(async () => {
+  await copyText(shareMessage());
+  document.getElementById("share-menu")?.removeAttribute("open");
+  confirmNotice("Invite copied — the synchri.com link plus GitHub sign-in.", "Copied");
+});
+const nativeShare = document.getElementById("share-native");
+if (navigator.share) {
+  nativeShare.classList.remove("hide");
+  nativeShare.onclick = guard(async () => {
+    try {
+      await navigator.share({title: "Synchri", text: shareMessage(), url: SYNCHRI_SITE});
+    } catch (error) { /* dismissing the native sheet is not an error */ }
+    document.getElementById("share-menu")?.removeAttribute("open");
+  });
+}
 renderThemeMenu();
 document.addEventListener("click", (event) => {
   document.querySelectorAll("details.menu[open]").forEach(menu => {

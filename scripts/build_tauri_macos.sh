@@ -69,8 +69,53 @@ ditto --norsrc "$TAURI_TARGET_DIR/release/bundle/macos/Synchri.app" "$FINAL_APP"
 # final app seal is made.
 xattr -cr "$FINAL_APP" 2>/dev/null || true
 find "$FINAL_APP" -name '._*' -type f -delete
+
+verify_final_app() {
+  APP="$1"
+  ENGINE="$APP/Contents/Resources/engine"
+  # Every Mach-O must verify individually, regardless of its permission bits.
+  # This turns "a binary leaked through unsigned" into a release failure here,
+  # instead of a Gatekeeper 'damaged' report on a customer's machine.
+  find "$ENGINE" -type f -print0 | \
+    while IFS= read -r -d '' candidate; do
+      if file -b "$candidate" | grep -q 'Mach-O'; then
+        codesign --verify --strict "$candidate" || {
+          echo "Unsigned or invalid Mach-O leaked into the engine: $candidate" >&2
+          exit 1
+        }
+      fi
+    done
+  codesign --verify --deep --strict "$APP"
+}
+
+notarize_final_app() {
+  APP="$1"
+  # Staple the app itself, not only the DMG. The updater tarball repacks this
+  # exact bundle, and an updated install must carry its own Gatekeeper ticket
+  # so it can pass assessment offline. A stapled ticket lives beside the seal
+  # (Contents/CodeResources) and never invalidates the signature.
+  NOTARIZE_ZIP="$TAURI_TARGET_DIR/release/Synchri-notarize.zip"
+  rm -f "$NOTARIZE_ZIP"
+  ditto -c -k --keepParent "$APP" "$NOTARIZE_ZIP"
+  xcrun notarytool submit "$NOTARIZE_ZIP" \
+    --apple-id "$SYNCHRI_NOTARY_APPLE_ID" \
+    --password "$SYNCHRI_NOTARY_PASSWORD" \
+    --team-id "$SYNCHRI_NOTARY_TEAM_ID" \
+    --wait
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+  rm -f "$NOTARIZE_ZIP"
+}
+
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; then
   sign_final_app "$FINAL_APP"
+  verify_final_app "$FINAL_APP"
+fi
+# The notary credentials use SYNCHRI_-prefixed names on purpose: exporting
+# APPLE_ID/APPLE_PASSWORD around the earlier `tauri build` would trigger the
+# bundler's own notarization pass on the intermediate app.
+if [ -n "${SYNCHRI_NOTARY_APPLE_ID:-}" ] && [ -n "${SYNCHRI_NOTARY_PASSWORD:-}" ] && [ -n "${SYNCHRI_NOTARY_TEAM_ID:-}" ]; then
+  notarize_final_app "$FINAL_APP"
 fi
 
 DMG="$TAURI_TARGET_DIR/release/Synchri-macos-$ARCH.dmg"

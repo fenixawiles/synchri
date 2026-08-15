@@ -531,10 +531,14 @@ def repositories(
             access = github_repository_access(active_workspace)
             if access["authorized"]:
                 github = github_repositories(local=local, workspace=active_workspace)
-        except StateError:
+        except StateError as exc:
             # Local discovery remains instant and useful when GitHub is briefly
-            # unavailable. A later background request gets another chance.
+            # unavailable. A later background request gets another chance — but
+            # the failure must stay distinguishable from "no repositories were
+            # granted", or the chooser silently shows an empty list with no way
+            # to tell a network fault from a missing installation.
             access["unavailable"] = True
+            access["message"] = exc.message
     return {
         "local": local,
         "github": github,

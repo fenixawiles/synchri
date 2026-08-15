@@ -49,30 +49,36 @@ up exactly where you were.
 
 ## What you see
 
-The interface is dark-first and mono-forward — an instrument panel, not a
-marketing page. Data (paths, branches, statuses, countdowns, logs) renders in
-monospace; prose stays prose. It follows the OS light/dark preference.
+The interface is mono-forward — an instrument panel, not a marketing page.
+Data (paths, branches, statuses, countdowns, logs) renders in monospace; prose
+stays prose. By default it follows the OS light/dark preference; the header's
+**theme picker** offers explicit palettes — Terminal (dark graphite, emerald),
+Midnight (dark slate, blue), Daylight (light instrument), and Sage (warm light,
+the original Synchri green) — stored in the browser, never on a server.
 
 **Home** — sessions first: a dense list of every collaboration in this
 workspace with a live status LED, repository and branch, and the first line of
-its brief. Below it, **workflows**: your saved defaults (agent team, permission
-ceiling, pacing), each with a one-click **Run**. Configuration is something you
-edit when you choose to, not a gauntlet you repeat per session.
+its brief. Beside it, a compact **workflows** panel: your saved defaults (agent
+team, permission ceiling, pacing), each with a one-click **Run**. Configuration
+is something you edit when you choose to, not a gauntlet you repeat per
+session.
 
-**New session** — one short page: workflow, repository, brief, optional
-timebox. Repositories are discovered, not typed: local git checkouts under the
-usual code directories, plus your GitHub repositories once access is granted.
-Gate IDs in the brief (like `AUTH-01`) become individually tracked acceptance
-gates.
+**New session** — a numbered form (workflow, repository, brief, pacing) beside
+a sticky **launch plan** that summarizes what will run and carries the page's
+single call to action. Repositories are discovered, not typed: existing git
+checkouts under the usual code directories, plus your GitHub repositories once
+access is granted. Gate IDs in the brief (like `AUTH-01`) become individually
+tracked acceptance gates.
 
 Permissions are three-state toggles — **Allow / Ask / Deny** — with risk labels
 on anything high or destructive, and the description of what each one actually
 permits next to it.
 
-**Preflight** — per-agent connection state (not connected → reading agreement →
-ready). Synchri launches detected local tools itself with **Start my agents**;
-anything it cannot launch gets a paste-ready prompt. Activation is gated on
-every agent acknowledging the contract.
+**Preflight** — one checklist: each agent's connection state (not connected →
+reading agreement → ready) with its setup prompt a disclosure away, and an
+action bar whose single primary is **Start my agents** for tools Synchri can
+launch itself, or **Begin collaboration** once every agent has acknowledged the
+contract.
 
 **The session** — a fixed rail (status, timebox countdown, gate progress, team
 presence, controls) beside the conversation. Detail tabs open as a full working
@@ -107,4 +113,6 @@ not. Nothing changes silently.
 - **Drafts are durable, coordination is best-effort.** Unfinished setup drafts
   persist across restarts and sync across tabs via the stream, but two tabs
   editing the same draft simultaneously still race on last-write-wins.
-- **No dark/light toggle.** It follows your OS.
+- **Theme choice is per browser profile.** It lives in `localStorage`, so the
+  native app window and a separate browser tab each remember their own pick;
+  with no pick, both follow the OS.

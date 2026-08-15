@@ -222,7 +222,7 @@ def test_the_client_refreshes_a_stale_github_sign_in_click_instead_of_reauthoriz
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
 
     assert 'if (login.state === "connected")' in source
-    assert "already signed in on this Mac" in source
+    assert "is already signed in." in source
 
 
 def test_the_client_separates_github_profile_sign_in_from_repository_access():

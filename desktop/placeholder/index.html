@@ -4,6 +4,26 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Synchri</title>
+    <style>
+      :root{color-scheme:dark light}
+      html,body{height:100%}
+      body{margin:0;display:grid;place-items:center;background:#0b0d10;color:#8b95a6;
+        font:13px/1.5 "SF Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+      .boot{text-align:center}
+      .mark{font-size:15px;font-weight:700;color:#d7dee9;letter-spacing:-.01em}
+      .mark i{font-style:normal;color:#2fd287;animation:blink 1.4s steps(2) infinite}
+      .hint{margin-top:.55rem;font-size:11px;color:#5f6a7a}
+      @keyframes blink{50%{opacity:0}}
+      @media (prefers-reduced-motion:reduce){.mark i{animation:none}}
+      @media (prefers-color-scheme:light){
+        body{background:#f4f5f7;color:#5c6675}
+        .mark{color:#1b222c}
+        .mark i{color:#0e8f60}
+        .hint{color:#8d96a5}
+      }
+    </style>
   </head>
-  <body aria-label="Starting Synchri"></body>
+  <body aria-label="Starting Synchri">
+    <div class="boot"><div class="mark">synchri<i>▊</i></div><div class="hint">starting engine…</div></div>
+  </body>
 </html>

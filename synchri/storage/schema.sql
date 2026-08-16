@@ -336,3 +336,45 @@ CREATE TABLE IF NOT EXISTS ui_drafts (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Durable live-work feed from streaming agent CLIs. Unlike agent_activity
+-- (a TTL'd cooperative note), these rows persist so the conversation can show
+-- what each agent actually did. Ordering is (room_id, event_id); rooms.seq is
+-- deliberately not used, so stream chatter never contends with (or interleaves
+-- into) transcript ordering.
+CREATE TABLE IF NOT EXISTS agent_stream_events (
+    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id     TEXT NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
+    session_id  TEXT,
+    participant TEXT NOT NULL,
+    invoke_key  TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT '',
+    file_path   TEXT,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS agent_stream_events_room
+    ON agent_stream_events(room_id, event_id);
+
+-- Token and cost telemetry captured per provider invocation, when the
+-- runtime's stream reports it. Feeds the session usage summary.
+CREATE TABLE IF NOT EXISTS agent_turn_usage (
+    usage_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id          TEXT NOT NULL,
+    room_id             TEXT,
+    participant         TEXT NOT NULL,
+    runtime             TEXT NOT NULL DEFAULT '',
+    model               TEXT,
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL,
+    duration_seconds    REAL,
+    created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS agent_turn_usage_session
+    ON agent_turn_usage(session_id, usage_id);

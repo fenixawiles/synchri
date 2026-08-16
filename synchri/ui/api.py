@@ -26,12 +26,14 @@ from ..session.modes import (
     ParticipantPlan,
     Role,
     collaboration_pair,
+    default_agent_name,
     list_modes,
     plan_launch_status,
     runtime_catalog,
 )
 from ..session.permissions import PermissionSet, permission_profile, permission_profiles
 from ..session.spec import ProductSpec
+from ..storage import dao
 from ..runner.managed import ManagedRunnerRegistry
 
 Route = Callable[[dict, dict], dict]
@@ -82,6 +84,9 @@ class Api:
             ("GET", "managed"): self.managed_status,
             ("GET", "sessions"): self.sessions,
             ("GET", "session"): self.session,
+            ("POST", "session/rename"): self.rename_session,
+            ("POST", "session/delete"): self.delete_session,
+            ("POST", "package/save"): self.save_package,
             ("GET", "dashboard"): self.dashboard,
             ("GET", "contract"): self.contract,
             ("POST", "ack"): self.acknowledge,
@@ -92,9 +97,12 @@ class Api:
             ("POST", "approval"): self.approval,
             ("GET", "gates"): self.gates,
             ("POST", "gate"): self.update_gate,
+            ("POST", "gates/preview"): self.preview_gates,
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
+            ("GET", "changes/files"): self.file_changes,
             ("GET", "diff"): self.diff,
+            ("GET", "diff/file"): self.file_diff,
             ("GET", "memory"): self.memory,
             ("GET", "events"): self.events,
             ("POST", "control"): self.control,
@@ -289,17 +297,7 @@ class Api:
                 body.get("existing_worktree_path") or None,
             )
         if body.get("agents") is not None:
-            draft.set_agents(
-                [
-                    ParticipantPlan(
-                        name=a["name"],
-                        runtime=a.get("runtime", "generic"),
-                        role=a.get("role", "participant"),
-                        command=a.get("command"),
-                    )
-                    for a in body["agents"]
-                ]
-            )
+            draft.set_agents(self._plans(body["agents"]))
         for capability, decision in (body.get("permissions") or {}).items():
             draft.set_permission(capability, decision)
         if body.get("spec") is not None:
@@ -399,6 +397,18 @@ class Api:
         )
         draft.set_mode("long_horizon")
         draft.set_repository(repo_path)
+        strategy = (body.get("worktree_strategy") or "").strip()
+        if strategy:
+            # The UI always sends an explicit choice; when present it must be
+            # internally consistent so a half-migrated client can never get a
+            # worktree it did not pick. Absent = legacy default-to-new.
+            existing = (body.get("existing_worktree_path") or "").strip()
+            if strategy == "existing" and not existing:
+                raise ValidationError("choose which existing worktree to use")
+            if strategy == "new" and existing:
+                raise ValidationError("a new worktree cannot also name an existing one")
+            if strategy not in {"new", "existing"}:
+                raise ValidationError(f"unknown worktree strategy {strategy!r}")
         if "existing_worktree_path" in body:
             draft.set_worktree(existing_path=body.get("existing_worktree_path") or None)
         if body.get("agents") is not None:
@@ -463,16 +473,26 @@ class Api:
     def _plans(self, values: list[dict] | None) -> list[ParticipantPlan]:
         if not isinstance(values, list):
             raise ValidationError("add at least one agent")
-        return [
-            ParticipantPlan(
-                name=agent.get("name", "").strip(),
-                runtime=agent.get("runtime", "generic"),
-                role=agent.get("role", "participant"),
-                command=agent.get("command"),
+        # Names derive from the runtime when absent — the UI no longer asks
+        # for them — with a hyphen suffix keeping duplicates unique.
+        taken: set[str] = set()
+        plans: list[ParticipantPlan] = []
+        for agent in values:
+            if not isinstance(agent, dict):
+                continue
+            name = (agent.get("name") or "").strip()
+            if not name:
+                name = default_agent_name(agent.get("runtime", "generic"), taken)
+            taken.add(name)
+            plans.append(
+                ParticipantPlan(
+                    name=name,
+                    runtime=agent.get("runtime", "generic"),
+                    role=agent.get("role", "participant"),
+                    command=agent.get("command"),
+                )
             )
-            for agent in values
-            if isinstance(agent, dict) and agent.get("name", "").strip()
-        ]
+        return plans
 
     def _launch_payload(self, record, *, document=None) -> dict:
         """A room's setup state, including paste-ready instruction per agent."""
@@ -577,6 +597,41 @@ class Api:
     def sessions(self, query: dict, body: dict) -> dict:
         return {"sessions": [s.to_dict() for s in self.manager.list_sessions()]}
 
+    def rename_session(self, query: dict, body: dict) -> dict:
+        record = self.manager.rename_session(
+            self._session_id(query, body), body.get("name", "")
+        )
+        return {
+            "session": record.to_dict(),
+            "sessions": [s.to_dict() for s in self.manager.list_sessions()],
+        }
+
+    def delete_session(self, query: dict, body: dict) -> dict:
+        outcome = self.manager.delete_session(self._session_id(query, body))
+        return {**outcome, "sessions": [s.to_dict() for s in self.manager.list_sessions()]}
+
+    def save_package(self, query: dict, body: dict) -> dict:
+        """Write the session package into the room directory and say where.
+
+        The desktop webview cannot reliably run anchor downloads, so the
+        native path is: build once, save next to the room's other artifacts,
+        show the user the path.
+        """
+        from ..session import package as package_module
+
+        session_id = self._session_id(query, body)
+        filename, data = package_module.build(self.broker, self.manager, session_id)
+        record = self.manager.get(session_id)
+        if not record.room_id:
+            raise ValidationError("this session has no room directory to save into")
+        path = self.broker.workspace.ensure_room_dir(record.room_id) / "session-package.zip"
+        path.write_bytes(data)
+        try:
+            path.chmod(0o600)
+        except OSError:  # pragma: no cover - platform dependent
+            pass
+        return {"path": str(path), "filename": filename, "bytes": len(data)}
+
     def session(self, query: dict, body: dict) -> dict:
         return self.manager.get(self._session_id(query)).to_dict()
 
@@ -616,8 +671,12 @@ class Api:
     def conversation(self, query: dict, body: dict) -> dict:
         record = self.manager.get(self._session_id(query))
         if not record.room_id:
-            return {"messages": []}
-        return self.broker.read(record.room_id, credential=self._human(record))
+            return {"messages": [], "live_events": []}
+        payload = self.broker.read(record.room_id, credential=self._human(record))
+        payload["live_events"] = dao.list_stream_events(
+            self.broker.conn, record.room_id, limit=200
+        )
+        return payload
 
     def changelog(self, query: dict, body: dict) -> dict:
         return self.manager.final_changelog(self._session_id(query))
@@ -723,8 +782,32 @@ class Api:
         gates = self.manager.gates(session_id)
         return {"gates": [g.to_dict() for g in gates], "summary": summarize(gates)}
 
+    def preview_gates(self, query: dict, body: dict) -> dict:
+        """What gate detection would make of a brief, before anything exists."""
+        gates = extract_gates(body.get("spec") or "")
+        if len(gates) == 1 and gates[0].gate_id == "SPEC-01":
+            note = (
+                "No explicit acceptance criteria detected — the session gets one generic "
+                "SPEC-01 gate. Add 'Acceptance criteria:' bullets or AUTH-01-style ids to "
+                "track more."
+            )
+        else:
+            note = describe_gates(gates)
+        return {
+            "gates": [{"gate_id": g.gate_id, "description": g.description} for g in gates],
+            "note": note,
+        }
+
     def update_gate(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)
+        if body.get("add"):
+            added = body["add"] or {}
+            gate = Gate(
+                gate_id=str(added.get("gate_id", "")).strip().upper(),
+                description=str(added.get("description", "")).strip(),
+            )
+            self.manager.add_gate(session_id, gate)
+            return self.gates({"session": session_id}, {})
         if body.get("replace"):
             self.manager.set_gates(
                 session_id,
@@ -735,8 +818,30 @@ class Api:
             "status", "evidence", "tests", "commits", "builder_assessment",
             "reviewer_assessment", "description", "required",
         }}
+        actor = body.get("actor", "human")
+        if actor == "human" and fields.get("status") == "pass":
+            # A human marking a gate PASS is an acceptance decision. Completion
+            # demands evidence and both sign-offs, so record the acceptance as
+            # those where they are missing instead of leaving the gate in a
+            # passing-but-still-blocking state.
+            current = next(
+                (g for g in self.manager.gates(session_id) if g.gate_id == body.get("gate_id")),
+                None,
+            )
+            if current is not None:
+                has_evidence = bool(
+                    fields.get("evidence", current.evidence)
+                    or fields.get("tests", current.tests)
+                    or fields.get("commits", current.commits)
+                )
+                if not has_evidence:
+                    fields["evidence"] = ["Accepted by the user from the Gates panel"]
+                if not fields.get("builder_assessment", current.builder_assessment):
+                    fields["builder_assessment"] = "Accepted by the user"
+                if not fields.get("reviewer_assessment", current.reviewer_assessment):
+                    fields["reviewer_assessment"] = "Accepted by the user"
         gate = self.manager.update_gate(
-            session_id, body["gate_id"], actor=body.get("actor", "human"), **fields
+            session_id, body["gate_id"], actor=actor, **fields
         )
         return gate.to_dict()
 
@@ -751,6 +856,12 @@ class Api:
 
     def diff(self, query: dict, body: dict) -> dict:
         return {"diff": self.manager.diff(self._session_id(query))}
+
+    def file_diff(self, query: dict, body: dict) -> dict:
+        return self.manager.file_diff(self._session_id(query), query.get("path", ""))
+
+    def file_changes(self, query: dict, body: dict) -> dict:
+        return {"files": self.manager.file_changes(self._session_id(query))}
 
     def memory(self, query: dict, body: dict) -> dict:
         record = self.manager.get(self._session_id(query))
@@ -781,12 +892,33 @@ class Api:
             self.broker.resume_room(record.room_id, credential=credential)
             resumed = self.manager.resume(session_id)
             self.managed.resume(resumed)
+        elif action == "restart_agent":
+            participant = (body.get("participant") or "").strip()
+            plan = next((p for p in record.participants if p.name == participant), None)
+            if plan is None:
+                raise ValidationError(f"{participant!r} is not a participant in this session")
+            self.manager.set_participant_state(
+                session_id, participant, "active", "restarted by the user",
+                reset_failures=True,
+            )
+            for escalation in self.manager.open_escalations(session_id):
+                if escalation["rule"] == "agent_failed":
+                    self.manager.resolve_escalation(
+                        escalation["escalation_id"], f"{participant} restarted by the user"
+                    )
+            refreshed = self.manager.get(session_id)
+            if refreshed.status == "active":
+                self.managed.restart(refreshed)
         elif action == "stop":
-            self.managed.cancel(session_id, reason="Stopping the session.")
+            # Durable state first: once the session row says stopped, the
+            # cancel below is cleanup, not the thing the user is waiting on.
             self.manager.stop(session_id, body.get("reason") or "stopped by the user")
+            self.managed.cancel(session_id, reason="Stopping the session.")
         elif action == "complete":
+            # Validate and complete BEFORE touching the agents: a refused
+            # completion (unsatisfied gates) must leave the team running.
+            self.manager.complete(session_id, force=bool(body.get("force")))
             self.managed.cancel(session_id, reason="Completing the session.")
-            self.manager.complete(session_id)
         elif action == "remove":
             self.broker.remove_participant(
                 record.room_id, body["participant"], credential=credential

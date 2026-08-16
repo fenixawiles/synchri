@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
@@ -193,6 +196,104 @@ def test_missing_executable_is_reported_not_raised():
     result = agent.invoke("go")
     assert result.ok is False
     assert "could not run the agent" in result.stderr
+
+
+# ----------------------------------------------------------------------
+# ending the whole process tree
+# ----------------------------------------------------------------------
+
+#: A stand-in for a wrapper CLI: it forks a long-lived tool process (the
+#: grandchild), records that pid, and keeps running itself.
+_FORKER = """import subprocess, sys, time
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
+open(sys.argv[1], 'w').write(str(child.pid))
+time.sleep(120)
+"""
+
+posix_only = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+
+
+def _forker_agent(tmp_path, *, timeout):
+    script = tmp_path / "forker.py"
+    script.write_text(_FORKER, encoding="utf-8")
+    pid_file = tmp_path / "grandchild.pid"
+    agent = AgentCommand.parse(
+        f"x={sys.executable} {script} {pid_file} {{prompt}}", timeout=timeout
+    )
+    return agent, pid_file
+
+
+def _wait_until(predicate, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def _process_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:  # pragma: no cover - other-user pid reuse
+        return False
+    return False
+
+
+@posix_only
+def test_cancel_kills_the_agents_grandchildren(tmp_path):
+    agent, pid_file = _forker_agent(tmp_path, timeout=60)
+    cancel = threading.Event()
+    outcome = {}
+    runner = threading.Thread(
+        target=lambda: outcome.setdefault("result", agent.invoke("go", cancel_event=cancel))
+    )
+    runner.start()
+    assert _wait_until(pid_file.exists), "the fake agent never spawned its grandchild"
+    grandchild = int(pid_file.read_text())
+    cancel.set()
+    runner.join(timeout=20)
+    assert not runner.is_alive()
+
+    result = outcome["result"]
+    assert result.cancelled is True
+    assert result.returncode is not None, "the agent process must be reaped, not left a zombie"
+    assert _wait_until(lambda: _process_gone(grandchild), timeout=5), (
+        "cancelling must end the whole process group, not just the wrapper CLI"
+    )
+
+
+@posix_only
+def test_timeout_kills_the_agents_grandchildren(tmp_path):
+    agent, pid_file = _forker_agent(tmp_path, timeout=1.0)
+    result = agent.invoke("go")
+    assert result.timed_out is True
+    assert result.returncode is not None
+    assert pid_file.exists()
+    grandchild = int(pid_file.read_text())
+    assert _wait_until(lambda: _process_gone(grandchild), timeout=5)
+
+
+@posix_only
+def test_registry_cancel_signals_tracked_groups_without_a_worker(workspace):
+    """Stop must still kill provider processes when the worker entry is gone."""
+    from synchri.runner.managed import ManagedRunnerRegistry
+
+    registry = ManagedRunnerRegistry(workspace)
+    victim = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
+    )
+    try:
+        registry._track_pid("sess", victim.pid)
+        status = registry.cancel("sess", reason="Stopping the session.")
+        assert status["phase"] == "stopping"
+        victim.wait(timeout=10)
+        assert victim.returncode is not None
+    finally:
+        if victim.poll() is None:  # pragma: no cover - cleanup on failure
+            victim.kill()
 
 
 # ----------------------------------------------------------------------
@@ -397,6 +498,74 @@ def test_a_failing_agent_reports_into_the_room_and_releases_the_floor(broker, tm
     assert failure["response_status"] == "failed"
     assert "exit 3" in failure["content"] and "boom" in failure["content"]
     assert room.active_speaker() is None, "a crashed agent must not hold the floor forever"
+
+
+def test_repeated_failures_trip_the_breaker_and_name_the_agent(broker, tmp_path):
+    """A crashing agent must not receive the floor forever."""
+    room = make_room(broker, "claude", "codex")
+    room.send(
+        "human",
+        "Prioritize auth.",
+        target="claude",
+        metadata={"human_direction": {"lead": "claude", "reviewer": "codex"}},
+    )
+    events = []
+    conductor = conductor_for(
+        room,
+        tmp_path,
+        {
+            "claude": "sys.stderr.write('provider failed')\nsys.exit(3)\n",
+            "codex": "print('Builder, please retry.')\nprint('SYNCHRI-TO: claude')\n",
+        },
+        on_event=lambda event, payload: events.append((event, payload)),
+    )
+
+    report = conductor.run(max_turns=10)
+
+    assert report.reason == "agent_failed"
+    assert report.failed_participant == "claude"
+    failed_turns = [t for t in report.turns if t.get("status") == "failed"]
+    assert len(failed_turns) == 2, report.turns
+    assert any("failed 2 consecutive" in warning for warning in report.warnings)
+    returned = [payload for event, payload in events if event == "agent.returned"]
+    assert returned and returned[-1]["returncode"] == 3
+
+
+def test_a_success_resets_the_breaker_count(broker, tmp_path):
+    room = make_room(broker, "claude", "codex")
+    room.send("claude", "review", target="codex", message_type="task")
+    conductor = conductor_for(room, tmp_path, {"codex": "print('All good.')\n"})
+    conductor._failures["codex"] = 1
+    report = conductor.run(max_turns=2)
+    assert report.reason != "agent_failed"
+    assert conductor._failures["codex"] == 0
+
+
+def test_low_signal_warns_after_two_quiet_streamed_turns(broker, tmp_path):
+    from synchri.runner.agent_command import AgentResult
+
+    room = make_room(broker, "claude", "codex")
+    events = []
+    conductor = conductor_for(
+        room, tmp_path, {"claude": "print('hi')\n", "codex": "print('hi')\n"},
+        on_event=lambda event, payload: events.append((event, payload)),
+    )
+    quiet = AgentResult("claude", "I cannot help with that.", "", 0, tool_events=0)
+    body, directives = parse_directives(quiet.stdout)
+
+    assert conductor._note_low_signal("claude", quiet, body, directives) is True
+    assert events == [], "the first quiet turn is not worth an alarm"
+    assert conductor._note_low_signal("claude", quiet, body, directives) is True
+    assert events[-1][0] == "agent.low_signal"
+    assert events[-1][1]["consecutive"] == 2
+
+    busy = AgentResult("claude", "Refactored the module as requested.", "", 0, tool_events=4)
+    assert conductor._note_low_signal("claude", busy, body, directives) is False
+    assert conductor._low_signal["claude"] == 0
+
+    # Non-streaming runtimes never produce the signal.
+    plain = AgentResult("claude", "ok", "", 0, tool_events=None)
+    assert conductor._note_low_signal("claude", plain, body, directives) is False
 
 
 def test_conductor_stops_at_the_autonomy_limit_instead_of_looping(broker, tmp_path):

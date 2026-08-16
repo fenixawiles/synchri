@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from synchri.broker import Broker
-from synchri.errors import NotFoundError, StateError, ValidationError
+from synchri.errors import ConflictError, NotFoundError, StateError, ValidationError
 from synchri.session import presets as presets_module
 from synchri.session import worktree as worktree_module
 from synchri.session.contract import ACK_TOKEN, parse_acknowledgment
@@ -914,6 +914,326 @@ def test_stopping_a_session_also_stops_its_room(manager, repo, agents):
     assert room["room"]["status"] == "stopped"
 
 
+def test_file_diff_shows_uncommitted_and_untracked_work(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+
+    (tree / "README.md").write_text("hi\nmore\n", encoding="utf-8")
+    changed = manager.file_diff(record.session_id, "README.md")
+    assert "+more" in changed["diff"]
+    assert changed["insertions"] == 1 and changed["deletions"] == 0
+
+    (tree / "notes.txt").write_text("fresh\n", encoding="utf-8")
+    fresh = manager.file_diff(record.session_id, "notes.txt")
+    assert "+fresh" in fresh["diff"], "untracked files must still render as a new-file diff"
+    assert fresh["insertions"] == 1
+
+    with pytest.raises(ValidationError):
+        manager.file_diff(record.session_id, "../outside.txt")
+    with pytest.raises(ValidationError):
+        manager.file_diff(record.session_id, "")
+
+
+def test_default_agent_names_are_identity_safe():
+    from synchri.ids import NAME_PATTERN
+    from synchri.session.modes import default_agent_name
+
+    taken: set[str] = set()
+    names = []
+    for runtime in ("codex", "codex", "claude_code", "generic", "unknown-runtime"):
+        name = default_agent_name(runtime, taken)
+        taken.add(name)
+        names.append(name)
+    assert names == ["Codex", "Codex-2", "Claude", "Agent", "Agent-2"]
+    assert all(NAME_PATTERN.match(name) for name in names), "names feed credential paths"
+
+
+def test_sessions_can_be_renamed(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    renamed = manager.rename_session(record.session_id, "  Auth hardening  ")
+    assert renamed.name == "Auth hardening"
+    with pytest.raises(ValidationError):
+        manager.rename_session(record.session_id, "   ")
+
+
+def test_delete_refuses_a_running_session(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    with pytest.raises(StateError) as exc:
+        manager.delete_session(record.session_id)
+    assert exc.value.code == "session_not_finished"
+
+
+def test_delete_keeps_a_dirty_worktree(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.stop(record.session_id)
+    tree = Path(record.worktree_path)
+    (tree / "wip.txt").write_text("wip\n", encoding="utf-8")
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is False
+    assert "uncommitted" in outcome["worktree_note"]
+    assert tree.exists(), "unfinished work must never be deleted"
+    with pytest.raises(NotFoundError):
+        manager.get(record.session_id)
+
+
+def test_delete_keeps_an_unpushed_worktree(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.stop(record.session_id)
+    tree = Path(record.worktree_path)
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is False
+    assert "never pushed" in outcome["worktree_note"]
+    assert tree.exists()
+
+
+def test_delete_removes_a_fully_pushed_worktree_and_every_record(manager, repo, agents, tmp_path):
+    from synchri.storage import dao
+
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+
+    record = make_session(manager, repo, agents)
+    room_id = record.room_id
+    tree = Path(record.worktree_path)
+    branch = record.worktree_branch
+    _git(tree, "push", "-q", "-u", "origin", branch)
+    dao.insert_turn_usage(
+        manager.conn, session_id=record.session_id, room_id=room_id,
+        participant="claude", input_tokens=5,
+    )
+    manager.stop(record.session_id)
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is True
+    assert not tree.exists()
+    # The remote branch — the git history — is untouched.
+    assert branch in _git(remote, "for-each-ref", "refs/heads")
+    with pytest.raises(NotFoundError):
+        manager.get(record.session_id)
+    assert dao.usage_for_session(manager.conn, record.session_id) == []
+    row = manager.conn.execute(
+        "SELECT COUNT(*) AS c FROM rooms WHERE room_id = ?", (room_id,)
+    ).fetchone()
+    assert row["c"] == 0
+    assert not manager.broker.workspace.room_dir(room_id).exists()
+
+
+def test_delete_never_removes_a_user_selected_worktree(manager, repo, agents, tmp_path):
+    outside = tmp_path / "mytree"
+    _git(repo, "worktree", "add", "-q", str(outside), "-b", "user-branch")
+    record = make_session(manager, repo, agents, existing_worktree_path=str(outside))
+    manager.stop(record.session_id)
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is False
+    assert "selected it yourself" in outcome["worktree_note"]
+    assert outside.exists()
+
+
+def test_file_changes_lists_each_file_with_its_own_diff(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+
+    (tree / "committed.txt").write_text("landed\n", encoding="utf-8")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-qm", "land a file")
+    (tree / "README.md").write_text("hi\nworking tree edit\n", encoding="utf-8")
+    (tree / "fresh.txt").write_text("brand new\n", encoding="utf-8")
+
+    files = {entry["path"]: entry for entry in manager.file_changes(record.session_id)}
+    assert files["committed.txt"]["status"] == "added"
+    assert files["committed.txt"]["uncommitted"] is False
+    assert "+landed" in files["committed.txt"]["diff"]
+    assert files["README.md"]["uncommitted"] is True
+    assert "+working tree edit" in files["README.md"]["diff"]
+    assert files["fresh.txt"]["status"] == "untracked"
+    assert files["fresh.txt"]["insertions"] == 1
+    assert "+brand new" in files["fresh.txt"]["diff"]
+
+    summary = manager.changes(record.session_id)
+    assert summary["recent"][0]["full_sha"] and len(summary["recent"][0]["full_sha"]) == 40
+
+
+def test_change_inspection_keeps_literal_paths_with_spaces_and_arrows(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+    literal_name = "new file -> final.txt"
+    (tree / literal_name).write_text("present\n", encoding="utf-8")
+
+    summary = manager.changes(record.session_id)
+    files = {entry["path"]: entry for entry in manager.file_changes(record.session_id)}
+
+    assert literal_name in summary["dirty_files"]
+    assert files[literal_name]["status"] == "untracked"
+    assert "+present" in files[literal_name]["diff"]
+
+
+def test_session_package_includes_staged_unstaged_and_untracked_work(manager, repo, agents):
+    import io
+    import zipfile
+
+    from synchri.session import package as package_module
+
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+    (tree / "README.md").write_text("hi\nunstaged finish\n", encoding="utf-8")
+    (tree / "staged.txt").write_text("staged finish\n", encoding="utf-8")
+    _git(tree, "add", "staged.txt")
+    (tree / "untracked file.txt").write_text("untracked finish\n", encoding="utf-8")
+    manager.set_gates(record.session_id, [
+        Gate(
+            "DONE-01", "deliver the change", status="pass", evidence=["reviewed"],
+            builder_assessment="implemented", reviewer_assessment="verified independently",
+        )
+    ])
+    manager.complete(record.session_id)
+
+    _filename, data = package_module.build(manager.broker, manager, record.session_id)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        patch = archive.read("diff.patch").decode("utf-8")
+
+    assert "+unstaged finish" in patch
+    assert "+staged finish" in patch
+    assert "+untracked finish" in patch
+    assert "untracked file.txt" in patch
+
+
+def test_participant_runtime_states_are_durable(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    assert manager.participant_states(record.session_id)["claude"]["state"] is None
+
+    manager.set_participant_state(record.session_id, "claude", "active", "working")
+    manager.record_participant_failure(record.session_id, "claude", "failed", "exit 1")
+    manager.record_participant_failure(record.session_id, "claude", "failed", "exit 1")
+    state = manager.participant_states(record.session_id)["claude"]
+    assert state["state"] == "failed"
+    assert state["failures"] == 2
+    assert state["detail"] == "exit 1"
+
+    manager.set_participant_state(
+        record.session_id, "claude", "active", None, reset_failures=True
+    )
+    state = manager.participant_states(record.session_id)["claude"]
+    assert state["state"] == "active" and state["failures"] == 0
+
+    dashboard = manager.dashboard(record.session_id)
+    assert dashboard["participant_states"]["claude"]["state"] == "active"
+
+    manager.stop(record.session_id)
+    states = manager.participant_states(record.session_id)
+    assert all(s["state"] == "stopped" for s in states.values())
+
+
+def test_force_complete_waives_blocking_gates_and_records_the_override(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [
+        Gate("AUTH-01", "login works"),
+        Gate("API-01", "crud works", status="pass", evidence=["tests/test_api.py"],
+             builder_assessment="implemented", reviewer_assessment="verified independently"),
+    ])
+
+    with pytest.raises(StateError) as exc:
+        manager.complete(record.session_id)
+    assert exc.value.code == "gates_unsatisfied"
+    assert not manager.get(record.session_id).is_terminal
+
+    completed = manager.complete(record.session_id, force=True)
+    assert completed.status == SessionStatus.COMPLETE.value
+    assert completed.ended_reason == "completed by the user (1 gate waived)"
+
+    gates = {gate.gate_id: gate for gate in manager.gates(record.session_id)}
+    assert gates["AUTH-01"].status == "waived"
+    assert "Waived by the user at completion" in gates["AUTH-01"].evidence
+    # A gate that was genuinely satisfied keeps its verified status.
+    assert gates["API-01"].status == "pass"
+
+    changelog = manager.final_changelog(record.session_id)
+    assert "AUTH-01" in changelog["markdown"]
+    assert "waived" in changelog["markdown"].lower()
+
+
+def test_force_complete_rolls_back_waivers_when_changelog_cannot_be_written(
+    manager, repo, agents, monkeypatch
+):
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [Gate("AUTH-01", "login works")])
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("synchri.session.manager.write_private", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        manager.complete(record.session_id, force=True)
+
+    assert manager.get(record.session_id).is_terminal is False
+    gate = manager.gates(record.session_id)[0]
+    assert gate.status == "pending"
+    assert gate.evidence == []
+
+
+def test_racing_stop_and_complete_finish_the_session_exactly_once(manager, repo, agents, workspace):
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [
+        Gate("AUTH-01", "login works", status="pass", evidence=["tests/test_auth.py"],
+             builder_assessment="implemented", reviewer_assessment="verified"),
+        Gate("API-01", "crud works", status="pass", evidence=["tests/test_api.py"],
+             builder_assessment="implemented", reviewer_assessment="verified"),
+    ])
+
+    other_broker = Broker(workspace)
+    other_manager = SessionManager(other_broker)
+    barrier = threading.Barrier(2)
+    outcomes: dict[str, object] = {}
+
+    def run(label, action):
+        barrier.wait()
+        try:
+            outcomes[label] = action()
+        except StateError as error:
+            outcomes[label] = error
+
+    threads = [
+        threading.Thread(target=run, args=("stop", lambda: manager.stop(record.session_id))),
+        threading.Thread(
+            target=run, args=("complete", lambda: other_manager.complete(record.session_id))
+        ),
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+    finally:
+        other_broker.close()
+
+    final = manager.get(record.session_id)
+    assert final.is_terminal
+
+    # The terminal transition happened exactly once, whichever caller won.
+    ended = [
+        event
+        for event in manager.broker.events(
+            record.room_id, credential=manager._human_credential(record)
+        )["events"]
+        if event["event_type"] == "session.ended"
+    ]
+    assert len(ended) == 1
+
+    changelog_path = manager.broker.workspace.final_changelog_path(record.room_id)
+    if final.status == SessionStatus.COMPLETE.value:
+        assert changelog_path.exists()
+        assert not isinstance(outcomes["stop"], Exception)
+    else:
+        assert final.status == SessionStatus.STOPPED.value
+        assert not changelog_path.exists()
+        loser = outcomes["complete"]
+        assert isinstance(loser, StateError)
+        assert loser.code == "session_finished"
+
+
 def test_unverified_is_not_a_pass(manager, repo, agents):
     record = make_session(manager, repo, agents)
     manager.set_gates(record.session_id, [Gate("AUTH-01", "login works")])
@@ -921,6 +1241,44 @@ def test_unverified_is_not_a_pass(manager, repo, agents):
     with pytest.raises(StateError):
         manager.complete(record.session_id)
     assert manager.handoff_report(record.session_id)["gates"]["unverified"] == ["AUTH-01"]
+
+
+def test_plain_text_acceptance_sections_are_detected(manager, repo, agents):
+    # 'Acceptance criteria:' without a markdown heading used to fall through
+    # to the generic SPEC-01 gate.
+    spec = "Ship the auth flow.\n\nAcceptance criteria:\n- login works\n- logout works\n\nThanks!"
+    record = make_session(manager, repo, agents, spec=ProductSpec(text=spec))
+    gates = manager.gates(record.session_id)
+    assert [(gate.gate_id, gate.description) for gate in gates] == [
+        ("GATE-01", "login works"),
+        ("GATE-02", "logout works"),
+    ]
+
+
+def test_markdown_acceptance_sections_tolerate_interleaved_prose():
+    from synchri.session.extract import extract_gates
+
+    spec = "# Task\n\n## Acceptance\n- one\n\nprose inside the section\n- two\n\n## Next\n- ignored"
+    assert [gate.description for gate in extract_gates(spec)] == ["one", "two"]
+
+
+def test_plain_acceptance_sections_end_at_the_first_prose_line():
+    from synchri.session.extract import extract_gates
+
+    spec = "Fix the bug.\n\nacceptance criteria\n- crash gone\n- test added\nSome closing prose\n- not a gate"
+    assert [gate.description for gate in extract_gates(spec)] == ["crash gone", "test added"]
+
+
+def test_added_gates_join_without_touching_their_neighbors(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.update_gate(record.session_id, "AUTH-01", status="pass",
+                        evidence=["tests/test_auth.py"])
+    manager.add_gate(record.session_id, Gate("PERF-01", "p95 under 200ms"))
+    gates = {gate.gate_id: gate for gate in manager.gates(record.session_id)}
+    assert gates["PERF-01"].status == "pending"
+    assert gates["AUTH-01"].evidence == ["tests/test_auth.py"], "existing evidence must survive"
+    with pytest.raises(ConflictError):
+        manager.add_gate(record.session_id, Gate("PERF-01", "duplicate"))
 
 
 def test_plain_text_spec_gets_one_honest_generic_gate(manager, repo, agents):
@@ -1658,7 +2016,9 @@ def test_github_repository_listing_uses_app_installations(workspace, monkeypatch
     assert "/user/installations/41/repositories" in calls[1][0]
 
 
-def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path, monkeypatch):
+def test_quick_clone_puts_a_github_project_in_the_desktop_folder(
+    repo, tmp_path, monkeypatch, workspace
+):
     from synchri.session import discovery
 
     observed = []
@@ -1670,14 +2030,16 @@ def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path,
     monkeypatch.setattr(discovery, "_clone", fake_clone)
     desktop = tmp_path / "Desktop" / "Synchri"
     result = discovery.clone_github_repository(
-        "fenixawiles/synchri", destination_root=desktop
+        "fenixawiles/synchri", destination_root=desktop, workspace=workspace
     )
 
     expected = desktop / "fenixawiles-synchri"
     assert observed == [("https://github.com/fenixawiles/synchri.git", expected)]
     assert result["path"] == str(expected.resolve()) and result["cloned"] is True
     with pytest.raises(ValidationError, match="already exists"):
-        discovery.clone_github_repository("fenixawiles/synchri", destination_root=desktop)
+        discovery.clone_github_repository(
+            "fenixawiles/synchri", destination_root=desktop, workspace=workspace
+        )
 
 
 def test_resolve_github_repository_reuses_synchris_existing_checkout(repo, tmp_path, monkeypatch):

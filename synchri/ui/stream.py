@@ -49,6 +49,10 @@ class Fingerprint:
     activities: tuple
     activity_entries: tuple
     drafts: tuple
+    #: Newest agent_stream_events id for the watched room — one indexed MAX().
+    stream: int
+    #: Per-agent runtime supervision state for the watched session.
+    participants: tuple
 
     @classmethod
     def take(cls, manager: SessionManager, session_id: str | None) -> "Fingerprint":
@@ -60,6 +64,8 @@ class Fingerprint:
         gates: tuple = ()
         activities: tuple = ()
         activity_entries: tuple = ()
+        stream = 0
+        participants: tuple = ()
         if session_id:
             try:
                 record = manager.get(session_id, sweep=False)
@@ -79,12 +85,19 @@ class Fingerprint:
                     (item["entry_id"], item["summary"], item["expires_at"])
                     for item in dao.list_live_activity_entries(manager.conn, record.room_id)
                 )
+                stream = dao.max_stream_event_id(manager.conn, record.room_id)
             if record:
                 gates = tuple(
                     (gate.gate_id, gate.status, tuple(gate.evidence), tuple(gate.tests),
                      tuple(gate.commits), gate.builder_assessment, gate.reviewer_assessment,
                      gate.updated_at)
                     for gate in manager.gates(record.session_id)
+                )
+                participants = tuple(
+                    sorted(
+                        (name, state["state"], state["failures"], state["updated_at"])
+                        for name, state in manager.participant_states(record.session_id).items()
+                    )
                 )
         return cls(
             sessions=sessions,
@@ -93,6 +106,8 @@ class Fingerprint:
             activities=activities,
             activity_entries=activity_entries,
             drafts=tuple(sorted(drafts_module.versions(manager.conn).items())),
+            stream=stream,
+            participants=participants,
         )
 
 
@@ -137,6 +152,10 @@ def events(workspace: Workspace, session_id: str | None, *, stop=lambda: False):
                 if current.activities != previous.activities and "conversation" not in changed:
                     changed.append("conversation")
                 if current.activity_entries != previous.activity_entries and "conversation" not in changed:
+                    changed.append("conversation")
+                if current.stream != previous.stream and "conversation" not in changed:
+                    changed.append("conversation")
+                if current.participants != previous.participants and "conversation" not in changed:
                     changed.append("conversation")
                 if current.drafts != previous.drafts:
                     changed.append("drafts")

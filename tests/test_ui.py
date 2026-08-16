@@ -396,6 +396,20 @@ def test_completed_session_is_read_only_and_exposes_its_changelog():
     assert "Session complete — the final changelog is available in the rail." in source
 
 
+def test_the_chat_input_is_a_wrapping_composer():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '<textarea id="mm"' in source
+    assert '<input id="mm"' not in source
+    assert 'event.key === "Enter" && !event.shiftKey && !event.isComposing' in source
+    assert "Shift+Enter for a new line" in source
+    assert "Math.min(input.scrollHeight, 160)" in source
+    # The draft/caret rescue across SSE repaints survives the element swap.
+    assert "const draftValue = previousInput?.value" in source
+    assert "input.setSelectionRange(caretStart, caretEnd)" in source
+
+
 def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
     from synchri.ui.api import Api
 
@@ -522,6 +536,45 @@ def test_quick_start_uses_the_saved_workflow_instead_of_reasking_for_agents(ui, 
         "repo_path": str(repo), "goal": "Ship the requested change.", "preset": "Saved pair",
     })
     assert [agent["name"] for agent in result["launch"]["agents"]] == ["builder", "reviewer"]
+
+
+def test_stop_interrupts_the_agreement_phase(ui, repo, tmp_path):
+    """Stop during attach/agree must end the run promptly, not after the CLI timeout."""
+    import sys
+
+    agent = tmp_path / "slow_agree.py"
+    agent.write_text("import time\ntime.sleep(120)\n", encoding="utf-8")
+    command = f"{sys.executable} {agent} {{prompt}}"
+    started = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Inspect the repository.",
+        "agents": [{
+            "name": "builder", "runtime": "generic", "role": "primary_builder",
+            "command": command,
+        }, {
+            "name": "reviewer", "runtime": "generic", "role": "adversarial_reviewer",
+            "command": command,
+        }],
+    })
+    session_id = started["session"]["session_id"]
+    call(ui, "/api/managed/start", {"session": session_id})
+    for _ in range(300):
+        managed = call(ui, f"/api/managed?session={session_id}")["managed"]
+        if managed["phase"] == "agreeing":
+            break
+        time.sleep(0.03)
+    assert managed["phase"] == "agreeing", managed
+
+    call(ui, "/api/control", {"session": session_id, "action": "stop"})
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        managed = call(ui, f"/api/managed?session={session_id}")["managed"]
+        if managed["phase"] == "stopped" and not managed["alive"]:
+            break
+        time.sleep(0.05)
+    assert managed["phase"] == "stopped", managed
+    assert managed["reason"] == "cancelled"
+    assert call(ui, f"/api/session?session={session_id}")["status"] == "stopped"
 
 
 def test_managed_start_attaches_agrees_and_begins_without_pasted_prompts(ui, repo, tmp_path):
@@ -763,6 +816,75 @@ def test_the_human_can_speak_from_the_ui(ui, repo):
     assert conversation["messages"][-1]["sender"] == "human"
 
 
+def test_file_diff_endpoint_serves_live_per_file_diffs(ui, repo):
+    from pathlib import Path
+
+    session_id = _active(ui, repo)
+    worktree = call(ui, f"/api/session?session={session_id}")["worktree"]["path"]
+    Path(worktree, "README.md").write_text("hi\nlive edit\n", encoding="utf-8")
+
+    r = call(ui, f"/api/diff/file?session={session_id}&path=README.md")
+    assert "+live edit" in r["diff"]
+    assert r["insertions"] == 1 and r["deletions"] == 0
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, f"/api/diff/file?session={session_id}&path=..%2Fsecrets.txt")
+    assert exc.value.code == 400
+
+
+def test_changes_files_endpoint_lists_per_file_cards(ui, repo):
+    from pathlib import Path
+
+    session_id = _active(ui, repo)
+    worktree = call(ui, f"/api/session?session={session_id}")["worktree"]["path"]
+    Path(worktree, "README.md").write_text("hi\nedited\n", encoding="utf-8")
+    files = call(ui, f"/api/changes/files?session={session_id}")["files"]
+    assert files and files[0]["path"] == "README.md"
+    assert files[0]["uncommitted"] is True
+    assert "+edited" in files[0]["diff"]
+
+
+def test_commit_ids_link_to_github_when_the_remote_is_github():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "function commitUrl(" in source
+    assert "/commit/" in source
+    assert "data-commit-url" in source
+    assert "<th>Date</th>" in source
+    # Non-GitHub remotes fall back to plain text, never to a broken link.
+    assert 'if (!/^https:\\/\\/github\\.com\\/[^/]+\\/[^/]+$/.test(cleaned)) return null;' in source
+
+
+def test_the_chat_renders_a_live_feed_with_file_cards():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "function renderLiveFeed(" in source
+    assert '<details class="file-card"' in source
+    assert "diff/file?session=" in source
+    assert "function clampBlock(" in source
+    assert "S.openFileCards" in source
+    # Non-streaming runtimes keep the cooperative activity note as fallback.
+    assert "function renderActivityNote(" in source
+
+
+def test_conversation_carries_the_live_event_tail(ui, repo):
+    from synchri.storage import dao
+
+    session_id = _active(ui, repo)
+    room_id = call(ui, f"/api/session?session={session_id}")["room_id"]
+    dao.insert_stream_event(
+        ui["broker"].conn, room_id, session_id=session_id, participant="claude",
+        invoke_key="inv-1", kind="thinking", title="Reasoning",
+        detail="Weighing the options.", payload={"n": 1},
+    )
+    conversation = call(ui, f"/api/conversation?session={session_id}")
+    assert conversation["live_events"][-1]["kind"] == "thinking"
+    assert conversation["live_events"][-1]["participant"] == "claude"
+    assert conversation["live_events"][-1]["payload"] == {"n": 1}
+
+
 def test_human_reply_returns_to_the_agent_waiting_on_permission(ui, repo):
     session_id, credentials = _active_with_credentials(ui, repo)
     session = call(ui, f"/api/session?session={session_id}")
@@ -902,13 +1024,181 @@ def test_memory_and_raw_tabs_expose_underlying_state(ui, repo):
     assert "session.created" in types and "session.activated" in types
 
 
+def test_gate_preview_reports_what_the_brief_will_produce(ui):
+    r = call(ui, "/api/gates/preview", {"spec": "Acceptance criteria:\n- login works\n- logout works"})
+    assert [g["gate_id"] for g in r["gates"]] == ["GATE-01", "GATE-02"]
+    assert "2" in r["note"]
+
+    fallback = call(ui, "/api/gates/preview", {"spec": "Make it nicer."})
+    assert [g["gate_id"] for g in fallback["gates"]] == ["SPEC-01"]
+    assert "No explicit acceptance criteria" in fallback["note"]
+
+
+def test_gates_can_be_added_from_the_gates_panel(ui, repo):
+    session_id = _active(ui, repo)
+    gates = call(ui, "/api/gate", {"session": session_id,
+                                   "add": {"gate_id": "perf-01", "description": "p95 under 200ms"}})
+    ids = [g["gate_id"] for g in gates["gates"]]
+    assert "PERF-01" in ids
+    assert "AUTH-01" in ids, "adding must not wipe the existing gates"
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/gate", {"session": session_id,
+                               "add": {"gate_id": "PERF-01", "description": "duplicate"}})
+    assert exc.value.code == 400
+
+
+def test_quick_start_validates_the_worktree_strategy(ui, repo):
+    base = {
+        "repo_path": str(repo),
+        "goal": "Do the thing.",
+        "agents": [
+            {"name": "a", "runtime": "generic", "role": "primary_builder", "command": "true {prompt}"},
+            {"name": "b", "runtime": "generic", "role": "adversarial_reviewer", "command": "true {prompt}"},
+        ],
+    }
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/quick-start", {**base, "worktree_strategy": "existing"})
+    assert "existing worktree" in json.loads(exc.value.read())["error"]["message"]
+
+    with pytest.raises(urllib.error.HTTPError):
+        call(ui, "/api/quick-start", {**base, "worktree_strategy": "new",
+                                      "existing_worktree_path": "/tmp/somewhere"})
+
+    started = call(ui, "/api/quick-start", {**base, "worktree_strategy": "new"})
+    assert started["session"]["session_id"]
+
+
+def test_agent_names_derive_from_the_runtime_selector(ui):
+    result = call(ui, "/api/draft", {"draft": "naming", "agents": [
+        {"runtime": "codex", "role": "primary_builder"},
+        {"runtime": "codex", "role": "adversarial_reviewer"},
+        {"runtime": "claude_code", "role": "verifier"},
+    ]})
+    assert [agent["name"] for agent in result["draft"]["agents"]] == ["Codex", "Codex-2", "Claude"]
+
+
+def test_the_updater_rests_on_check_for_updates():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'button.textContent = "All up to date!";' in source
+    assert "· Up to date" not in source
+    # Startup checks are silent and once per app load; only an actionable
+    # outcome (an available update) may replace the resting state.
+    assert "S.updateChecked" in source
+    assert "checkForUpdate({silent:true})" in source
+    assert '["available", "move_to_applications"].includes(result.status) ? result : null' in source
+    assert "S.updateRevert = window.setTimeout" in source
+
+
+def test_every_theme_defines_the_complete_token_set():
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+
+    def tokens(block):
+        return set(re.findall(r"--[a-z0-9-]+(?=\s*:)", block))
+
+    root = re.search(r"\n:root\{(.*?)\n\}", source, re.S)
+    themed = tokens(root.group(1)) - {"--radius", "--radius-s", "--sans", "--mono"}
+    themes = dict(re.findall(r':root\[data-theme="([a-z]+)"\]\{(.*?)\n\}', source, re.S))
+    assert set(themes) == {
+        "daylight", "midnight", "sage",
+        "ember", "copper", "solar", "harbor", "iris", "orchid",
+    }
+    for name, block in themes.items():
+        missing = themed - tokens(block)
+        assert not missing, f"theme {name} is missing tokens: {sorted(missing)}"
+        assert "color-scheme" in block, f"theme {name} must set color-scheme"
+
+    # The System-follows-OS-light block must stay byte-identical to Daylight.
+    system_light = re.search(
+        r"@media \(prefers-color-scheme:light\)\{:root:not\(\[data-theme\]\)\{(.*?)\n\}\}",
+        source, re.S,
+    )
+    assert system_light is not None
+    assert system_light.group(1).strip() == themes["daylight"].strip()
+
+    # Every palette is offered in the picker.
+    for key in ("terminal", "midnight", "ember", "copper", "orchid",
+                "daylight", "sage", "solar", "harbor", "iris"):
+        assert f'{{key: "{key}"' in source
+
+
+def test_home_leads_with_workflows_and_keeps_sessions_compact():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '<button class="primary" id="new-workflow">+ New workflow</button>' in source
+    assert 'class="wf-grid"' in source
+    assert "Recent sessions" in source
+    assert "S.showAllSessions ? list : list.slice(0, 6)" in source
+    assert "Show all ${list.length} sessions" in source
+
+
+def test_permission_profiles_show_their_selected_state():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'class="choice ${on ? "on" : ""}" data-profile=' in source
+    assert "function inferPermissionProfile(" in source
+    assert "S.workflowProfile = profile.key;" in source
+    # Fine-tuning any capability clears the named-profile highlight.
+    assert "S.workflowProfile = null;" in source
+    assert ".choice:active{transform:translateY(1px)}" in source
+
+
+def test_the_workflow_editor_has_no_manual_name_field():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'placeholder="agent name"' not in source
+    assert "runs as ${esc(agent.name)}" in source
+    assert "const deriveNames" in source
+
+
+def test_worktree_choice_is_an_explicit_selection():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'data-workspace="new"' in source
+    assert "workspace_choice: null" in source
+    assert "choose a workspace" in source
+    assert "worktree_strategy:q.workspace_choice" in source
+    # The old buried default-to-new select is gone.
+    assert "quick-worktree" not in source
+
+
 def test_gates_can_be_updated_from_the_ui(ui, repo):
     session_id = _active(ui, repo)
     call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass",
                            "evidence": ["tests/test_auth.py::test_login"]})
     gates = call(ui, f"/api/gates?session={session_id}")
     assert gates["gates"][0]["status"] == "pass"
-    assert "AUTH-01 has no builder sign-off" in gates["summary"]["blockers"]
+    # A human marking a gate PASS is an acceptance decision: the missing
+    # sign-offs are recorded as the user's own, so the gate stops blocking.
+    assert gates["gates"][0]["builder_assessment"] == "Accepted by the user"
+    assert gates["gates"][0]["reviewer_assessment"] == "Accepted by the user"
+    assert gates["gates"][0]["evidence"] == ["tests/test_auth.py::test_login"]
+    assert gates["summary"]["blockers"] == []
+
+
+def test_human_pass_with_no_evidence_records_the_acceptance(ui, repo):
+    session_id = _active(ui, repo)
+    call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass"})
+    gates = call(ui, f"/api/gates?session={session_id}")
+    assert gates["gates"][0]["evidence"] == ["Accepted by the user from the Gates panel"]
+    assert gates["summary"]["complete"] is True
+
+
+def test_agent_gate_reports_do_not_inherit_the_human_acceptance(ui, repo):
+    session_id = _active(ui, repo)
+    call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass",
+                           "actor": "claude"})
+    gates = call(ui, f"/api/gates?session={session_id}")
+    assert gates["gates"][0]["builder_assessment"] is None
+    assert "AUTH-01 is marked pass with no evidence" in gates["summary"]["blockers"]
 
 
 # ----------------------------------------------------------------------
@@ -943,6 +1233,98 @@ def test_stopping_from_the_ui_ends_the_session(ui, repo):
     assert session["status"] == "stopped" and session["ended_reason"] == "changed my mind"
 
 
+class _RecordingRegistry:
+    """Stands in for the managed runner registry to observe cancel ordering."""
+
+    def __init__(self):
+        self.cancelled = []
+
+    def cancel(self, session_id, reason=""):
+        self.cancelled.append((session_id, reason))
+
+
+def test_sessions_can_be_renamed_and_deleted_from_the_ui(ui, repo):
+    session_id = _active(ui, repo)
+    renamed = call(ui, "/api/session/rename", {"session": session_id, "name": "Sharper name"})
+    assert renamed["session"]["name"] == "Sharper name"
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/session/delete", {"session": session_id})
+    assert json.loads(exc.value.read())["error"]["code"] == "session_not_finished"
+
+    call(ui, "/api/control", {"session": session_id, "action": "stop"})
+    result = call(ui, "/api/session/delete", {"session": session_id})
+    assert result["deleted"] == session_id
+    assert result["sessions"] == []
+    assert "worktree kept" in result["worktree_note"], "an unpushed session branch must survive"
+    with pytest.raises(urllib.error.HTTPError):
+        call(ui, f"/api/session?session={session_id}")
+
+
+def test_session_rows_offer_rename_and_delete():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "showDeleteSessionDialog" in source
+    assert "Stop the session first" in source
+    assert 'api("session/rename"' in source
+    assert 'api("session/delete"' in source
+    assert "Remote branches are never touched." in source
+
+
+def test_restart_agent_resets_state_and_resolves_the_escalation(ui, repo):
+    from synchri.session.manager import SessionManager
+
+    session_id = _active(ui, repo)
+    manager = SessionManager(ui["broker"])
+    manager.record_participant_failure(session_id, "claude", "failed", "exit 1")
+    manager.record_participant_failure(session_id, "claude", "dropped",
+                                       "dropped after 2 consecutive failed turns")
+    manager.escalate(session_id, "agent_failed", "claude dropped", raised_by="claude")
+    assert call(ui, f"/api/dashboard?session={session_id}")["user_intervention_required"] is True
+
+    class _RestartStub:
+        def __init__(self):
+            self.restarted = []
+
+        def restart(self, record):
+            self.restarted.append(record.session_id)
+            return {"phase": "resuming"}
+
+    stub = _RestartStub()
+    ui["server"].api.managed = stub
+
+    dashboard = call(ui, "/api/control", {"session": session_id, "action": "restart_agent",
+                                          "participant": "claude"})
+    assert dashboard["participant_states"]["claude"]["state"] == "active"
+    assert dashboard["participant_states"]["claude"]["failures"] == 0
+    assert dashboard["user_intervention_required"] is False
+    assert stub.restarted == [session_id]
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/control", {"session": session_id, "action": "restart_agent",
+                                  "participant": "ghost"})
+    assert exc.value.code == 400
+
+
+def test_refused_completion_leaves_the_agent_team_untouched(ui, repo):
+    session_id = _active(ui, repo)
+    registry = _RecordingRegistry()
+    ui["server"].api.managed = registry
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/control", {"session": session_id, "action": "complete"})
+    assert json.loads(exc.value.read())["error"]["code"] == "gates_unsatisfied"
+    # The refusal must not have signalled the agents to stop.
+    assert registry.cancelled == []
+
+    dashboard = call(ui, "/api/control", {"session": session_id, "action": "complete",
+                                          "force": True})
+    assert dashboard["session"]["status"] == "complete"
+    assert "waived" in dashboard["session"]["ended_reason"]
+    assert [entry[0] for entry in registry.cancelled] == [session_id]
+
+
 def test_completing_from_the_ui_closes_the_room_and_exposes_the_changelog(ui, repo):
     session_id = _active(ui, repo)
     call(ui, "/api/gate", {
@@ -959,6 +1341,74 @@ def test_completing_from_the_ui_closes_the_room_and_exposes_the_changelog(ui, re
     changelog = call(ui, f"/api/changelog?session={session_id}")
     assert "# Synchri final changelog" in changelog["markdown"]
     assert "AUTH-01" in changelog["markdown"]
+
+
+def test_the_session_package_downloads_as_a_zip_with_no_secrets(ui, repo):
+    import io
+    import zipfile
+
+    from synchri.session.manager import SessionManager
+
+    session_id = _active(ui, repo)
+    call(ui, "/api/message", {"session": session_id, "content": "note for the record",
+                              "interrupt": True})
+    call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass"})
+    call(ui, "/api/control", {"session": session_id, "action": "complete"})
+
+    request = urllib.request.Request(f"{ui['base']}/api/package?session={session_id}")
+    request.add_header("X-Synchri-Token", ui["token"])
+    with urllib.request.urlopen(request, timeout=20) as response:
+        disposition = response.headers.get("Content-Disposition") or ""
+        content_type = response.headers.get("Content-Type")
+        data = response.read()
+    assert content_type == "application/zip"
+    assert 'filename="synchri-' in disposition
+    assert data[:4] == b"PK\x03\x04"
+
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    names = set(archive.namelist())
+    assert {"session.md", "transcript.md", "transcript.jsonl", "final-changelog.md",
+            "gates.md", "usage-summary.md", "usage.json", "commits.md", "diff.patch"} <= names
+    assert "note for the record" in archive.read("transcript.md").decode()
+    assert "No usage was recorded" in archive.read("usage-summary.md").decode()
+    assert "AUTH-01" in archive.read("gates.md").decode()
+
+    # No secret material may leak into any member: metadata carries invite
+    # tokens and the human's room secret, and none of it belongs in a file
+    # meant to be shared.
+    record = SessionManager(ui["broker"]).get(session_id)
+    secrets_to_check = [record.metadata["human"]["secret"]]
+    secrets_to_check += [invite["token"] for invite in record.metadata.get("invites", [])]
+    blob = b"".join(archive.read(name) for name in names)
+    for secret in secrets_to_check:
+        assert secret and secret.encode() not in blob
+
+
+def test_the_package_requires_a_finished_session(ui, repo):
+    session_id = _active(ui, repo)
+    request = urllib.request.Request(f"{ui['base']}/api/package?session={session_id}")
+    request.add_header("X-Synchri-Token", ui["token"])
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(request, timeout=20)
+    assert exc.value.code == 400
+    assert json.loads(exc.value.read())["error"]["code"] == "session_not_finished"
+
+
+def test_the_package_can_be_saved_next_to_the_room_artifacts(ui, repo):
+    import io
+    import zipfile
+    from pathlib import Path
+
+    session_id = _active(ui, repo)
+    call(ui, "/api/control", {"session": session_id, "action": "stop"})
+    saved = call(ui, "/api/package/save", {"session": session_id})
+    path = Path(saved["path"])
+    assert path.name == "session-package.zip"
+    data = path.read_bytes()
+    assert data[:4] == b"PK\x03\x04"
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    # A stopped session's record is honest about not being verified-complete.
+    assert "ended without a verified completion" in archive.read("final-changelog.md").decode()
 
 
 def test_presets_can_be_saved_from_the_wizard(ui, repo):

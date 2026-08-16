@@ -352,24 +352,35 @@ def collaboration_pair(
 KNOWN_RUNTIMES: dict[str, dict] = {
     "claude_code": {
         "label": "Claude Code",
+        "default_name": "Claude",
         "executable": "claude",
-        "managed_command": "claude -p {prompt}",
+        # The maintained managed command asks for the CLI's machine-readable
+        # stream so the UI can show live work; the plain variant is the
+        # fallback for installed CLI versions that predate those flags.
+        "managed_command": "claude -p --verbose --output-format stream-json {prompt}",
+        "plain_managed_command": "claude -p {prompt}",
         "suggested_command": "claude -p {prompt}",
+        "stream_format": "claude",
     },
     "codex": {
         "label": "Codex",
+        "default_name": "Codex",
         "executable": "codex",
-        "managed_command": "codex exec {prompt}",
+        "managed_command": "codex exec --json {prompt}",
+        "plain_managed_command": "codex exec {prompt}",
         "suggested_command": "codex exec {prompt}",
+        "stream_format": "codex",
     },
     "copilot": {
         "label": "GitHub Copilot CLI",
+        "default_name": "Copilot",
         "executable": "copilot",
         "managed_command": "copilot -sp {prompt}",
         "suggested_command": "copilot -sp {prompt}",
     },
     "gemini": {
         "label": "Gemini CLI",
+        "default_name": "Gemini",
         "executable": "gemini",
         # Kept in the chooser for external rooms. It does not appear behind
         # the reliable one-click path until its unattended lifecycle has the
@@ -379,11 +390,30 @@ KNOWN_RUNTIMES: dict[str, dict] = {
     },
     "generic": {
         "label": "Other terminal-capable agent",
+        "default_name": "Agent",
         "executable": None,
         "managed_command": None,
         "suggested_command": None,
     },
 }
+
+
+def default_agent_name(runtime: str, taken: set[str] | None = None) -> str:
+    """Runtime-derived participant name, deduplicated with a hyphen suffix.
+
+    A participant name is identity — credential file paths, the room roster,
+    directive routing — so the derived value must satisfy ``ids.NAME_PATTERN``
+    (no spaces; hence "Codex-2", never "Codex 2").
+    """
+    definition = KNOWN_RUNTIMES.get(runtime, KNOWN_RUNTIMES["generic"])
+    base = definition.get("default_name") or "Agent"
+    used = taken or set()
+    if base not in used:
+        return base
+    counter = 2
+    while f"{base}-{counter}" in used:
+        counter += 1
+    return f"{base}-{counter}"
 
 
 def runtime_status(runtime: str) -> dict:
@@ -421,14 +451,32 @@ def runtime_catalog() -> list[dict]:
     return [{"key": key, **value, **runtime_status(key)} for key, value in KNOWN_RUNTIMES.items()]
 
 
-def managed_command(plan: ParticipantPlan) -> str | None:
-    """Resolve a user-supplied command before a maintained default."""
+def managed_command(plan: ParticipantPlan, *, plain: bool = False) -> str | None:
+    """Resolve a user-supplied command before a maintained default.
+
+    ``plain`` asks for the non-streaming maintained command — the fallback
+    when an installed CLI rejects its streaming flags.
+    """
     if plan.command and plan.command.strip():
         return plan.command.strip()
     definition = KNOWN_RUNTIMES.get(plan.runtime, KNOWN_RUNTIMES["generic"])
     if runtime_status(plan.runtime)["managed"]:
+        if plain:
+            return definition.get("plain_managed_command") or definition.get("managed_command")
         return definition.get("managed_command")
     return None
+
+
+def stream_format_for(plan: ParticipantPlan) -> str | None:
+    """The maintained stream format — only when the maintained command runs.
+
+    A user-supplied command keeps plain-stdout behavior: Synchri cannot know
+    what such a command prints, so it never pretends to parse it.
+    """
+    if plan.command and plan.command.strip():
+        return None
+    definition = KNOWN_RUNTIMES.get(plan.runtime, KNOWN_RUNTIMES["generic"])
+    return definition.get("stream_format")
 
 
 def plan_launch_status(plan: ParticipantPlan) -> dict:

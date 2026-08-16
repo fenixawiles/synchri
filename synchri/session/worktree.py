@@ -92,7 +92,12 @@ def git(cwd: str | Path, *args: str, check: bool = True) -> str:
     if check and completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         raise StateError(f"git {' '.join(args)} failed: {detail}", code="git_error")
-    return completed.stdout.strip()
+    # Keep leading whitespace and a trailing NUL intact.  Porcelain ``-z``
+    # output uses both as data (for example, ``" M path\\0"``), and trimming
+    # it here corrupts the first status entry as well as filenames that end in
+    # whitespace.  Git's ordinary line-oriented commands still lose only
+    # their transport newline.
+    return completed.stdout.rstrip("\r\n")
 
 
 # ----------------------------------------------------------------------

@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 #: How long a writer waits for a competing writer before giving up.
@@ -89,6 +89,13 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "repo_head": "TEXT",
         "repo_remote": "TEXT",
         "memory_note": "TEXT",
+    },
+    # v5: per-agent runtime supervision state (NULL = never launched).
+    "session_participants": {
+        "runtime_status": "TEXT",
+        "runtime_detail": "TEXT",
+        "consecutive_failures": "INTEGER NOT NULL DEFAULT 0",
+        "runtime_updated_at": "TEXT",
     },
 }
 

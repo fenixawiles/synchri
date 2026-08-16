@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synchri"
-version = "0.3.0"
+version = "0.4.0"
 description = "Run two coding agents on one task, in one room, with an isolated worktree and a contract they both agree to."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -21,6 +21,7 @@ shared memory. A session just decides the terms the room runs under.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from enum import Enum
@@ -38,7 +39,7 @@ from . import changelog as changelog_module
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
-from .gates import Gate, summarize
+from .gates import Gate, GateStatus, summarize
 from .modes import ModePolicy, ParticipantPlan, collaboration_pair, policy_for, resolve_role
 from .permissions import BY_KEY, Decision, PermissionDenied, PermissionSet
 from .spec import ProductSpec
@@ -739,6 +740,25 @@ class SessionManager:
                 self._write_gate(session_id, gate)
         return self.gates(session_id)
 
+    def add_gate(self, session_id: str, gate: Gate) -> Gate:
+        """Insert one new gate without touching the others' evidence."""
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(
+                f"cannot add a gate after the session is {record.status}",
+                code="session_finished",
+            )
+        if any(existing.gate_id == gate.gate_id for existing in self.gates(session_id)):
+            raise ConflictError(f"gate {gate.gate_id} already exists in this session")
+        with db.transaction(self.conn):
+            self._write_gate(session_id, gate)
+        self._log(
+            record,
+            ev.SESSION_GATE_UPDATED,
+            {"gate_id": gate.gate_id, "status": gate.status, "actor": "human", "added": True},
+        )
+        return gate
+
     def update_gate(self, session_id: str, gate_id: str, *, actor: str | None = None, **fields) -> Gate:
         record = self.get(session_id)
         if record.is_terminal:
@@ -836,40 +856,144 @@ class SessionManager:
             for row in rows
         ]
 
-    def complete(self, session_id: str) -> SessionRecord:
+    # ------------------------------------------------------------------
+    # per-agent runtime state
+    # ------------------------------------------------------------------
+
+    def participant_states(self, session_id: str) -> dict[str, dict]:
+        """Durable supervision state per agent (state is None until launched)."""
+        rows = self.conn.execute(
+            "SELECT name, runtime_status, runtime_detail, consecutive_failures, "
+            "runtime_updated_at FROM session_participants WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+        return {
+            row["name"]: {
+                "state": row["runtime_status"],
+                "detail": row["runtime_detail"],
+                "failures": row["consecutive_failures"] or 0,
+                "updated_at": row["runtime_updated_at"],
+            }
+            for row in rows
+        }
+
+    def set_participant_state(
+        self,
+        session_id: str,
+        name: str,
+        state: str,
+        detail: str | None = None,
+        *,
+        reset_failures: bool = False,
+    ) -> None:
+        with db.transaction(self.conn):
+            if reset_failures:
+                self.conn.execute(
+                    "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+                    "consecutive_failures = 0, runtime_updated_at = ? "
+                    "WHERE session_id = ? AND name = ?",
+                    (state, detail, utc_now(), session_id, name),
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+                    "runtime_updated_at = ? WHERE session_id = ? AND name = ?",
+                    (state, detail, utc_now(), session_id, name),
+                )
+
+    def record_participant_failure(
+        self, session_id: str, name: str, state: str, detail: str | None = None
+    ) -> None:
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+                "consecutive_failures = consecutive_failures + 1, runtime_updated_at = ? "
+                "WHERE session_id = ? AND name = ?",
+                (state, detail, utc_now(), session_id, name),
+            )
+
+    def _set_all_participant_states(self, session_id: str, state: str, detail: str) -> None:
+        self.conn.execute(
+            "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+            "runtime_updated_at = ? WHERE session_id = ?",
+            (state, detail, utc_now(), session_id),
+        )
+
+    def complete(self, session_id: str, *, force: bool = False) -> SessionRecord:
         """Close a verified session and preserve its final changelog.
 
         Completion is deliberately unlike ``stop``: it proves every required
         gate, closes the room so no more work can be accepted, and writes a
-        permanent human-readable delivery record. The state change and room
-        closure share one SQLite transaction; the changelog write is restored
-        if that transaction cannot commit.
+        permanent human-readable delivery record. ``force`` is the human
+        override: every gate still blocking is waived, and the waiver is
+        recorded on the gate itself and in the session's ended reason — the
+        changelog stays honest about what was verified versus waived.
+
+        Validation and git work (change summary) run before the write
+        transaction so the database lock is never held across subprocess
+        calls. The terminal transition re-checks its gates inside the
+        transaction, so a racing ``stop`` and ``complete`` can never both
+        finish the session and a forced waiver cannot outlive a failed finish.
         """
-        changelog_path = None
-        previous_changelog = None
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(f"session is already {record.status}", code="session_finished")
+        if not record.room_id:
+            raise StateError("cannot complete a session without a room", code="no_room")
+        gates = self.gates(session_id)
+        if not gates:
+            raise StateError(
+                "cannot complete a session with no acceptance gates defined",
+                code="no_gates",
+            )
+        report = summarize(gates)
+        if not report["complete"]:
+            if not force:
+                raise StateError(
+                    "cannot complete: " + "; ".join(report["blockers"]),
+                    code="gates_unsatisfied",
+                )
+
+        completed_at = utc_now()
+        changes = self.changes(session_id)
+
+        changelog_path = self.broker.workspace.final_changelog_path(record.room_id)
+        previous_changelog = (
+            changelog_path.read_text(encoding="utf-8") if changelog_path.exists() else None
+        )
         wrote_changelog = False
         try:
             with db.transaction(self.conn):
+                # Re-read under the write lock: another caller may have
+                # finished the session while the changelog was rendering.
                 record = self.get(session_id)
                 if record.is_terminal:
                     raise StateError(f"session is already {record.status}", code="session_finished")
-                if not record.room_id:
-                    raise StateError("cannot complete a session without a room", code="no_room")
                 gates = self.gates(session_id)
-                if not gates:
-                    raise StateError(
-                        "cannot complete a session with no acceptance gates defined",
-                        code="no_gates",
-                    )
                 report = summarize(gates)
+                waived: list[str] = []
                 if not report["complete"]:
-                    raise StateError(
-                        "cannot complete: " + "; ".join(report["blockers"]),
-                        code="gates_unsatisfied",
-                    )
-
-                completed_at = utc_now()
-                changes = self.changes(session_id)
+                    if not force:
+                        raise StateError(
+                            "cannot complete: " + "; ".join(report["blockers"]),
+                            code="gates_unsatisfied",
+                        )
+                    for gate in gates:
+                        if gate.blocks_completion():
+                            gate.status = GateStatus.WAIVED.value
+                            gate.evidence = _append_unique(
+                                gate.evidence, ["Waived by the user at completion"]
+                            )
+                            gate.updated_at = utc_now()
+                            gate.updated_by = "human"
+                            self._write_gate(session_id, gate)
+                            waived.append(gate.gate_id)
+                    report = summarize(gates)
+                    if not report["complete"]:
+                        raise StateError(
+                            "cannot complete: " + "; ".join(report["blockers"]),
+                            code="gates_unsatisfied",
+                        )
                 markdown = changelog_module.render(
                     record,
                     gates,
@@ -877,9 +1001,10 @@ class SessionManager:
                     self.last_test_run(session_id),
                     completed_at=completed_at,
                 )
-                changelog_path = self.broker.workspace.final_changelog_path(record.room_id)
-                previous_changelog = (
-                    changelog_path.read_text(encoding="utf-8") if changelog_path.exists() else None
+                reason = (
+                    f"completed by the user ({len(waived)} gate{'s' if len(waived) != 1 else ''} waived)"
+                    if waived
+                    else "all acceptance gates satisfied"
                 )
                 write_private(changelog_path, markdown)
                 wrote_changelog = True
@@ -899,20 +1024,27 @@ class SessionManager:
                         "commits": changes.get("commits", 0),
                     },
                 }
+                self._set_all_participant_states(
+                    session_id, "stopped", "the session completed"
+                )
                 completed = self._finish(
                     record,
                     SessionStatus.COMPLETE,
-                    "all acceptance gates satisfied",
+                    reason,
                     metadata=metadata,
                     ended_at=completed_at,
                 )
                 self._log(
                     completed,
                     ev.SESSION_COMPLETED,
-                    {"final_changelog": str(changelog_path), "commits": changes.get("commits", 0)},
+                    {
+                        "final_changelog": str(changelog_path),
+                        "commits": changes.get("commits", 0),
+                        "waived_gates": waived,
+                    },
                 )
         except Exception:
-            if wrote_changelog and changelog_path is not None:
+            if wrote_changelog:
                 if previous_changelog is None:
                     changelog_path.unlink(missing_ok=True)
                 else:
@@ -964,11 +1096,98 @@ class SessionManager:
         # transition.  Otherwise a CLI caller could see a stopped session
         # while the queued agents continued to work underneath it.
         with db.transaction(self.conn):
+            # Re-read under the write lock: a racing complete() and stop()
+            # must never both finish the session.
+            record = self.get(session_id)
+            if record.is_terminal:
+                return record
             if record.room_id:
                 self.broker.stop_room(
                     record.room_id, credential=self._human_credential(record)
                 )
+            self._set_all_participant_states(session_id, "stopped", reason)
             return self._finish(record, SessionStatus.STOPPED, reason)
+
+    def rename_session(self, session_id: str, name: str) -> SessionRecord:
+        cleaned = (name or "").strip()
+        if not cleaned:
+            raise ValidationError("a session needs a name")
+        record = self.get(session_id)
+        with db.transaction(self.conn):
+            self._update(session_id, name=cleaned)
+        self._log(record, "session.renamed", {"name": cleaned, "previous": record.name})
+        return self.get(session_id)
+
+    def delete_session(self, session_id: str) -> dict:
+        """Remove a finished session from Synchri without ever losing git history.
+
+        The database rows and room files always go. The session's worktree and
+        local branch are removed only when that is provably safe: Synchri
+        created the worktree, nothing in it is uncommitted, and its branch has
+        an upstream with no unpushed commits. Anything less keeps the worktree
+        on disk, and remote refs are never touched.
+        """
+        record = self.get(session_id)
+        if not record.is_terminal:
+            raise StateError(
+                "stop the session before deleting it", code="session_not_finished"
+            )
+
+        tree = record.worktree
+        remove_tree = False
+        if tree and worktree_module.exists(tree):
+            if (record.metadata or {}).get("worktree_strategy") != "new":
+                worktree_note = "worktree kept — you selected it yourself, so Synchri never removes it"
+            else:
+                remove_tree, worktree_note = self._worktree_safely_removable(tree)
+        else:
+            worktree_note = "no worktree on disk"
+
+        with db.transaction(self.conn):
+            self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            if record.room_id:
+                self.conn.execute("DELETE FROM rooms WHERE room_id = ?", (record.room_id,))
+            self.conn.execute(
+                "DELETE FROM agent_turn_usage WHERE session_id = ?", (session_id,)
+            )
+
+        # Post-commit, best-effort disk cleanup; the durable rows are gone.
+        worktree_removed = False
+        if remove_tree:
+            try:
+                worktree_module.remove(tree, force=True, delete_branch=True)
+                worktree_removed = True
+            except StateError as error:
+                worktree_note = f"worktree kept — {error.message}"
+        if record.room_id:
+            shutil.rmtree(self.broker.workspace.room_dir(record.room_id), ignore_errors=True)
+            if self.broker.workspace.sessions_dir.exists():
+                for path in self.broker.workspace.sessions_dir.glob(f"{record.room_id}.*.json"):
+                    path.unlink(missing_ok=True)
+        return {
+            "deleted": session_id,
+            "worktree_removed": worktree_removed,
+            "worktree_note": worktree_note,
+        }
+
+    @staticmethod
+    def _worktree_safely_removable(tree: Worktree) -> tuple[bool, str]:
+        """Safe means: clean, and every commit already lives on the upstream."""
+        status = worktree_module.git(tree.path, "status", "--porcelain", check=False)
+        if status.strip():
+            return False, "worktree kept — it has uncommitted changes"
+        upstream = worktree_module.git(
+            tree.path, "rev-parse", "--abbrev-ref", "@{upstream}", check=False
+        )
+        if not upstream.strip():
+            return False, "worktree kept — its branch was never pushed"
+        unpushed = worktree_module.git(
+            tree.path, "rev-list", "--count", "@{upstream}..HEAD", check=False
+        )
+        if unpushed.strip() and unpushed.strip() != "0":
+            plural = "s" if unpushed.strip() != "1" else ""
+            return False, f"worktree kept — {unpushed.strip()} commit{plural} not pushed"
+        return True, "worktree removed — everything in it is pushed"
 
     def pause(self, session_id: str) -> SessionRecord:
         record = self.get(session_id)
@@ -1057,6 +1276,20 @@ class SessionManager:
         if not record.worktree or not worktree_module.exists(record.worktree):
             return ""
         return verify_module.diff_text(record.worktree_path, record.base_branch)
+
+    def file_diff(self, session_id: str, path: str) -> dict:
+        """One file's live diff (committed + uncommitted) for the chat cards."""
+        record = self.get(session_id)
+        if not record.worktree or not worktree_module.exists(record.worktree):
+            return {"path": path, "diff": "", "insertions": 0, "deletions": 0, "truncated": False}
+        return verify_module.file_diff(record.worktree_path, record.base_branch, path)
+
+    def file_changes(self, session_id: str) -> list[dict]:
+        """Per-file diff cards for the Changes tab, uncommitted work included."""
+        record = self.get(session_id)
+        if not record.worktree or not worktree_module.exists(record.worktree):
+            return []
+        return verify_module.file_changes(record.worktree_path, record.base_branch)
 
     def detected_test_command(self, session_id: str) -> str | None:
         record = self.get(session_id)
@@ -1175,6 +1408,7 @@ class SessionManager:
             "activities": (room_status or {}).get("activities", []),
             "activity_entries": (room_status or {}).get("activity_entries", []),
             "gates": {"summary": report, "items": [g.to_dict() for g in gates]},
+            "participant_states": self.participant_states(session_id),
             "tests": (record.metadata or {}).get("last_test_run"),
             "test_command": self.detected_test_command(session_id),
             "changes": changes,

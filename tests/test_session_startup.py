@@ -934,6 +934,30 @@ def test_file_diff_shows_uncommitted_and_untracked_work(manager, repo, agents):
         manager.file_diff(record.session_id, "")
 
 
+def test_file_changes_lists_each_file_with_its_own_diff(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+
+    (tree / "committed.txt").write_text("landed\n", encoding="utf-8")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-qm", "land a file")
+    (tree / "README.md").write_text("hi\nworking tree edit\n", encoding="utf-8")
+    (tree / "fresh.txt").write_text("brand new\n", encoding="utf-8")
+
+    files = {entry["path"]: entry for entry in manager.file_changes(record.session_id)}
+    assert files["committed.txt"]["status"] == "added"
+    assert files["committed.txt"]["uncommitted"] is False
+    assert "+landed" in files["committed.txt"]["diff"]
+    assert files["README.md"]["uncommitted"] is True
+    assert "+working tree edit" in files["README.md"]["diff"]
+    assert files["fresh.txt"]["status"] == "untracked"
+    assert files["fresh.txt"]["insertions"] == 1
+    assert "+brand new" in files["fresh.txt"]["diff"]
+
+    summary = manager.changes(record.session_id)
+    assert summary["recent"][0]["full_sha"] and len(summary["recent"][0]["full_sha"]) == 40
+
+
 def test_participant_runtime_states_are_durable(manager, repo, agents):
     record = make_session(manager, repo, agents)
     assert manager.participant_states(record.session_id)["claude"]["state"] is None

@@ -222,17 +222,19 @@ def summarize_changes(
         branch=run("rev-parse", "--abbrev-ref", "HEAD") or None,
     )
     span = f"{base_branch}..HEAD"
-    log = run("log", span, f"--max-count={limit}", "--pretty=format:%h\x1f%an\x1f%ad\x1f%s",
+    log = run("log", span, f"--max-count={limit}", "--pretty=format:%h\x1f%H\x1f%an\x1f%ad\x1f%s",
               "--date=iso")
     for line in (line for line in log.splitlines() if line.strip()):
-        sha, author, date, subject = (line.split("\x1f") + ["", "", "", ""])[:4]
+        sha, full_sha, author, date, subject = (line.split("\x1f") + ["", "", "", "", ""])[:5]
         summary.recent.append(
-            {"sha": sha, "author": author, "date": date, "subject": subject}
+            {"sha": sha, "full_sha": full_sha, "author": author, "date": date, "subject": subject}
         )
     count = run("rev-list", "--count", span)
     summary.commits = int(count) if count.isdigit() else len(summary.recent)
 
-    stat = run("diff", "--shortstat", span)
+    # Three-dot (merge-base) semantics, matching diff_text: stats must not
+    # count changes that only happened on the base branch since the fork.
+    stat = run("diff", "--shortstat", f"{base_branch}...HEAD")
     for pattern, field_name in (
         (r"(\d+) files? changed", "files_changed"),
         (r"(\d+) insertions?", "insertions"),
@@ -242,8 +244,12 @@ def summarize_changes(
         if match:
             setattr(summary, field_name, int(match.group(1)))
 
+    # Split on whitespace, not fixed columns: git() strips its output, which
+    # removes the leading status space on the first porcelain line.
     summary.dirty_files = [
-        line[3:] for line in run("status", "--porcelain").splitlines() if line.strip()
+        parts[1].strip()
+        for parts in (line.split(None, 1) for line in run("status", "--porcelain").splitlines())
+        if len(parts) == 2
     ][:50]
     return summary
 
@@ -258,6 +264,114 @@ def diff_text(worktree_path: str | Path, base_branch: str, *, max_chars: int = 2
         worktree_path, "diff", f"{base_branch}...HEAD", check=False
     )
     return text if len(text) <= max_chars else text[:max_chars] + "\n… (truncated)"
+
+
+_DIFF_HEADER = re.compile(r"^diff --git a/(.*?) b/(.*)$")
+
+_STATUS_LABELS = {"A": "added", "M": "modified", "D": "deleted", "R": "renamed", "C": "copied"}
+
+
+def file_changes(
+    worktree_path: str | Path, base_branch: str, *, max_chars_per_file: int = 40_000
+) -> list[dict]:
+    """Per-file diffs against the merge base, including uncommitted and
+    untracked work — one card per changed file in the Changes tab."""
+    from . import worktree as worktree_module
+
+    root = Path(worktree_path)
+    if not root.exists():
+        return []
+
+    def run(*args: str) -> str:
+        return worktree_module.git(root, *args, check=False)
+
+    def capped(text: str) -> tuple[str, bool]:
+        if len(text) > max_chars_per_file:
+            return text[:max_chars_per_file] + "\n… (truncated)", True
+        return text, False
+
+    merge_base = run("merge-base", base_branch, "HEAD") or base_branch
+
+    counts: dict[str, tuple[int, int]] = {}
+    for line in run("diff", "--numstat", merge_base).splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            counts[parts[2]] = (
+                int(parts[0]) if parts[0].isdigit() else 0,
+                int(parts[1]) if parts[1].isdigit() else 0,
+            )
+    status_map: dict[str, str] = {}
+    for line in run("diff", "--name-status", merge_base).splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            status_map[parts[-1]] = parts[0][:1]
+    dirty: set[str] = set()
+    untracked: list[str] = []
+    # ``git()`` strips its output, which removes the leading status space on
+    # the FIRST porcelain line (' M file' -> 'M file'); split on whitespace
+    # instead of slicing fixed columns.
+    for line in run("status", "--porcelain").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        code, path = parts[0], parts[1].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if code == "??":
+            untracked.append(path)
+        else:
+            dirty.add(path)
+
+    entries: list[dict] = []
+    current_path: str | None = None
+    chunk: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_path, chunk
+        if current_path is not None:
+            text, truncated = capped("\n".join(chunk))
+            insertions, deletions = counts.get(current_path, (0, 0))
+            entries.append(
+                {
+                    "path": current_path,
+                    "status": _STATUS_LABELS.get(status_map.get(current_path, "M"), "modified"),
+                    "insertions": insertions,
+                    "deletions": deletions,
+                    "diff": text,
+                    "uncommitted": current_path in dirty,
+                    "truncated": truncated,
+                }
+            )
+        current_path, chunk = None, []
+
+    for line in run("diff", merge_base).splitlines():
+        match = _DIFF_HEADER.match(line)
+        if match:
+            flush()
+            current_path = match.group(2)
+            chunk = [line]
+        elif current_path is not None:
+            chunk.append(line)
+    flush()
+
+    for path in untracked:
+        text, truncated = capped(run("diff", "--no-index", "--", os.devnull, path))
+        added = sum(
+            1 for diff_line in text.splitlines()
+            if diff_line.startswith("+") and not diff_line.startswith("+++")
+        )
+        entries.append(
+            {
+                "path": path,
+                "status": "untracked",
+                "insertions": added,
+                "deletions": 0,
+                "diff": text,
+                "uncommitted": True,
+                "truncated": truncated,
+            }
+        )
+    return entries
 
 
 def file_diff(

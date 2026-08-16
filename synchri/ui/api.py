@@ -95,6 +95,7 @@ class Api:
             ("POST", "gate"): self.update_gate,
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
+            ("GET", "changes/files"): self.file_changes,
             ("GET", "diff"): self.diff,
             ("GET", "diff/file"): self.file_diff,
             ("GET", "memory"): self.memory,
@@ -782,6 +783,9 @@ class Api:
 
     def file_diff(self, query: dict, body: dict) -> dict:
         return self.manager.file_diff(self._session_id(query), query.get("path", ""))
+
+    def file_changes(self, query: dict, body: dict) -> dict:
+        return {"files": self.manager.file_changes(self._session_id(query))}
 
     def memory(self, query: dict, body: dict) -> dict:
         record = self.manager.get(self._session_id(query))

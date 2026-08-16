@@ -832,6 +832,30 @@ def test_file_diff_endpoint_serves_live_per_file_diffs(ui, repo):
     assert exc.value.code == 400
 
 
+def test_changes_files_endpoint_lists_per_file_cards(ui, repo):
+    from pathlib import Path
+
+    session_id = _active(ui, repo)
+    worktree = call(ui, f"/api/session?session={session_id}")["worktree"]["path"]
+    Path(worktree, "README.md").write_text("hi\nedited\n", encoding="utf-8")
+    files = call(ui, f"/api/changes/files?session={session_id}")["files"]
+    assert files and files[0]["path"] == "README.md"
+    assert files[0]["uncommitted"] is True
+    assert "+edited" in files[0]["diff"]
+
+
+def test_commit_ids_link_to_github_when_the_remote_is_github():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "function commitUrl(" in source
+    assert "/commit/" in source
+    assert "data-commit-url" in source
+    assert "<th>Date</th>" in source
+    # Non-GitHub remotes fall back to plain text, never to a broken link.
+    assert 'if (!/^https:\\/\\/github\\.com\\/[^/]+\\/[^/]+$/.test(cleaned)) return null;' in source
+
+
 def test_the_chat_renders_a_live_feed_with_file_cards():
     from pathlib import Path
 

@@ -2140,6 +2140,19 @@ function applyFileCard(card, entry) {
   if (stats) stats.textContent = entry.stats;
 }
 
+function commitUrl(remote, sha) {
+  // Only GitHub remotes become links; anything else stays plain text.
+  if (!remote || !sha) return null;
+  let cleaned = String(remote).trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  if (cleaned.startsWith("git@github.com:")) {
+    cleaned = "https://github.com/" + cleaned.slice("git@github.com:".length);
+  } else if (cleaned.startsWith("ssh://git@github.com/")) {
+    cleaned = "https://github.com/" + cleaned.slice("ssh://git@github.com/".length);
+  }
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(cleaned)) return null;
+  return `${cleaned}/commit/${sha}`;
+}
+
 function composerHint(d) {
   const actor = d.current_actor;
   if (actor && actor !== "human") return `${actor} has the floor — your message interrupts`;
@@ -2393,16 +2406,36 @@ async function paint(tab, el) {
       S.dash = await api("dashboard" + q); renderSession();
     });
   } else if (tab === "changes") {
-    const r = await api("diff" + q);
-    el.innerHTML = `<div class="small muted mono">${d.changes.files_changed} file(s) ·
-      <span style="color:var(--accent)">+${d.changes.insertions}</span> <span style="color:var(--bad)">−${d.changes.deletions}</span></div>
-      <pre class="diff" style="margin-top:.8rem;max-height:30rem;overflow:auto">${r.diff ? renderDiff(r.diff) : "No changes yet."}</pre>`;
+    const r = await api("changes/files" + q);
+    const files = r.files || [];
+    const adds = files.reduce((total, f) => total + (f.insertions || 0), 0);
+    const dels = files.reduce((total, f) => total + (f.deletions || 0), 0);
+    el.innerHTML = `<div class="small muted mono">${files.length} file(s) ·
+      <span style="color:var(--accent)">+${adds}</span> <span style="color:var(--bad)">−${dels}</span></div>` +
+      (files.length ? `<div class="stack" style="margin-top:.8rem">${files.map((f, index) => `
+        <details class="file-card"${index < 3 ? " open" : ""}>
+          <summary><span class="mono file-card-path">${esc(f.path)}</span>
+            ${f.uncommitted ? `<span class="pill warn">uncommitted</span>` : ""}
+            <span class="file-card-stats small faint">${esc(f.status)} · +${f.insertions} −${f.deletions}</span></summary>
+          <pre class="diff file-card-diff">${f.diff ? renderDiff(f.diff) : "No content changes."}</pre>
+        </details>`).join("")}</div>` : `<span class="muted" style="display:block;margin-top:.8rem">No changes yet.</span>`);
   } else if (tab === "commits") {
     const c = d.changes;
-    el.innerHTML = c.recent.length ? `<table><thead><tr><th>Commit</th><th>Subject</th><th>Author</th>
-      </tr></thead><tbody>${c.recent.map(x=>`<tr><td class="mono">${esc(x.sha)}</td>
-      <td>${esc(x.subject)}</td><td class="small muted">${esc(x.author)}</td></tr>`).join("")}
+    const remote = d.session.repository?.remote;
+    el.innerHTML = c.recent.length ? `<table><thead><tr><th>Commit</th><th>Subject</th><th>Author</th><th>Date</th>
+      </tr></thead><tbody>${c.recent.map(x => {
+        const url = commitUrl(remote, x.full_sha || x.sha);
+        const id = url
+          ? `<a href="${esc(url)}" class="mono" data-commit-url="${esc(url)}" title="Open this commit on GitHub">${esc(x.sha)}</a>`
+          : `<span class="mono">${esc(x.sha)}</span>`;
+        return `<tr><td>${id}</td><td>${esc(x.subject)}</td><td class="small muted">${esc(x.author)}</td>
+          <td class="small muted mono">${esc(String(x.date || "").slice(0, 16))}</td></tr>`;
+      }).join("")}
       </tbody></table>` : `<span class="muted">No commits on this branch yet.</span>`;
+    el.querySelectorAll("[data-commit-url]").forEach(link => link.onclick = event => {
+      event.preventDefault();
+      guard(() => openGitHub(link.dataset.commitUrl))();
+    });
   } else if (tab === "worktree") {
     const w = d.session.worktree;
     el.innerHTML = w ? `<table><tbody>

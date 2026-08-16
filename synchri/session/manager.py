@@ -1178,6 +1178,13 @@ class SessionManager:
             return {"path": path, "diff": "", "insertions": 0, "deletions": 0, "truncated": False}
         return verify_module.file_diff(record.worktree_path, record.base_branch, path)
 
+    def file_changes(self, session_id: str) -> list[dict]:
+        """Per-file diff cards for the Changes tab, uncommitted work included."""
+        record = self.get(session_id)
+        if not record.worktree or not worktree_module.exists(record.worktree):
+            return []
+        return verify_module.file_changes(record.worktree_path, record.base_branch)
+
     def detected_test_command(self, session_id: str) -> str | None:
         record = self.get(session_id)
         if not record.worktree_path:

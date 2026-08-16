@@ -1153,6 +1153,35 @@ class _RecordingRegistry:
         self.cancelled.append((session_id, reason))
 
 
+def test_sessions_can_be_renamed_and_deleted_from_the_ui(ui, repo):
+    session_id = _active(ui, repo)
+    renamed = call(ui, "/api/session/rename", {"session": session_id, "name": "Sharper name"})
+    assert renamed["session"]["name"] == "Sharper name"
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/session/delete", {"session": session_id})
+    assert json.loads(exc.value.read())["error"]["code"] == "session_not_finished"
+
+    call(ui, "/api/control", {"session": session_id, "action": "stop"})
+    result = call(ui, "/api/session/delete", {"session": session_id})
+    assert result["deleted"] == session_id
+    assert result["sessions"] == []
+    assert "worktree kept" in result["worktree_note"], "an unpushed session branch must survive"
+    with pytest.raises(urllib.error.HTTPError):
+        call(ui, f"/api/session?session={session_id}")
+
+
+def test_session_rows_offer_rename_and_delete():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "showDeleteSessionDialog" in source
+    assert "Stop the session first" in source
+    assert 'api("session/rename"' in source
+    assert 'api("session/delete"' in source
+    assert "Remote branches are never touched." in source
+
+
 def test_restart_agent_resets_state_and_resolves_the_escalation(ui, repo):
     from synchri.session.manager import SessionManager
 

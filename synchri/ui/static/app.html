@@ -985,10 +985,22 @@ async function home() {
           <div class="sess-meta"><span>${esc(s.repository.name)}</span><span>${esc(s.worktree ? (s.worktree.branch || s.worktree.name) : "no worktree")}</span>${started ? `<span>${esc(started)}</span>` : ""}</div>
           <div class="sess-brief">${esc(brief.slice(0, 160))}</div>
         </div>
-        <div class="sess-actions"><button data-open>Open</button><button class="ghost" data-new>New in this repo</button></div>
+        <div class="sess-actions"><button data-open>Open</button><button class="ghost" data-new>New in this repo</button>
+          <details class="menu workflow-menu"><summary aria-label="Session options">•••</summary><div>
+            <button data-rename>Rename</button>
+            ${done ? `<button class="danger" data-delete>Delete session</button>`
+                   : `<button disabled title="Stop the session first">Delete session</button>`}
+          </div></details></div>
       </div>`);
       row.querySelector("[data-open]").onclick = () => openSession(s.session_id);
       row.querySelector("[data-new]").onclick = () => quickStartFromRepository(s.repository.root);
+      row.querySelector("[data-rename]").onclick = guard(async () => {
+        const name = prompt("Rename session", s.name)?.trim();
+        if (!name || name === s.name) return;
+        S.boot.sessions = (await api("session/rename", {session: s.session_id, name})).sessions;
+        confirmNotice(`Renamed session to “${name}”.`); await home();
+      });
+      row.querySelector("[data-delete]")?.addEventListener("click", () => showDeleteSessionDialog(s));
       rows.append(row);
     }
     return rows;
@@ -1058,6 +1070,28 @@ async function home() {
   }
   aside.append(panel);
   app().append(grid);
+}
+
+function showDeleteSessionDialog(s) {
+  document.getElementById("delete-session-dialog")?.remove();
+  const dialog = $(`<div class="dialog stack" id="delete-session-dialog" role="dialog" aria-modal="true">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="kicker">DELETE SESSION</div>
+    <h2>Delete “${esc(s.name)}”?</h2>
+    <p class="muted small" style="margin:.2rem 0 0">This removes the session from Synchri: its chat, gates, and room files. Your git history is never lost — the session worktree is removed only when everything in it is committed and pushed; otherwise it stays on disk. Remote branches are never touched.</p>
+    <div class="row"><button class="primary" data-confirm style="background:var(--bad);border-color:var(--bad)">Delete session</button><button data-close>Cancel</button></div>
+  </div>`);
+  document.body.append(dialog);
+  const close = () => dialog.remove();
+  dialog.querySelector(".detail-close").onclick = close;
+  dialog.querySelector("[data-close]").onclick = close;
+  dialog.querySelector("[data-confirm]").onclick = guard(async () => {
+    const result = await api("session/delete", {session: s.session_id});
+    close();
+    S.boot.sessions = result.sessions;
+    confirmNotice(`Deleted “${s.name}” — ${result.worktree_note}.`);
+    await home();
+  });
 }
 
 async function quickStartFromRepository(repoPath) {

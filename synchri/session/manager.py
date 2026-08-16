@@ -21,6 +21,7 @@ shared memory. A session just decides the terms the room runs under.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from enum import Enum
@@ -1101,6 +1102,87 @@ class SessionManager:
                 )
             self._set_all_participant_states(session_id, "stopped", reason)
             return self._finish(record, SessionStatus.STOPPED, reason)
+
+    def rename_session(self, session_id: str, name: str) -> SessionRecord:
+        cleaned = (name or "").strip()
+        if not cleaned:
+            raise ValidationError("a session needs a name")
+        record = self.get(session_id)
+        with db.transaction(self.conn):
+            self._update(session_id, name=cleaned)
+        self._log(record, "session.renamed", {"name": cleaned, "previous": record.name})
+        return self.get(session_id)
+
+    def delete_session(self, session_id: str) -> dict:
+        """Remove a finished session from Synchri without ever losing git history.
+
+        The database rows and room files always go. The session's worktree and
+        local branch are removed only when that is provably safe: Synchri
+        created the worktree, nothing in it is uncommitted, and its branch has
+        an upstream with no unpushed commits. Anything less keeps the worktree
+        on disk, and remote refs are never touched.
+        """
+        record = self.get(session_id)
+        if not record.is_terminal:
+            raise StateError(
+                "stop the session before deleting it", code="session_not_finished"
+            )
+
+        tree = record.worktree
+        remove_tree = False
+        if tree and worktree_module.exists(tree):
+            if (record.metadata or {}).get("worktree_strategy") != "new":
+                worktree_note = "worktree kept — you selected it yourself, so Synchri never removes it"
+            else:
+                remove_tree, worktree_note = self._worktree_safely_removable(tree)
+        else:
+            worktree_note = "no worktree on disk"
+
+        with db.transaction(self.conn):
+            self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            if record.room_id:
+                self.conn.execute("DELETE FROM rooms WHERE room_id = ?", (record.room_id,))
+            self.conn.execute(
+                "DELETE FROM agent_turn_usage WHERE session_id = ?", (session_id,)
+            )
+
+        # Post-commit, best-effort disk cleanup; the durable rows are gone.
+        worktree_removed = False
+        if remove_tree:
+            try:
+                worktree_module.remove(tree, force=True, delete_branch=True)
+                worktree_removed = True
+            except StateError as error:
+                worktree_note = f"worktree kept — {error.message}"
+        if record.room_id:
+            shutil.rmtree(self.broker.workspace.room_dir(record.room_id), ignore_errors=True)
+            if self.broker.workspace.sessions_dir.exists():
+                for path in self.broker.workspace.sessions_dir.glob(f"{record.room_id}.*.json"):
+                    path.unlink(missing_ok=True)
+        return {
+            "deleted": session_id,
+            "worktree_removed": worktree_removed,
+            "worktree_note": worktree_note,
+        }
+
+    @staticmethod
+    def _worktree_safely_removable(tree: Worktree) -> tuple[bool, str]:
+        """Safe means: clean, and every commit already lives on the upstream."""
+        status = worktree_module.git(tree.path, "status", "--porcelain", check=False)
+        if status.strip():
+            return False, "worktree kept — it has uncommitted changes"
+        upstream = worktree_module.git(
+            tree.path, "rev-parse", "--abbrev-ref", "@{upstream}", check=False
+        )
+        if not upstream.strip():
+            return False, "worktree kept — its branch was never pushed"
+        unpushed = worktree_module.git(
+            tree.path, "rev-list", "--count", "@{upstream}..HEAD", check=False
+        )
+        if unpushed.strip() and unpushed.strip() != "0":
+            plural = "s" if unpushed.strip() != "1" else ""
+            return False, f"worktree kept — {unpushed.strip()} commit{plural} not pushed"
+        return True, "worktree removed — everything in it is pushed"
 
     def pause(self, session_id: str) -> SessionRecord:
         record = self.get(session_id)

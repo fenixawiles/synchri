@@ -83,6 +83,8 @@ class Api:
             ("GET", "managed"): self.managed_status,
             ("GET", "sessions"): self.sessions,
             ("GET", "session"): self.session,
+            ("POST", "session/rename"): self.rename_session,
+            ("POST", "session/delete"): self.delete_session,
             ("GET", "dashboard"): self.dashboard,
             ("GET", "contract"): self.contract,
             ("POST", "ack"): self.acknowledge,
@@ -592,6 +594,19 @@ class Api:
 
     def sessions(self, query: dict, body: dict) -> dict:
         return {"sessions": [s.to_dict() for s in self.manager.list_sessions()]}
+
+    def rename_session(self, query: dict, body: dict) -> dict:
+        record = self.manager.rename_session(
+            self._session_id(query, body), body.get("name", "")
+        )
+        return {
+            "session": record.to_dict(),
+            "sessions": [s.to_dict() for s in self.manager.list_sessions()],
+        }
+
+    def delete_session(self, query: dict, body: dict) -> dict:
+        outcome = self.manager.delete_session(self._session_id(query, body))
+        return {**outcome, "sessions": [s.to_dict() for s in self.manager.list_sessions()]}
 
     def session(self, query: dict, body: dict) -> dict:
         return self.manager.get(self._session_id(query)).to_dict()

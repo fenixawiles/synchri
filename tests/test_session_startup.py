@@ -934,6 +934,91 @@ def test_file_diff_shows_uncommitted_and_untracked_work(manager, repo, agents):
         manager.file_diff(record.session_id, "")
 
 
+def test_sessions_can_be_renamed(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    renamed = manager.rename_session(record.session_id, "  Auth hardening  ")
+    assert renamed.name == "Auth hardening"
+    with pytest.raises(ValidationError):
+        manager.rename_session(record.session_id, "   ")
+
+
+def test_delete_refuses_a_running_session(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    with pytest.raises(StateError) as exc:
+        manager.delete_session(record.session_id)
+    assert exc.value.code == "session_not_finished"
+
+
+def test_delete_keeps_a_dirty_worktree(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.stop(record.session_id)
+    tree = Path(record.worktree_path)
+    (tree / "wip.txt").write_text("wip\n", encoding="utf-8")
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is False
+    assert "uncommitted" in outcome["worktree_note"]
+    assert tree.exists(), "unfinished work must never be deleted"
+    with pytest.raises(NotFoundError):
+        manager.get(record.session_id)
+
+
+def test_delete_keeps_an_unpushed_worktree(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.stop(record.session_id)
+    tree = Path(record.worktree_path)
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is False
+    assert "never pushed" in outcome["worktree_note"]
+    assert tree.exists()
+
+
+def test_delete_removes_a_fully_pushed_worktree_and_every_record(manager, repo, agents, tmp_path):
+    from synchri.storage import dao
+
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+
+    record = make_session(manager, repo, agents)
+    room_id = record.room_id
+    tree = Path(record.worktree_path)
+    branch = record.worktree_branch
+    _git(tree, "push", "-q", "-u", "origin", branch)
+    dao.insert_turn_usage(
+        manager.conn, session_id=record.session_id, room_id=room_id,
+        participant="claude", input_tokens=5,
+    )
+    manager.stop(record.session_id)
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is True
+    assert not tree.exists()
+    # The remote branch — the git history — is untouched.
+    assert branch in _git(remote, "for-each-ref", "refs/heads")
+    with pytest.raises(NotFoundError):
+        manager.get(record.session_id)
+    assert dao.usage_for_session(manager.conn, record.session_id) == []
+    row = manager.conn.execute(
+        "SELECT COUNT(*) AS c FROM rooms WHERE room_id = ?", (room_id,)
+    ).fetchone()
+    assert row["c"] == 0
+    assert not manager.broker.workspace.room_dir(room_id).exists()
+
+
+def test_delete_never_removes_a_user_selected_worktree(manager, repo, agents, tmp_path):
+    outside = tmp_path / "mytree"
+    _git(repo, "worktree", "add", "-q", str(outside), "-b", "user-branch")
+    record = make_session(manager, repo, agents, existing_worktree_path=str(outside))
+    manager.stop(record.session_id)
+
+    outcome = manager.delete_session(record.session_id)
+    assert outcome["worktree_removed"] is False
+    assert "selected it yourself" in outcome["worktree_note"]
+    assert outside.exists()
+
+
 def test_file_changes_lists_each_file_with_its_own_diff(manager, repo, agents):
     record = make_session(manager, repo, agents)
     tree = Path(record.worktree_path)

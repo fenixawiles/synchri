@@ -242,15 +242,16 @@ details.menu>div>button:hover{background:var(--panel2)}
   overflow:hidden;text-overflow:ellipsis;max-width:44rem}
 .sess-actions{flex:none;display:flex;gap:.4rem}
 
-/* home: two-column — sessions lead, workflows are a compact defaults panel */
-.home-grid{display:grid;grid-template-columns:minmax(0,1fr) 18rem;gap:1.4rem;align-items:start}
-.wf-panel{padding:.85rem .95rem}
-.wf-row{display:flex;align-items:center;justify-content:space-between;gap:.6rem;
-  padding:.6rem 0;border-top:1px solid var(--line)}
-.wf-row:first-child{border-top:none}
-.wf-row button[data-run]{font-size:11.5px;padding:.3rem .6rem}
+/* home: workflows lead as cards; recent sessions follow as a compact list */
+.wf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.7rem;margin-top:1rem}
+.wf-card{padding:.8rem .9rem;display:flex;flex-direction:column;justify-content:space-between}
 .workflow-chain{font:11.5px var(--mono);color:var(--dim);margin-top:.3rem;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+.sess-list.compact .sess-brief{display:none}
+.sess-list.compact .sess-row{padding:.55rem .95rem}
+.sess-more{display:block;width:100%;background:none;border:0;border-top:1px solid var(--line);
+  border-radius:0;color:var(--dim);padding:.55rem;cursor:pointer;font-size:12px}
+.sess-more:hover{color:var(--ink);background:var(--panel2)}
 .workflow-menu>summary{border:1px solid var(--line2);padding:.28rem .45rem;line-height:1}
 .workflow-menu button.danger{color:var(--bad)}
 .workflow-editor .perm{padding:.55rem 0}
@@ -270,8 +271,10 @@ details.adv summary{cursor:pointer;color:var(--dim);font-size:12px}
 details.adv summary:hover{color:var(--ink)}
 
 .choice{border:1px solid var(--line);border-radius:var(--radius-s);padding:.6rem .75rem;cursor:pointer;
-  background:var(--panel);text-align:left;width:100%;display:block;color:var(--ink);font:inherit}
+  background:var(--panel);text-align:left;width:100%;display:block;color:var(--ink);font:inherit;
+  transition:transform .06s ease}
 .choice:hover{border-color:var(--line2);background:var(--panel2)}
+.choice:active{transform:translateY(1px)}
 .choice.on{border-color:var(--accent-line);background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
 .choice b{display:block;margin-bottom:.15rem;font-size:12.5px}
 .choice > span{display:block;margin-top:.1rem}
@@ -535,7 +538,7 @@ pre.diff{background:var(--bg)}
 
 /* --------------------------------------------------------------- responsive */
 @media(max-width:940px){
-  .home-grid,.quick-grid{grid-template-columns:1fr}
+  .quick-grid{grid-template-columns:1fr}
   .launch-plan{position:static}
 }
 @media(max-width:760px){
@@ -972,8 +975,9 @@ async function home() {
   const workflows = S.boot.presets || [];
   app().innerHTML = "";
   const sessionRows = () => {
-    const rows = $(`<div class="sess-list"></div>`);
-    for (const s of list) {
+    const rows = $(`<div class="sess-list compact"></div>`);
+    const visible = S.showAllSessions ? list : list.slice(0, 6);
+    for (const s of visible) {
       const done = ["complete","timed_out","stopped","failed"].includes(s.status);
       const cls = s.status === "active" ? "" : (done ? "dim" : "warn");
       const led = s.status === "active" ? "live" : (done ? "" : "warn");
@@ -1003,6 +1007,11 @@ async function home() {
       row.querySelector("[data-delete]")?.addEventListener("click", () => showDeleteSessionDialog(s));
       rows.append(row);
     }
+    if (list.length > 6) {
+      const toggle = $(`<button class="sess-more">${S.showAllSessions ? "Show fewer" : `Show all ${list.length} sessions`}</button>`);
+      toggle.onclick = () => { S.showAllSessions = !S.showAllSessions; home(); };
+      rows.append(toggle);
+    }
     return rows;
   };
   if (!workflows.length) {
@@ -1023,53 +1032,49 @@ async function home() {
     }
     return;
   }
-  const grid = $(`<div class="home-grid"><div class="home-main"></div><aside class="home-aside"></aside></div>`);
-  const main = grid.querySelector(".home-main");
-  const aside = grid.querySelector(".home-aside");
-  main.append($(`<div class="page-head"><div><h1>Sessions</h1>
-    <div class="sub">Agent collaborations in this workspace, each in its own isolated worktree.</div></div></div>`));
-  if (list.length) {
-    main.append(sessionRows());
-  } else {
-    const empty = $(`<div class="card" style="text-align:center;padding:2.4rem 1rem">
-      <div class="mono muted">no sessions yet</div>
-      <div class="small faint" style="margin-top:.4rem">Choose a repository, write the brief, launch the agents.</div>
-      <button class="primary" style="margin-top:.9rem" id="empty-run">New session</button></div>`);
-    empty.querySelector("#empty-run").onclick = () => quickStart();
-    main.append(empty);
-  }
-  const panel = $(`<div class="card wf-panel">
-    <div class="between" style="margin-bottom:.2rem"><span class="kicker">Workflows</span>
-      <button class="ghost" id="new-workflow" title="Create a workflow">+ New</button></div>
-    <div class="small faint" style="margin-bottom:.3rem">Saved defaults: team, permissions, pacing.</div>
-    <div class="wf-rows"></div></div>`);
-  panel.querySelector("#new-workflow").onclick = () => configureWorkflow();
-  const rows = panel.querySelector(".wf-rows");
+  const page = $(`<div class="home-page"></div>`);
+  page.append($(`<div class="page-head"><div><h1>Workflows</h1>
+    <div class="sub">Saved defaults — the agent team, its permission ceiling, and pacing. Run one to start a session.</div></div>
+    <button class="primary" id="new-workflow">+ New workflow</button></div>`));
+  page.querySelector("#new-workflow").onclick = () => configureWorkflow();
+  const cards = $(`<div class="wf-grid"></div>`);
   for (const workflow of workflows) {
     const agents = workflow.agents || [];
     const chain = agents.map(agent => agent.name).join(" → ") || "no agents yet";
-    const row = $(`<div class="wf-row"><div style="min-width:0"><b style="font-size:12.5px">${esc(workflow.name)}</b>
+    const card = $(`<div class="card wf-card"><div style="min-width:0"><b style="font-size:13px">${esc(workflow.name)}</b>
       <div class="workflow-chain">${esc(chain)}${workflow.deadline_duration ? ` · ${esc(workflow.deadline_duration)}` : ""}</div></div>
-      <div class="row" style="flex:none;flex-wrap:nowrap;gap:.25rem"><button data-run>Run</button><details class="menu workflow-menu"><summary aria-label="Workflow options">•••</summary><div>
+      <div class="between" style="margin-top:.75rem"><button class="primary" data-run style="font-size:11.5px;padding:.32rem .7rem">Run</button><details class="menu workflow-menu"><summary aria-label="Workflow options">•••</summary><div>
         <button data-edit>Edit workflow</button><button data-rename>Rename</button><button class="danger" data-delete>Delete workflow</button>
       </div></details></div></div>`);
-    row.querySelector("[data-run]").onclick = () => quickStart(workflow.name);
-    row.querySelector("[data-edit]").onclick = () => configureWorkflow(workflow.name);
-    row.querySelector("[data-rename]").onclick = guard(async () => {
+    card.querySelector("[data-run]").onclick = () => quickStart(workflow.name);
+    card.querySelector("[data-edit]").onclick = () => configureWorkflow(workflow.name);
+    card.querySelector("[data-rename]").onclick = guard(async () => {
       const name = prompt("New workflow name", workflow.name)?.trim();
       if (!name || name === workflow.name) return;
       S.boot.presets = (await api("preset/rename", {name: workflow.name, new_name: name})).presets;
       confirmNotice(`Renamed workflow to “${name}”.`); await home();
     });
-    row.querySelector("[data-delete]").onclick = guard(async () => {
+    card.querySelector("[data-delete]").onclick = guard(async () => {
       if (!confirm(`Delete workflow “${workflow.name}”? Previous sessions are not affected.`)) return;
       S.boot.presets = (await api("preset/delete", {name: workflow.name})).presets;
       confirmNotice(`Deleted workflow “${workflow.name}”.`); await home();
     });
-    rows.append(row);
+    cards.append(card);
   }
-  aside.append(panel);
-  app().append(grid);
+  page.append(cards);
+
+  page.append($(`<div class="section-head" style="margin-top:2.1rem"><span class="kicker">Recent sessions</span></div>`));
+  if (list.length) {
+    page.append(sessionRows());
+  } else {
+    const empty = $(`<div class="card" style="text-align:center;padding:2rem 1rem">
+      <div class="mono muted">no sessions yet</div>
+      <div class="small faint" style="margin-top:.4rem">Run a workflow, or choose a repository and write the brief.</div>
+      <button class="primary" style="margin-top:.9rem" id="empty-run">New session</button></div>`);
+    empty.querySelector("#empty-run").onclick = () => quickStart();
+    page.append(empty);
+  }
+  app().append(page);
 }
 
 function showDeleteSessionDialog(s) {
@@ -1186,8 +1191,26 @@ async function configureWorkflow(name) {
     {name:"", runtime:"copilot", role:"adversarial_reviewer"},
   ];
   S.workflowPermissions = {...S.draft.draft.permissions};
+  S.workflowProfile = inferPermissionProfile(S.workflowPermissions);
   S.workflowDeadline = S.draft.draft.deadline_duration || "";
   renderWorkflow();
+}
+
+function inferPermissionProfile(permissions) {
+  // Which profile produced this permission map, if any — so re-opening a
+  // workflow highlights the card that is actually in effect.
+  for (const profile of S.boot?.permission_profiles || []) {
+    const keys = new Set([
+      ...Object.keys(profile.permissions || {}),
+      ...Object.keys(permissions || {}),
+    ]);
+    let matches = true;
+    for (const key of keys) {
+      if ((profile.permissions || {})[key] !== (permissions || {})[key]) { matches = false; break; }
+    }
+    if (matches) return profile.key;
+  }
+  return null;
 }
 
 function renderWorkflow() {
@@ -1250,9 +1273,11 @@ function renderWorkflow() {
   const permissions = box.querySelector("#workflow-permissions");
   const profiles = box.querySelector("#workflow-profiles");
   for (const profile of S.boot.permission_profiles || []) {
-    const choice = $(`<button class="choice" data-profile="${esc(profile.key)}"><b>${esc(profile.label)}</b><span class="small muted">${esc(profile.description)}</span><span class="small faint" style="display:block;margin-top:.25rem">Best for: ${esc(profile.best_for)}</span>${profile.warning ? `<span class="small" style="display:block;margin-top:.25rem;color:var(--warn)">${esc(profile.warning)}</span>` : ""}</button>`);
+    const on = S.workflowProfile === profile.key;
+    const choice = $(`<button class="choice ${on ? "on" : ""}" data-profile="${esc(profile.key)}" aria-pressed="${on}"><b>${esc(profile.label)}${on ? " ✓" : ""}</b><span class="small muted">${esc(profile.description)}</span><span class="small faint" style="display:block;margin-top:.25rem">Best for: ${esc(profile.best_for)}</span>${profile.warning ? `<span class="small" style="display:block;margin-top:.25rem;color:var(--warn)">${esc(profile.warning)}</span>` : ""}</button>`);
     choice.onclick = () => {
       S.workflowPermissions = {...profile.permissions};
+      S.workflowProfile = profile.key;
       renderWorkflow();
     };
     profiles.append(choice);
@@ -1266,6 +1291,12 @@ function renderWorkflow() {
       row.querySelectorAll("button").forEach(button => button.onclick = () => {
         S.workflowPermissions[capability.key] = button.dataset.value;
         row.querySelectorAll("button").forEach(item => item.classList.toggle("on", item === button));
+        // A fine-tuned map is no longer any named profile.
+        S.workflowProfile = null;
+        profiles.querySelectorAll(".choice").forEach(item => {
+          item.classList.remove("on");
+          item.setAttribute("aria-pressed", "false");
+        });
       });
       groupEl.append(row);
     }

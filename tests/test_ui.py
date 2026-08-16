@@ -1077,6 +1077,29 @@ def test_agent_names_derive_from_the_runtime_selector(ui):
     assert [agent["name"] for agent in result["draft"]["agents"]] == ["Codex", "Codex-2", "Claude"]
 
 
+def test_home_leads_with_workflows_and_keeps_sessions_compact():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '<button class="primary" id="new-workflow">+ New workflow</button>' in source
+    assert 'class="wf-grid"' in source
+    assert "Recent sessions" in source
+    assert "S.showAllSessions ? list : list.slice(0, 6)" in source
+    assert "Show all ${list.length} sessions" in source
+
+
+def test_permission_profiles_show_their_selected_state():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'class="choice ${on ? "on" : ""}" data-profile=' in source
+    assert "function inferPermissionProfile(" in source
+    assert "S.workflowProfile = profile.key;" in source
+    # Fine-tuning any capability clears the named-profile highlight.
+    assert "S.workflowProfile = null;" in source
+    assert ".choice:active{transform:translateY(1px)}" in source
+
+
 def test_the_workflow_editor_has_no_manual_name_field():
     from pathlib import Path
 

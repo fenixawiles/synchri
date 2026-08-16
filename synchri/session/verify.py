@@ -204,6 +204,36 @@ class ChangeSummary:
         return asdict(self)
 
 
+def _porcelain_entries(run) -> list[tuple[str, str, str | None]]:
+    """Return machine-safe porcelain-v1 status entries.
+
+    ``--porcelain=v1 -z`` is deliberately not line or whitespace delimited:
+    filenames may contain spaces, tabs, quotes, newlines, or a literal ``->``.
+    Rename and copy entries carry their source path in the following NUL field.
+    """
+    fields = run("status", "--porcelain=v1", "-z").split("\0")
+    entries: list[tuple[str, str, str | None]] = []
+    index = 0
+    while index < len(fields):
+        record = fields[index]
+        index += 1
+        if not record:
+            continue
+        if len(record) < 4 or record[2] != " ":
+            # Defensive only: Git owns this machine format, but malformed
+            # output must never turn into a guessed path.
+            continue
+        code, path = record[:2], record[3:]
+        source: str | None = None
+        if "R" in code or "C" in code:
+            if index >= len(fields):
+                continue
+            source = fields[index]
+            index += 1
+        entries.append((code, path, source))
+    return entries
+
+
 def summarize_changes(
     worktree_path: str | Path, base_branch: str, *, limit: int = 20
 ) -> ChangeSummary:
@@ -244,13 +274,7 @@ def summarize_changes(
         if match:
             setattr(summary, field_name, int(match.group(1)))
 
-    # Split on whitespace, not fixed columns: git() strips its output, which
-    # removes the leading status space on the first porcelain line.
-    summary.dirty_files = [
-        parts[1].strip()
-        for parts in (line.split(None, 1) for line in run("status", "--porcelain").splitlines())
-        if len(parts) == 2
-    ][:50]
+    summary.dirty_files = [path for _code, path, _source in _porcelain_entries(run)][:50]
     return summary
 
 
@@ -263,6 +287,37 @@ def diff_text(worktree_path: str | Path, base_branch: str, *, max_chars: int = 2
     text = worktree_module.git(
         worktree_path, "diff", f"{base_branch}...HEAD", check=False
     )
+    return text if len(text) <= max_chars else text[:max_chars] + "\n… (truncated)"
+
+
+def working_tree_diff_text(
+    worktree_path: str | Path, base_branch: str, *, max_chars: int = 200_000
+) -> str:
+    """A complete review patch for a session worktree.
+
+    Unlike the live transparency diff, an exported session package must not
+    silently omit staged, unstaged, or untracked work.  Compare the worktree
+    directly with its merge base and append a binary-safe no-index patch for
+    every untracked path.
+    """
+    from . import worktree as worktree_module
+
+    root = Path(worktree_path)
+    if not root.exists():
+        return ""
+
+    def run(*args: str) -> str:
+        return worktree_module.git(root, *args, check=False)
+
+    merge_base = run("merge-base", base_branch, "HEAD") or base_branch
+    pieces = [run("diff", "--binary", merge_base)]
+    for code, path, _source in _porcelain_entries(run):
+        if code == "??":
+            pieces.append(run("diff", "--binary", "--no-index", "--", os.devnull, path))
+    text = "\n".join(piece.rstrip("\n") for piece in pieces if piece)
+    if not text:
+        return ""
+    text += "\n"
     return text if len(text) <= max_chars else text[:max_chars] + "\n… (truncated)"
 
 
@@ -307,16 +362,7 @@ def file_changes(
             status_map[parts[-1]] = parts[0][:1]
     dirty: set[str] = set()
     untracked: list[str] = []
-    # ``git()`` strips its output, which removes the leading status space on
-    # the FIRST porcelain line (' M file' -> 'M file'); split on whitespace
-    # instead of slicing fixed columns.
-    for line in run("status", "--porcelain").splitlines():
-        parts = line.split(None, 1)
-        if len(parts) != 2:
-            continue
-        code, path = parts[0], parts[1].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
+    for code, path, _source in _porcelain_entries(run):
         if code == "??":
             untracked.append(path)
         else:

@@ -1057,6 +1057,50 @@ def test_file_changes_lists_each_file_with_its_own_diff(manager, repo, agents):
     assert summary["recent"][0]["full_sha"] and len(summary["recent"][0]["full_sha"]) == 40
 
 
+def test_change_inspection_keeps_literal_paths_with_spaces_and_arrows(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+    literal_name = "new file -> final.txt"
+    (tree / literal_name).write_text("present\n", encoding="utf-8")
+
+    summary = manager.changes(record.session_id)
+    files = {entry["path"]: entry for entry in manager.file_changes(record.session_id)}
+
+    assert literal_name in summary["dirty_files"]
+    assert files[literal_name]["status"] == "untracked"
+    assert "+present" in files[literal_name]["diff"]
+
+
+def test_session_package_includes_staged_unstaged_and_untracked_work(manager, repo, agents):
+    import io
+    import zipfile
+
+    from synchri.session import package as package_module
+
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+    (tree / "README.md").write_text("hi\nunstaged finish\n", encoding="utf-8")
+    (tree / "staged.txt").write_text("staged finish\n", encoding="utf-8")
+    _git(tree, "add", "staged.txt")
+    (tree / "untracked file.txt").write_text("untracked finish\n", encoding="utf-8")
+    manager.set_gates(record.session_id, [
+        Gate(
+            "DONE-01", "deliver the change", status="pass", evidence=["reviewed"],
+            builder_assessment="implemented", reviewer_assessment="verified independently",
+        )
+    ])
+    manager.complete(record.session_id)
+
+    _filename, data = package_module.build(manager.broker, manager, record.session_id)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        patch = archive.read("diff.patch").decode("utf-8")
+
+    assert "+unstaged finish" in patch
+    assert "+staged finish" in patch
+    assert "+untracked finish" in patch
+    assert "untracked file.txt" in patch
+
+
 def test_participant_runtime_states_are_durable(manager, repo, agents):
     record = make_session(manager, repo, agents)
     assert manager.participant_states(record.session_id)["claude"]["state"] is None
@@ -1109,6 +1153,25 @@ def test_force_complete_waives_blocking_gates_and_records_the_override(manager, 
     changelog = manager.final_changelog(record.session_id)
     assert "AUTH-01" in changelog["markdown"]
     assert "waived" in changelog["markdown"].lower()
+
+
+def test_force_complete_rolls_back_waivers_when_changelog_cannot_be_written(
+    manager, repo, agents, monkeypatch
+):
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [Gate("AUTH-01", "login works")])
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("synchri.session.manager.write_private", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        manager.complete(record.session_id, force=True)
+
+    assert manager.get(record.session_id).is_terminal is False
+    gate = manager.gates(record.session_id)[0]
+    assert gate.status == "pending"
+    assert gate.evidence == []
 
 
 def test_racing_stop_and_complete_finish_the_session_exactly_once(manager, repo, agents, workspace):
@@ -1953,7 +2016,9 @@ def test_github_repository_listing_uses_app_installations(workspace, monkeypatch
     assert "/user/installations/41/repositories" in calls[1][0]
 
 
-def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path, monkeypatch):
+def test_quick_clone_puts_a_github_project_in_the_desktop_folder(
+    repo, tmp_path, monkeypatch, workspace
+):
     from synchri.session import discovery
 
     observed = []
@@ -1965,14 +2030,16 @@ def test_quick_clone_puts_a_github_project_in_the_desktop_folder(repo, tmp_path,
     monkeypatch.setattr(discovery, "_clone", fake_clone)
     desktop = tmp_path / "Desktop" / "Synchri"
     result = discovery.clone_github_repository(
-        "fenixawiles/synchri", destination_root=desktop
+        "fenixawiles/synchri", destination_root=desktop, workspace=workspace
     )
 
     expected = desktop / "fenixawiles-synchri"
     assert observed == [("https://github.com/fenixawiles/synchri.git", expected)]
     assert result["path"] == str(expected.resolve()) and result["cloned"] is True
     with pytest.raises(ValidationError, match="already exists"):
-        discovery.clone_github_repository("fenixawiles/synchri", destination_root=desktop)
+        discovery.clone_github_repository(
+            "fenixawiles/synchri", destination_root=desktop, workspace=workspace
+        )
 
 
 def test_resolve_github_repository_reuses_synchris_existing_checkout(repo, tmp_path, monkeypatch):

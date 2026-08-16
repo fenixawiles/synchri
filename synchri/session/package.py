@@ -18,6 +18,7 @@ import zipfile
 from ..errors import StateError
 from ..storage import dao
 from . import changelog as changelog_module
+from . import verify as verify_module
 from .gates import summarize
 
 _SLUG = re.compile(r"[^a-z0-9]+")
@@ -62,7 +63,14 @@ def build(broker, manager, session_id: str) -> tuple[str, bytes]:
     files["usage-summary.md"] = _usage_markdown(usage)
     files["usage.json"] = json.dumps(usage, ensure_ascii=False, indent=2, default=str) + "\n"
     files["commits.md"] = _commits_markdown(changes)
-    files["diff.patch"] = manager.diff(session_id) or "(no diff)\n"
+    # A handoff archive has to capture all work in the authorized worktree,
+    # not only commits reachable from HEAD.  Agents often leave the final
+    # polish staged or unstaged when they ask a human to review it.
+    files["diff.patch"] = (
+        verify_module.working_tree_diff_text(record.worktree_path, record.base_branch)
+        if record.worktree_path
+        else ""
+    ) or "(no diff)\n"
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:

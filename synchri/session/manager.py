@@ -929,11 +929,11 @@ class SessionManager:
         recorded on the gate itself and in the session's ended reason — the
         changelog stays honest about what was verified versus waived.
 
-        Validation and git work (change summary, changelog rendering) run
-        before the write transaction so the database lock is never held
-        across subprocess calls. The terminal transition re-checks state
-        inside the transaction, so a racing ``stop`` and ``complete`` can
-        never both finish the session.
+        Validation and git work (change summary) run before the write
+        transaction so the database lock is never held across subprocess
+        calls. The terminal transition re-checks its gates inside the
+        transaction, so a racing ``stop`` and ``complete`` can never both
+        finish the session and a forced waiver cannot outlive a failed finish.
         """
         record = self.get(session_id)
         if record.is_terminal:
@@ -947,28 +947,8 @@ class SessionManager:
                 code="no_gates",
             )
         report = summarize(gates)
-        waived: list[str] = []
         if not report["complete"]:
             if not force:
-                raise StateError(
-                    "cannot complete: " + "; ".join(report["blockers"]),
-                    code="gates_unsatisfied",
-                )
-            for gate in gates:
-                if gate.blocks_completion():
-                    self.update_gate(
-                        session_id,
-                        gate.gate_id,
-                        actor="human",
-                        status=GateStatus.WAIVED.value,
-                        evidence=_append_unique(
-                            gate.evidence, ["Waived by the user at completion"]
-                        ),
-                    )
-                    waived.append(gate.gate_id)
-            gates = self.gates(session_id)
-            report = summarize(gates)
-            if not report["complete"]:
                 raise StateError(
                     "cannot complete: " + "; ".join(report["blockers"]),
                     code="gates_unsatisfied",
@@ -976,18 +956,6 @@ class SessionManager:
 
         completed_at = utc_now()
         changes = self.changes(session_id)
-        markdown = changelog_module.render(
-            record,
-            gates,
-            changes,
-            self.last_test_run(session_id),
-            completed_at=completed_at,
-        )
-        reason = (
-            f"completed by the user ({len(waived)} gate{'s' if len(waived) != 1 else ''} waived)"
-            if waived
-            else "all acceptance gates satisfied"
-        )
 
         changelog_path = self.broker.workspace.final_changelog_path(record.room_id)
         previous_changelog = (
@@ -1001,6 +969,43 @@ class SessionManager:
                 record = self.get(session_id)
                 if record.is_terminal:
                     raise StateError(f"session is already {record.status}", code="session_finished")
+                gates = self.gates(session_id)
+                report = summarize(gates)
+                waived: list[str] = []
+                if not report["complete"]:
+                    if not force:
+                        raise StateError(
+                            "cannot complete: " + "; ".join(report["blockers"]),
+                            code="gates_unsatisfied",
+                        )
+                    for gate in gates:
+                        if gate.blocks_completion():
+                            gate.status = GateStatus.WAIVED.value
+                            gate.evidence = _append_unique(
+                                gate.evidence, ["Waived by the user at completion"]
+                            )
+                            gate.updated_at = utc_now()
+                            gate.updated_by = "human"
+                            self._write_gate(session_id, gate)
+                            waived.append(gate.gate_id)
+                    report = summarize(gates)
+                    if not report["complete"]:
+                        raise StateError(
+                            "cannot complete: " + "; ".join(report["blockers"]),
+                            code="gates_unsatisfied",
+                        )
+                markdown = changelog_module.render(
+                    record,
+                    gates,
+                    changes,
+                    self.last_test_run(session_id),
+                    completed_at=completed_at,
+                )
+                reason = (
+                    f"completed by the user ({len(waived)} gate{'s' if len(waived) != 1 else ''} waived)"
+                    if waived
+                    else "all acceptance gates satisfied"
+                )
                 write_private(changelog_path, markdown)
                 wrote_changelog = True
 

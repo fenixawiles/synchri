@@ -76,6 +76,11 @@ def test_update_payload_is_notarized_assessed_and_published_safely():
         "env COPYFILE_DISABLE=1 tar"
     )
     assert "SYNCHRI_NOTARY_APPLE_ID" in workflow and "SYNCHRI_NOTARY_APPLE_ID" in desktop_build
+    assert 'codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY"' in desktop_build
+    assert '--identifier "com.synchri.desktop.dmg" "$DMG"' in desktop_build
+    assert desktop_build.index('--identifier "com.synchri.desktop.dmg" "$DMG"') < desktop_build.index(
+        "env COPYFILE_DISABLE=1 tar"
+    )
 
     assert 'xcrun stapler validate "$VERIFY_DIR"' in workflow
     assert "spctl --assess --type exec" in workflow

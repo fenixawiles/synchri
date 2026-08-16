@@ -396,6 +396,20 @@ def test_completed_session_is_read_only_and_exposes_its_changelog():
     assert "Session complete — the final changelog is available in the rail." in source
 
 
+def test_the_chat_input_is_a_wrapping_composer():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '<textarea id="mm"' in source
+    assert '<input id="mm"' not in source
+    assert 'event.key === "Enter" && !event.shiftKey && !event.isComposing' in source
+    assert "Shift+Enter for a new line" in source
+    assert "Math.min(input.scrollHeight, 160)" in source
+    # The draft/caret rescue across SSE repaints survives the element swap.
+    assert "const draftValue = previousInput?.value" in source
+    assert "input.setSelectionRange(caretStart, caretEnd)" in source
+
+
 def test_an_incidental_non_repository_cwd_is_not_preselected(workspace, tmp_path):
     from synchri.ui.api import Api
 

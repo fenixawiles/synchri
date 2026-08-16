@@ -352,6 +352,7 @@ def collaboration_pair(
 KNOWN_RUNTIMES: dict[str, dict] = {
     "claude_code": {
         "label": "Claude Code",
+        "default_name": "Claude",
         "executable": "claude",
         # The maintained managed command asks for the CLI's machine-readable
         # stream so the UI can show live work; the plain variant is the
@@ -363,6 +364,7 @@ KNOWN_RUNTIMES: dict[str, dict] = {
     },
     "codex": {
         "label": "Codex",
+        "default_name": "Codex",
         "executable": "codex",
         "managed_command": "codex exec --json {prompt}",
         "plain_managed_command": "codex exec {prompt}",
@@ -371,12 +373,14 @@ KNOWN_RUNTIMES: dict[str, dict] = {
     },
     "copilot": {
         "label": "GitHub Copilot CLI",
+        "default_name": "Copilot",
         "executable": "copilot",
         "managed_command": "copilot -sp {prompt}",
         "suggested_command": "copilot -sp {prompt}",
     },
     "gemini": {
         "label": "Gemini CLI",
+        "default_name": "Gemini",
         "executable": "gemini",
         # Kept in the chooser for external rooms. It does not appear behind
         # the reliable one-click path until its unattended lifecycle has the
@@ -386,11 +390,30 @@ KNOWN_RUNTIMES: dict[str, dict] = {
     },
     "generic": {
         "label": "Other terminal-capable agent",
+        "default_name": "Agent",
         "executable": None,
         "managed_command": None,
         "suggested_command": None,
     },
 }
+
+
+def default_agent_name(runtime: str, taken: set[str] | None = None) -> str:
+    """Runtime-derived participant name, deduplicated with a hyphen suffix.
+
+    A participant name is identity — credential file paths, the room roster,
+    directive routing — so the derived value must satisfy ``ids.NAME_PATTERN``
+    (no spaces; hence "Codex-2", never "Codex 2").
+    """
+    definition = KNOWN_RUNTIMES.get(runtime, KNOWN_RUNTIMES["generic"])
+    base = definition.get("default_name") or "Agent"
+    used = taken or set()
+    if base not in used:
+        return base
+    counter = 2
+    while f"{base}-{counter}" in used:
+        counter += 1
+    return f"{base}-{counter}"
 
 
 def runtime_status(runtime: str) -> dict:

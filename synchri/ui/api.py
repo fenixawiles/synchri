@@ -26,6 +26,7 @@ from ..session.modes import (
     ParticipantPlan,
     Role,
     collaboration_pair,
+    default_agent_name,
     list_modes,
     plan_launch_status,
     runtime_catalog,
@@ -295,17 +296,7 @@ class Api:
                 body.get("existing_worktree_path") or None,
             )
         if body.get("agents") is not None:
-            draft.set_agents(
-                [
-                    ParticipantPlan(
-                        name=a["name"],
-                        runtime=a.get("runtime", "generic"),
-                        role=a.get("role", "participant"),
-                        command=a.get("command"),
-                    )
-                    for a in body["agents"]
-                ]
-            )
+            draft.set_agents(self._plans(body["agents"]))
         for capability, decision in (body.get("permissions") or {}).items():
             draft.set_permission(capability, decision)
         if body.get("spec") is not None:
@@ -481,16 +472,26 @@ class Api:
     def _plans(self, values: list[dict] | None) -> list[ParticipantPlan]:
         if not isinstance(values, list):
             raise ValidationError("add at least one agent")
-        return [
-            ParticipantPlan(
-                name=agent.get("name", "").strip(),
-                runtime=agent.get("runtime", "generic"),
-                role=agent.get("role", "participant"),
-                command=agent.get("command"),
+        # Names derive from the runtime when absent — the UI no longer asks
+        # for them — with a hyphen suffix keeping duplicates unique.
+        taken: set[str] = set()
+        plans: list[ParticipantPlan] = []
+        for agent in values:
+            if not isinstance(agent, dict):
+                continue
+            name = (agent.get("name") or "").strip()
+            if not name:
+                name = default_agent_name(agent.get("runtime", "generic"), taken)
+            taken.add(name)
+            plans.append(
+                ParticipantPlan(
+                    name=name,
+                    runtime=agent.get("runtime", "generic"),
+                    role=agent.get("role", "participant"),
+                    command=agent.get("command"),
+                )
             )
-            for agent in values
-            if isinstance(agent, dict) and agent.get("name", "").strip()
-        ]
+        return plans
 
     def _launch_payload(self, record, *, document=None) -> dict:
         """A room's setup state, including paste-ready instruction per agent."""

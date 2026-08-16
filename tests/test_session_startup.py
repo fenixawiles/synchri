@@ -934,6 +934,20 @@ def test_file_diff_shows_uncommitted_and_untracked_work(manager, repo, agents):
         manager.file_diff(record.session_id, "")
 
 
+def test_default_agent_names_are_identity_safe():
+    from synchri.ids import NAME_PATTERN
+    from synchri.session.modes import default_agent_name
+
+    taken: set[str] = set()
+    names = []
+    for runtime in ("codex", "codex", "claude_code", "generic", "unknown-runtime"):
+        name = default_agent_name(runtime, taken)
+        taken.add(name)
+        names.append(name)
+    assert names == ["Codex", "Codex-2", "Claude", "Agent", "Agent-2"]
+    assert all(NAME_PATTERN.match(name) for name in names), "names feed credential paths"
+
+
 def test_sessions_can_be_renamed(manager, repo, agents):
     record = make_session(manager, repo, agents)
     renamed = manager.rename_session(record.session_id, "  Auth hardening  ")

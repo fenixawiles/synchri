@@ -1182,8 +1182,8 @@ async function configureWorkflow(name) {
     : await api("draft/reset", {draft:"workflow"});
   const savedAgents = S.draft.draft.agents || [];
   S.workflowAgents = savedAgents.length ? savedAgents.map(agent => ({...agent})) : [
-    {name:"codex", runtime:"codex", role:"primary_builder"},
-    {name:"copilot", runtime:"copilot", role:"adversarial_reviewer"},
+    {name:"", runtime:"codex", role:"primary_builder"},
+    {name:"", runtime:"copilot", role:"adversarial_reviewer"},
   ];
   S.workflowPermissions = {...S.draft.draft.permissions};
   S.workflowDeadline = S.draft.draft.deadline_duration || "";
@@ -1214,17 +1214,30 @@ function renderWorkflow() {
   </div>`);
   app().append(box);
   const list = box.querySelector("#workflow-agents");
+  // Names are not asked for: they derive from the runtime selector, with a
+  // hyphen suffix keeping a doubled runtime unique ("Codex", "Codex-2").
+  const deriveNames = () => {
+    const taken = [];
+    for (const agent of agents) {
+      const runtime = (S.boot.runtimes || []).find(item => item.key === agent.runtime);
+      const base = runtime?.default_name || "Agent";
+      let name = base, counter = 2;
+      while (taken.includes(name)) name = `${base}-${counter++}`;
+      agent.name = name;
+      taken.push(name);
+    }
+  };
   const drawAgents = () => {
+    deriveNames();
     list.innerHTML = "";
     agents.forEach((agent, index) => {
-      const row = $(`<div class="grid" style="grid-template-columns:minmax(8rem,1fr) minmax(11rem,1.2fr) minmax(11rem,1.2fr) auto;align-items:center">
-        <input class="mono" value="${esc(agent.name)}" placeholder="agent name">
+      const row = $(`<div class="grid" style="grid-template-columns:minmax(11rem,1.2fr) minmax(11rem,1.2fr) minmax(8rem,1fr) auto;align-items:center">
         <select>${S.boot.runtimes.map(runtime => `<option value="${runtime.key}" ${runtime.key===agent.runtime?"selected":""}>${esc(runtime.label)}</option>`).join("")}</select>
         <select>${S.boot.roles.map(role => `<option value="${role.key}" ${role.key===agent.role?"selected":""}>${esc(role.label)}</option>`).join("")}</select>
+        <span class="mono small muted">runs as ${esc(agent.name)}</span>
         <button class="ghost">Remove</button></div>`);
-      const [name, runtime, role] = row.querySelectorAll("input,select");
-      name.oninput = event => agent.name = event.target.value;
-      runtime.onchange = event => agent.runtime = event.target.value;
+      const [runtime, role] = row.querySelectorAll("select");
+      runtime.onchange = event => { agent.runtime = event.target.value; drawAgents(); };
       role.onchange = event => agent.role = event.target.value;
       row.querySelector("button").onclick = () => { agents.splice(index, 1); drawAgents(); };
       list.append(row);

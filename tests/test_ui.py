@@ -1068,6 +1068,24 @@ def test_quick_start_validates_the_worktree_strategy(ui, repo):
     assert started["session"]["session_id"]
 
 
+def test_agent_names_derive_from_the_runtime_selector(ui):
+    result = call(ui, "/api/draft", {"draft": "naming", "agents": [
+        {"runtime": "codex", "role": "primary_builder"},
+        {"runtime": "codex", "role": "adversarial_reviewer"},
+        {"runtime": "claude_code", "role": "verifier"},
+    ]})
+    assert [agent["name"] for agent in result["draft"]["agents"]] == ["Codex", "Codex-2", "Claude"]
+
+
+def test_the_workflow_editor_has_no_manual_name_field():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'placeholder="agent name"' not in source
+    assert "runs as ${esc(agent.name)}" in source
+    assert "const deriveNames" in source
+
+
 def test_worktree_choice_is_an_explicit_selection():
     from pathlib import Path
 

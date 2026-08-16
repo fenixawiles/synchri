@@ -96,6 +96,7 @@ class Api:
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
             ("GET", "diff"): self.diff,
+            ("GET", "diff/file"): self.file_diff,
             ("GET", "memory"): self.memory,
             ("GET", "events"): self.events,
             ("POST", "control"): self.control,
@@ -778,6 +779,9 @@ class Api:
 
     def diff(self, query: dict, body: dict) -> dict:
         return {"diff": self.manager.diff(self._session_id(query))}
+
+    def file_diff(self, query: dict, body: dict) -> dict:
+        return self.manager.file_diff(self._session_id(query), query.get("path", ""))
 
     def memory(self, query: dict, body: dict) -> dict:
         record = self.manager.get(self._session_id(query))

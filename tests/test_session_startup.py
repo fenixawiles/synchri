@@ -914,6 +914,26 @@ def test_stopping_a_session_also_stops_its_room(manager, repo, agents):
     assert room["room"]["status"] == "stopped"
 
 
+def test_file_diff_shows_uncommitted_and_untracked_work(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    tree = Path(record.worktree_path)
+
+    (tree / "README.md").write_text("hi\nmore\n", encoding="utf-8")
+    changed = manager.file_diff(record.session_id, "README.md")
+    assert "+more" in changed["diff"]
+    assert changed["insertions"] == 1 and changed["deletions"] == 0
+
+    (tree / "notes.txt").write_text("fresh\n", encoding="utf-8")
+    fresh = manager.file_diff(record.session_id, "notes.txt")
+    assert "+fresh" in fresh["diff"], "untracked files must still render as a new-file diff"
+    assert fresh["insertions"] == 1
+
+    with pytest.raises(ValidationError):
+        manager.file_diff(record.session_id, "../outside.txt")
+    with pytest.raises(ValidationError):
+        manager.file_diff(record.session_id, "")
+
+
 def test_participant_runtime_states_are_durable(manager, repo, agents):
     record = make_session(manager, repo, agents)
     assert manager.participant_states(record.session_id)["claude"]["state"] is None

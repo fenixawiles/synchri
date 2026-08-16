@@ -409,7 +409,7 @@ details.adv summary:hover{color:var(--ink)}
 .msg.system .who{color:var(--faint)}
 .msg .to{font:600 10.5px var(--mono);letter-spacing:.05em;color:var(--faint)}
 .msg .when{margin-left:auto;font-size:10.5px;color:var(--faint)}
-.msg .body{margin-top:.3rem;line-height:1.6;font-size:13.5px;white-space:normal}
+.msg .body{margin-top:.3rem;line-height:1.6;font-size:13.5px;white-space:normal;overflow-wrap:anywhere}
 .msg.system .body{color:var(--dim);font-size:12.5px}
 .who.a0{color:var(--a0)}.who.a1{color:var(--a1)}.who.a2{color:var(--a2)}.who.a3{color:var(--a3)}.who.a4{color:var(--a4)}
 .handoff{margin:.5rem 0 0;font:700 10px var(--mono);letter-spacing:.08em;color:var(--accent)}
@@ -435,6 +435,43 @@ details.adv summary:hover{color:var(--ink)}
   align-items:baseline;font-size:12.5px;padding:.1rem 0;max-width:56rem}
 .live-note b{font:700 10.5px var(--mono);letter-spacing:.05em}
 .live-note .dot{color:var(--accent);font-size:9px}
+
+/* Live feed: chatbot-style streamed work from the agents' own event streams */
+.live-feed{margin:0;padding:.55rem clamp(1.25rem,3vw,2.5rem);border-top:1px solid var(--line);
+  background:var(--panel);display:grid;gap:.6rem}
+.feed-panel{max-width:56rem;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel2);padding:.5rem .7rem .55rem}
+.feed-head{display:flex;align-items:center;gap:.45rem;font:700 10px var(--mono);
+  letter-spacing:.08em;color:var(--accent);margin-bottom:.3rem}
+.feed-head .dot{font-size:9px;animation:pulse 1.6s ease-in-out infinite}
+.feed-lines{display:grid;gap:.16rem;max-height:12rem;overflow-y:auto}
+.feed-line{font-size:12.5px;line-height:1.45;overflow-wrap:anywhere;min-width:0}
+.feed-line.thinking{color:var(--dim);font-style:italic}
+.feed-line.command,.feed-line.file{font-family:var(--mono);font-size:11.5px}
+.feed-line.file{color:var(--dim)}
+.feed-line.tool{color:var(--dim)}
+.feed-line.error{color:var(--bad)}
+.feed-line.compaction{padding:.12rem 0}
+
+/* Collapsible per-file diff cards (chat live feed and the Changes tab) */
+.file-card{max-width:56rem;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--bg);margin-top:.4rem;overflow:hidden}
+.file-card summary{display:flex;align-items:center;gap:.55rem;cursor:pointer;
+  padding:.45rem .7rem;font-size:12px;list-style:none;min-width:0}
+.file-card summary::-webkit-details-marker{display:none}
+.file-card summary::before{content:"▸";color:var(--faint);flex:none;font-size:10px}
+.file-card[open] summary::before{content:"▾"}
+.file-card-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-card-stats{margin-left:auto;flex:none}
+.file-card .file-card-diff{margin:0;border-top:1px solid var(--line);max-height:18rem;
+  overflow:auto;padding:.5rem .7rem;font-size:11.5px}
+
+/* Truncate-with-expand */
+.clamp .clamp-body{max-height:calc(var(--clamp,3) * 1.55em);overflow:hidden}
+.clamp.open .clamp-body{max-height:24rem;overflow:auto}
+.clamp-more{background:none;border:0;color:var(--accent);padding:.1rem 0;cursor:pointer;
+  font-size:11px;display:block}
+.clamp-more:hover{text-decoration:underline;background:none}
 
 .timebox-nudge{margin:.5rem clamp(1.25rem,3vw,2.5rem);padding:.6rem .8rem;
   border:1px solid var(--warn-line);border-left:3px solid var(--warn);background:var(--warn-soft);
@@ -485,7 +522,7 @@ pre.diff{background:var(--bg)}
 .rich .rich-quote{margin:.55rem 0;padding:.15rem 0 .15rem .8rem;border-left:2px solid var(--line2);color:var(--dim)}
 .rich code{font-size:.9em;background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:.08rem .28rem}
 .rich .rich-code{margin:.6rem 0;padding:.7rem .85rem;border:1px solid var(--line);background:var(--bg);
-  border-radius:var(--radius-s);overflow:auto;line-height:1.5}
+  border-radius:var(--radius-s);overflow:auto;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
 .rich .rich-code code{padding:0;border:0;background:transparent}
 .rich a{color:var(--accent);text-decoration-thickness:1px}
 .live-note .rich{display:inline}
@@ -556,12 +593,26 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&
 /* A deliberately small, safe Markdown renderer. Content is escaped first, so
    messages can be pleasant to scan without turning room text into executable
    HTML. It supports the code and structure agents actually use in reviews. */
+/* Truncation-with-expand for oversized blocks. Only applied where overflow is
+   certain, so the toggle never appears on content that already fits. */
+function clampBlock(html, lines) {
+  return `<div class="clamp" style="--clamp:${Number(lines) || 3}"><div class="clamp-body">${html}</div><button class="clamp-more" type="button">Show more</button></div>`;
+}
+document.addEventListener("click", event => {
+  const button = event.target.closest(".clamp-more");
+  if (!button) return;
+  const clamp = button.closest(".clamp");
+  clamp.classList.toggle("open");
+  button.textContent = clamp.classList.contains("open") ? "Show less" : "Show more";
+});
+
 function rich(value) {
   const blocks = [];
   let text = esc(value);
   text = text.replace(/```([A-Za-z0-9_+-]*)?\n([\s\S]*?)```/g, (_, lang, code) => {
     const label = lang ? ` data-language="${esc(lang)}"` : "";
-    blocks.push(`<pre class="rich-code"${label}><code>${code}</code></pre>`);
+    const pre = `<pre class="rich-code"${label}><code>${code}</code></pre>`;
+    blocks.push(code.split("\n").length > 30 ? clampBlock(pre, 30) : pre);
     return `@@SYNCHRI_BLOCK_${blocks.length - 1}@@`;
   });
   text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
@@ -726,7 +777,8 @@ const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null,
             workflowName:"", workflowOriginal:"", workflowAgents:null,
             workflowPermissions:null, workflowDeadline:"", update:null, dismissedTimebox:null,
-            worktreeChoices:null, worktreeLoading:null };
+            worktreeChoices:null, worktreeLoading:null,
+            openFileCards:new Set(), fileCardCache:new Map() };
 const app = () => document.getElementById("app");
 
 /* ----------------------------------------------------------- GitHub sign-in */
@@ -1966,6 +2018,128 @@ function renderSession() {
   startClock(s.deadline, s.status);
 }
 
+function renderActivityNote(d) {
+  const activityTrail = d.activity_entries || d.activities || [];
+  const currentActivity = activityTrail[activityTrail.length - 1];
+  const previousActivities = activityTrail.slice(0, -1);
+  const activeTask = activeAgentTask(d);
+  const liveName = currentActivity?.name || activeTask?.name;
+  const liveSummary = currentActivity?.summary || activeTask?.summary;
+  const liveStarted = currentActivity?.created_at || activeTask?.started_at;
+  return liveName ? `<details class="live-work" aria-live="polite"><summary>
+      <span class="live-work-label">${esc(String(liveName).toUpperCase())} · ${activeTask?.planning ? "PLANNING" : "WORKING"} · <span data-task-started="${esc(liveStarted || "")}">${esc(taskElapsed(liveStarted))}</span></span>
+      <span class="live-note"><span class="dot">●</span><span>${richInline(liveSummary)}</span></span>
+    </summary>${previousActivities.length ? `<div style="margin-top:.3rem">${previousActivities.map(note =>
+      `<div class="live-note"><span class="dot">●</span><b>${esc(String(note.name).toUpperCase())}</b><div>${rich(note.summary)}</div></div>`
+    ).join("")}</div>` : ""}</details>` : `<section class="live-work" aria-live="polite"></section>`;
+}
+
+function renderLiveFeed(liveEvents, d) {
+  // Group durable stream events by participant, then by provider invocation;
+  // only a participant's newest, still-running invocation renders as a panel.
+  const byParticipant = new Map();
+  for (const event of liveEvents) {
+    const invokes = byParticipant.get(event.participant) || new Map();
+    const events = invokes.get(event.invoke_key) || [];
+    events.push(event);
+    invokes.set(event.invoke_key, events);
+    byParticipant.set(event.participant, invokes);
+  }
+  const panels = [];
+  for (const [name, invokes] of byParticipant) {
+    let latest = null, latestId = -1;
+    for (const events of invokes.values()) {
+      const last = events[events.length - 1];
+      if (last.event_id > latestId) { latestId = last.event_id; latest = events; }
+    }
+    if (!latest || latest.some(event => event.kind === "result")) continue;
+    panels.push(feedPanel(name, latest));
+  }
+  // Runtimes without a stream (and quiet moments) keep the activity note.
+  if (!panels.length) return renderActivityNote(d);
+  return `<section class="live-feed" aria-live="polite">${panels.join("")}</section>`;
+}
+
+function feedPanel(name, events) {
+  const started = events[0]?.created_at || "";
+  const rows = events.slice(-40).map(feedRow).filter(Boolean).join("");
+  const paths = [];
+  for (const event of events) {
+    if (event.kind === "file_edit" && event.file_path && !paths.includes(event.file_path)) {
+      paths.push(event.file_path);
+    }
+  }
+  const cards = paths.map(path => fileCardHtml(name, path)).join("");
+  return `<div class="feed-panel">
+    <div class="feed-head"><span class="dot">●</span><span>${esc(String(name).toUpperCase())} · WORKING · <span data-task-started="${esc(started)}">${esc(taskElapsed(started))}</span></span></div>
+    <div class="feed-lines">${rows || `<div class="feed-line status muted">Starting up…</div>`}</div>${cards}</div>`;
+}
+
+function feedRow(event) {
+  const kind = event.kind;
+  if (kind === "usage" || kind === "result") return "";
+  if (kind === "file_edit") {
+    return `<div class="feed-line file mono">✎ ${esc(event.title || event.file_path || "")}</div>`;
+  }
+  if (kind === "command") {
+    const exit = event.payload && event.payload.exit_code !== undefined && event.payload.exit_code !== null
+      ? ` <span class="faint">· exit ${esc(String(event.payload.exit_code))}</span>` : "";
+    return `<div class="feed-line command mono">${esc(event.title || "")}${exit}</div>`;
+  }
+  if (kind === "thinking") {
+    const detail = event.detail || "";
+    const body = richInline(detail);
+    const long = detail.length > 280 || detail.split("\n").length > 3;
+    return `<div class="feed-line thinking">${long ? clampBlock(`<span>${body}</span>`, 3) : body}</div>`;
+  }
+  if (kind === "compaction") {
+    return `<div class="feed-line compaction"><span class="pill dim">${esc((event.title || "Context compacted").toUpperCase())}</span></div>`;
+  }
+  if (kind === "error") {
+    return `<div class="feed-line error">${esc(event.title || "Error")}${event.detail ? ` <span class="faint">— ${esc(event.detail.split("\n")[0])}</span>` : ""}</div>`;
+  }
+  if (kind === "tool") {
+    return `<div class="feed-line tool">${esc(event.title || "tool")}${event.detail ? ` <span class="faint">· ${esc(event.detail)}</span>` : ""}</div>`;
+  }
+  return `<div class="feed-line status">${richInline(event.title || "")}</div>`;
+}
+
+function fileCardHtml(agent, path) {
+  const open = S.openFileCards.has(agent + ":" + path);
+  const cached = S.fileCardCache.get(path);
+  return `<details class="file-card" data-agent="${esc(agent)}" data-path="${esc(path)}"${open ? " open" : ""}>
+    <summary><span class="mono file-card-path">${esc(path)}</span><span class="file-card-stats small faint">${cached ? esc(cached.stats) : ""}</span></summary>
+    <pre class="diff file-card-diff">${cached ? cached.html : '<span class="muted small">Loading the diff…</span>'}</pre>
+  </details>`;
+}
+
+async function loadFileCard(card) {
+  const path = card.dataset.path;
+  const cached = S.fileCardCache.get(path);
+  const now = Date.now();
+  if (cached && now - cached.at < 3000) { applyFileCard(card, cached); return; }
+  try {
+    const r = await api(`diff/file?session=${encodeURIComponent(S.session)}&path=${encodeURIComponent(path)}`);
+    const entry = {
+      at: now,
+      html: r.diff ? renderDiff(r.diff) : '<span class="muted small">No changes in this file yet.</span>',
+      stats: `+${r.insertions || 0} −${r.deletions || 0}${r.truncated ? " · truncated" : ""}`,
+    };
+    S.fileCardCache.set(path, entry);
+    applyFileCard(card, entry);
+  } catch (error) {
+    const body = card.querySelector(".file-card-diff");
+    if (body) body.innerHTML = `<span class="muted small">${esc(error.message)}</span>`;
+  }
+}
+
+function applyFileCard(card, entry) {
+  const body = card.querySelector(".file-card-diff");
+  const stats = card.querySelector(".file-card-stats");
+  if (body) body.innerHTML = entry.html;
+  if (stats) stats.textContent = entry.stats;
+}
+
 function composerHint(d) {
   const actor = d.current_actor;
   if (actor && actor !== "human") return `${actor} has the floor — your message interrupts`;
@@ -2072,19 +2246,7 @@ async function paint(tab, el) {
     const caretStart = previousInput?.selectionStart ?? draftValue.length;
     const caretEnd = previousInput?.selectionEnd ?? draftValue.length;
     const r = await api("conversation" + q);
-    const activityTrail = d.activity_entries || d.activities || [];
-    const currentActivity = activityTrail[activityTrail.length - 1];
-    const previousActivities = activityTrail.slice(0, -1);
-    const activeTask = activeAgentTask(d);
-    const liveName = currentActivity?.name || activeTask?.name;
-    const liveSummary = currentActivity?.summary || activeTask?.summary;
-    const liveStarted = currentActivity?.created_at || activeTask?.started_at;
-    const liveWork = liveName ? `<details class="live-work" aria-live="polite"><summary>
-        <span class="live-work-label">${esc(String(liveName).toUpperCase())} · ${activeTask?.planning ? "PLANNING" : "WORKING"} · <span data-task-started="${esc(liveStarted || "")}">${esc(taskElapsed(liveStarted))}</span></span>
-        <span class="live-note"><span class="dot">●</span><span>${richInline(liveSummary)}</span></span>
-      </summary>${previousActivities.length ? `<div style="margin-top:.3rem">${previousActivities.map(note =>
-        `<div class="live-note"><span class="dot">●</span><b>${esc(String(note.name).toUpperCase())}</b><div>${rich(note.summary)}</div></div>`
-      ).join("")}</div>` : ""}</details>` : `<section class="live-work" aria-live="polite"></section>`;
+    const liveWork = renderLiveFeed(r.live_events || [], d);
     const messages = r.messages.length ? r.messages.map(m => {
       const speaker = m.metadata?.source === "session_activation" ? "SYNCHRI"
         : (m.sender === "human" ? "YOU" : String(m.sender).toUpperCase());
@@ -2106,6 +2268,15 @@ async function paint(tab, el) {
     el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork + agentAlerts(d) + timeboxNudge(d);
     const list = el.querySelector(".message-list");
     requestAnimationFrame(() => list.scrollTo({ top: list.scrollHeight, behavior: "smooth" }));
+    el.querySelectorAll(".feed-lines").forEach(lines => { lines.scrollTop = lines.scrollHeight; });
+    el.querySelectorAll("details.file-card[data-path]").forEach(card => {
+      card.addEventListener("toggle", () => {
+        const key = card.dataset.agent + ":" + card.dataset.path;
+        if (card.open) { S.openFileCards.add(key); loadFileCard(card); }
+        else S.openFileCards.delete(key);
+      });
+      if (card.open) loadFileCard(card);
+    });
     el.querySelectorAll("[data-restart]").forEach(button => button.onclick = guard(async () => {
       button.disabled = true;
       button.textContent = "Restarting…";

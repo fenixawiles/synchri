@@ -1171,6 +1171,13 @@ class SessionManager:
             return ""
         return verify_module.diff_text(record.worktree_path, record.base_branch)
 
+    def file_diff(self, session_id: str, path: str) -> dict:
+        """One file's live diff (committed + uncommitted) for the chat cards."""
+        record = self.get(session_id)
+        if not record.worktree or not worktree_module.exists(record.worktree):
+            return {"path": path, "diff": "", "insertions": 0, "deletions": 0, "truncated": False}
+        return verify_module.file_diff(record.worktree_path, record.base_branch, path)
+
     def detected_test_command(self, session_id: str) -> str | None:
         record = self.get(session_id)
         if not record.worktree_path:

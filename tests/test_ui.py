@@ -816,6 +816,35 @@ def test_the_human_can_speak_from_the_ui(ui, repo):
     assert conversation["messages"][-1]["sender"] == "human"
 
 
+def test_file_diff_endpoint_serves_live_per_file_diffs(ui, repo):
+    from pathlib import Path
+
+    session_id = _active(ui, repo)
+    worktree = call(ui, f"/api/session?session={session_id}")["worktree"]["path"]
+    Path(worktree, "README.md").write_text("hi\nlive edit\n", encoding="utf-8")
+
+    r = call(ui, f"/api/diff/file?session={session_id}&path=README.md")
+    assert "+live edit" in r["diff"]
+    assert r["insertions"] == 1 and r["deletions"] == 0
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, f"/api/diff/file?session={session_id}&path=..%2Fsecrets.txt")
+    assert exc.value.code == 400
+
+
+def test_the_chat_renders_a_live_feed_with_file_cards():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "function renderLiveFeed(" in source
+    assert '<details class="file-card"' in source
+    assert "diff/file?session=" in source
+    assert "function clampBlock(" in source
+    assert "S.openFileCards" in source
+    # Non-streaming runtimes keep the cooperative activity note as fallback.
+    assert "function renderActivityNote(" in source
+
+
 def test_conversation_carries_the_live_event_tail(ui, repo):
     from synchri.storage import dao
 

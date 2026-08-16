@@ -10,6 +10,7 @@ should mean "no counts", never a false green.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess
@@ -257,3 +258,58 @@ def diff_text(worktree_path: str | Path, base_branch: str, *, max_chars: int = 2
         worktree_path, "diff", f"{base_branch}...HEAD", check=False
     )
     return text if len(text) <= max_chars else text[:max_chars] + "\n… (truncated)"
+
+
+def file_diff(
+    worktree_path: str | Path, base_branch: str, path: str, *, max_chars: int = 40_000
+) -> dict:
+    """One file's live diff against the merge base, including uncommitted work.
+
+    ``git diff <merge-base> -- <path>`` shows committed and working-tree
+    changes in one view; a file git does not know yet (untracked) is rendered
+    as a synthesized new-file diff. The requested path arrives from a URL
+    parameter, so it must resolve inside the worktree.
+    """
+    from . import worktree as worktree_module
+
+    relative = str(path or "").strip()
+    if not relative:
+        raise ValidationError("a file path is required")
+    root = Path(worktree_path)
+    empty = {"path": relative, "diff": "", "insertions": 0, "deletions": 0, "truncated": False}
+    if not root.exists():
+        return empty
+    root_resolved = root.resolve()
+    try:
+        (root_resolved / relative).resolve().relative_to(root_resolved)
+    except ValueError:
+        raise ValidationError("the requested path is outside the session worktree") from None
+
+    def run(*args: str) -> str:
+        return worktree_module.git(root, *args, check=False)
+
+    merge_base = run("merge-base", base_branch, "HEAD") or base_branch
+    diff = run("diff", merge_base, "--", relative)
+    numstat = run("diff", "--numstat", merge_base, "--", relative)
+    if not diff.strip():
+        status = run("status", "--porcelain", "--", relative)
+        if status.startswith("??"):
+            diff = run("diff", "--no-index", "--", os.devnull, relative)
+            numstat = run("diff", "--no-index", "--numstat", "--", os.devnull, relative)
+
+    insertions = deletions = 0
+    first = next((line for line in numstat.splitlines() if line.strip()), "")
+    parts = first.split("\t")
+    if len(parts) >= 2:
+        insertions = int(parts[0]) if parts[0].isdigit() else 0
+        deletions = int(parts[1]) if parts[1].isdigit() else 0
+    truncated = len(diff) > max_chars
+    if truncated:
+        diff = diff[:max_chars] + "\n… (truncated)"
+    return {
+        "path": relative,
+        "diff": diff,
+        "insertions": insertions,
+        "deletions": deletions,
+        "truncated": truncated,
+    }

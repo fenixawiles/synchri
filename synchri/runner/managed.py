@@ -19,13 +19,35 @@ from typing import TYPE_CHECKING
 from ..broker import Broker, Credential
 from ..cli import session as session_files
 from ..errors import SynchriError, ValidationError
-from ..session.modes import managed_command, plan_launch_status
+from ..session.modes import managed_command, plan_launch_status, stream_format_for
 from .agent_command import AgentCommand, terminate_process_group
 from .conductor import Conductor
+from .stream_events import StreamRecorder, parser_for
 
 
 class _SetupCancelled(Exception):
     """The user stopped the session while agents were still being attached."""
+
+
+#: Stderr fragments that mean "this installed CLI predates its streaming
+#: flags" — the one failure the registry retries with the plain command.
+_FLAG_REJECTION_MARKERS = (
+    "--output-format",
+    "--json",
+    "--verbose",
+    "unknown option",
+    "unexpected argument",
+    "unrecognized option",
+    "unknown flag",
+    "unrecognized subcommand",
+)
+
+
+def _looks_like_flag_rejection(result) -> bool:
+    if result.returncode in (None, 0) or result.timed_out or result.cancelled:
+        return False
+    stderr = (result.stderr or "").lower()
+    return any(marker in stderr for marker in _FLAG_REJECTION_MARKERS)
 
 if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
     from ..config import Workspace
@@ -75,6 +97,9 @@ class ManagedRunnerRegistry:
         self._threads: dict[str, threading.Thread] = {}
         self._cancel: dict[str, threading.Event] = {}
         self._pgids: dict[str, set[int]] = {}
+        #: Runtimes whose installed CLI rejected the streaming flags; they run
+        #: the plain maintained command for the rest of this process.
+        self._plain_runtimes: set[str] = set()
         self._lock = threading.Lock()
 
     def readiness(self, record: "SessionRecord") -> dict:
@@ -240,12 +265,27 @@ class ManagedRunnerRegistry:
         self._set(record.session_id, "agreeing", "Each agent is reading and agreeing to the session contract.")
         document = manager.current_contract(record.session_id)
         for plan in record.participants:
+            prompt = _agreement_prompt(document.for_participant(plan.name))
             result = self._agent(record, plan).invoke(
-                _agreement_prompt(document.for_participant(plan.name)),
-                cancel_event=self._cancel.get(record.session_id),
+                prompt, cancel_event=self._cancel.get(record.session_id)
             )
             if result.cancelled:
                 raise _SetupCancelled()
+            if (
+                not result.ok
+                and stream_format_for(plan)
+                and plan.runtime not in self._plain_runtimes
+                and _looks_like_flag_rejection(result)
+            ):
+                # The installed CLI predates its streaming flags. Remember
+                # that for this runtime and retry once with the plain
+                # maintained command — behavior degrades to plain stdout.
+                self._plain_runtimes.add(plan.runtime)
+                result = self._agent(record, plan).invoke(
+                    prompt, cancel_event=self._cancel.get(record.session_id)
+                )
+                if result.cancelled:
+                    raise _SetupCancelled()
             if not result.ok:
                 detail = (result.stderr or "no response").strip()
                 raise ValidationError(f"{plan.name} could not acknowledge the contract: {detail[:400]}")
@@ -298,7 +338,8 @@ class ManagedRunnerRegistry:
         )
 
     def _agent(self, record: "SessionRecord", plan) -> AgentCommand:
-        command = managed_command(plan)
+        use_plain = plan.runtime in self._plain_runtimes
+        command = managed_command(plan, plain=use_plain)
         if not command:
             raise ValidationError(f"no managed command is configured for {plan.name}")
         agent = AgentCommand.parse(
@@ -316,6 +357,16 @@ class ManagedRunnerRegistry:
         session_id = record.session_id
         agent.on_spawn = lambda pid: self._track_pid(session_id, pid)
         agent.on_exit = lambda pid: self._untrack_pid(session_id, pid)
+        stream_format = None if use_plain else stream_format_for(plan)
+        if stream_format and record.room_id:
+            agent.parser_factory = lambda fmt=stream_format: parser_for(fmt)
+            agent.recorder = StreamRecorder(
+                self.workspace,
+                room_id=record.room_id,
+                session_id=session_id,
+                participant=plan.name,
+                runtime=plan.runtime,
+            )
         return agent
 
 

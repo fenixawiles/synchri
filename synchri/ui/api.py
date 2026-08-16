@@ -32,6 +32,7 @@ from ..session.modes import (
 )
 from ..session.permissions import PermissionSet, permission_profile, permission_profiles
 from ..session.spec import ProductSpec
+from ..storage import dao
 from ..runner.managed import ManagedRunnerRegistry
 
 Route = Callable[[dict, dict], dict]
@@ -616,8 +617,12 @@ class Api:
     def conversation(self, query: dict, body: dict) -> dict:
         record = self.manager.get(self._session_id(query))
         if not record.room_id:
-            return {"messages": []}
-        return self.broker.read(record.room_id, credential=self._human(record))
+            return {"messages": [], "live_events": []}
+        payload = self.broker.read(record.room_id, credential=self._human(record))
+        payload["live_events"] = dao.list_stream_events(
+            self.broker.conn, record.room_id, limit=200
+        )
+        return payload
 
     def changelog(self, query: dict, body: dict) -> dict:
         return self.manager.final_changelog(self._session_id(query))

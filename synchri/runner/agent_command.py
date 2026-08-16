@@ -49,6 +49,11 @@ class AgentCommand:
     #: group even when this invoke's caller is gone.
     on_spawn: Callable[[int], None] | None = None
     on_exit: Callable[[int], None] | None = None
+    #: Streaming ingestion (optional): a factory building a fresh stream
+    #: parser per invocation, and a durable recorder receiving its normalized
+    #: events. Both are best-effort — any failure falls back to raw stdout.
+    parser_factory: Callable[[], object] | None = None
+    recorder: object | None = None
 
     @property
     def takes_prompt_in_argv(self) -> bool:
@@ -118,10 +123,32 @@ class AgentCommand:
             except Exception:  # pragma: no cover - supervision must not break the run
                 pass
 
+        parser = None
+        if self.parser_factory is not None:
+            try:
+                parser = self.parser_factory()
+            except Exception:  # pragma: no cover - streaming is best-effort
+                parser = None
+        recorder = self.recorder if parser is not None else None
+        if recorder is not None:
+            try:
+                recorder.begin()
+            except Exception:  # pragma: no cover - streaming is best-effort
+                recorder = None
+        on_line = None
+        if parser is not None:
+            def on_line(line, _parser=parser, _recorder=recorder):
+                events = _parser.feed(line)
+                if _recorder is not None:
+                    for event in events:
+                        _recorder.write(event)
+
         stdout_buffer = _CappedText(limit=2_000_000)
         stderr_buffer = _CappedText(limit=200_000)
         workers = [
-            threading.Thread(target=_pump, args=(process.stdout, stdout_buffer), daemon=True),
+            threading.Thread(
+                target=_pump, args=(process.stdout, stdout_buffer, on_line), daemon=True
+            ),
             threading.Thread(target=_pump, args=(process.stderr, stderr_buffer), daemon=True),
         ]
         if not in_argv:
@@ -160,17 +187,38 @@ class AgentCommand:
                 self.on_exit(process.pid)
             except Exception:  # pragma: no cover - supervision must not break the run
                 pass
+        if recorder is not None:
+            try:
+                recorder.finish(parser, returncode=process.returncode, outcome=outcome)
+            except Exception:  # pragma: no cover - streaming is best-effort
+                pass
 
         stdout = stdout_buffer.text()
         stderr = stderr_buffer.text()
+        tool_events = None
+        if parser is not None and getattr(parser, "saw_stream", False):
+            # The stream was real JSONL: hand downstream code the agent's
+            # reconstructed reply, not the event soup. When the stream never
+            # produced a final text (killed mid-run, schema drift), the raw
+            # capture stands so behavior degrades to the plain-stdout path.
+            try:
+                final = parser.final_text()
+            except Exception:  # pragma: no cover - defensive
+                final = None
+            if final:
+                stdout = final
+            tool_events = getattr(parser, "tool_events", None)
         if outcome == "cancelled":
-            return AgentResult(self.name, stdout, stderr, process.returncode, cancelled=True)
+            return AgentResult(
+                self.name, stdout, stderr, process.returncode,
+                cancelled=True, tool_events=tool_events,
+            )
         if outcome == "timed_out":
             return AgentResult(
                 self.name, stdout, stderr or f"timed out after {self.timeout:g}s",
-                process.returncode, timed_out=True,
+                process.returncode, timed_out=True, tool_events=tool_events,
             )
-        return AgentResult(self.name, stdout, stderr, process.returncode)
+        return AgentResult(self.name, stdout, stderr, process.returncode, tool_events=tool_events)
 
 
 @dataclass
@@ -183,6 +231,9 @@ class AgentResult:
     returncode: int | None
     timed_out: bool = False
     cancelled: bool = False
+    #: How many tool/command/file events the stream carried; ``None`` when the
+    #: runtime does not stream. ``0`` on a clean exit is the low-signal marker.
+    tool_events: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -334,10 +385,15 @@ class _CappedText:
             return body
 
 
-def _pump(stream, sink: _CappedText) -> None:
+def _pump(stream, sink: _CappedText, on_line=None) -> None:
     try:
         for line in stream:
             sink.append(line)
+            if on_line is not None:
+                try:
+                    on_line(line)
+                except Exception:  # streaming must never break output capture
+                    on_line = None
     except (OSError, ValueError):  # pragma: no cover - stream torn down mid-read
         pass
     finally:

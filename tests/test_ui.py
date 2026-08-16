@@ -802,6 +802,22 @@ def test_the_human_can_speak_from_the_ui(ui, repo):
     assert conversation["messages"][-1]["sender"] == "human"
 
 
+def test_conversation_carries_the_live_event_tail(ui, repo):
+    from synchri.storage import dao
+
+    session_id = _active(ui, repo)
+    room_id = call(ui, f"/api/session?session={session_id}")["room_id"]
+    dao.insert_stream_event(
+        ui["broker"].conn, room_id, session_id=session_id, participant="claude",
+        invoke_key="inv-1", kind="thinking", title="Reasoning",
+        detail="Weighing the options.", payload={"n": 1},
+    )
+    conversation = call(ui, f"/api/conversation?session={session_id}")
+    assert conversation["live_events"][-1]["kind"] == "thinking"
+    assert conversation["live_events"][-1]["participant"] == "claude"
+    assert conversation["live_events"][-1]["payload"] == {"n": 1}
+
+
 def test_human_reply_returns_to_the_agent_waiting_on_permission(ui, repo):
     session_id, credentials = _active_with_credentials(ui, repo)
     session = call(ui, f"/api/session?session={session_id}")

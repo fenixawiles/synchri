@@ -49,6 +49,8 @@ class Fingerprint:
     activities: tuple
     activity_entries: tuple
     drafts: tuple
+    #: Newest agent_stream_events id for the watched room — one indexed MAX().
+    stream: int
 
     @classmethod
     def take(cls, manager: SessionManager, session_id: str | None) -> "Fingerprint":
@@ -60,6 +62,7 @@ class Fingerprint:
         gates: tuple = ()
         activities: tuple = ()
         activity_entries: tuple = ()
+        stream = 0
         if session_id:
             try:
                 record = manager.get(session_id, sweep=False)
@@ -79,6 +82,7 @@ class Fingerprint:
                     (item["entry_id"], item["summary"], item["expires_at"])
                     for item in dao.list_live_activity_entries(manager.conn, record.room_id)
                 )
+                stream = dao.max_stream_event_id(manager.conn, record.room_id)
             if record:
                 gates = tuple(
                     (gate.gate_id, gate.status, tuple(gate.evidence), tuple(gate.tests),
@@ -93,6 +97,7 @@ class Fingerprint:
             activities=activities,
             activity_entries=activity_entries,
             drafts=tuple(sorted(drafts_module.versions(manager.conn).items())),
+            stream=stream,
         )
 
 
@@ -137,6 +142,8 @@ def events(workspace: Workspace, session_id: str | None, *, stop=lambda: False):
                 if current.activities != previous.activities and "conversation" not in changed:
                     changed.append("conversation")
                 if current.activity_entries != previous.activity_entries and "conversation" not in changed:
+                    changed.append("conversation")
+                if current.stream != previous.stream and "conversation" not in changed:
                     changed.append("conversation")
                 if current.drafts != previous.drafts:
                     changed.append("drafts")

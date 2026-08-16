@@ -735,8 +735,30 @@ class Api:
             "status", "evidence", "tests", "commits", "builder_assessment",
             "reviewer_assessment", "description", "required",
         }}
+        actor = body.get("actor", "human")
+        if actor == "human" and fields.get("status") == "pass":
+            # A human marking a gate PASS is an acceptance decision. Completion
+            # demands evidence and both sign-offs, so record the acceptance as
+            # those where they are missing instead of leaving the gate in a
+            # passing-but-still-blocking state.
+            current = next(
+                (g for g in self.manager.gates(session_id) if g.gate_id == body.get("gate_id")),
+                None,
+            )
+            if current is not None:
+                has_evidence = bool(
+                    fields.get("evidence", current.evidence)
+                    or fields.get("tests", current.tests)
+                    or fields.get("commits", current.commits)
+                )
+                if not has_evidence:
+                    fields["evidence"] = ["Accepted by the user from the Gates panel"]
+                if not fields.get("builder_assessment", current.builder_assessment):
+                    fields["builder_assessment"] = "Accepted by the user"
+                if not fields.get("reviewer_assessment", current.reviewer_assessment):
+                    fields["reviewer_assessment"] = "Accepted by the user"
         gate = self.manager.update_gate(
-            session_id, body["gate_id"], actor=body.get("actor", "human"), **fields
+            session_id, body["gate_id"], actor=actor, **fields
         )
         return gate.to_dict()
 
@@ -782,11 +804,15 @@ class Api:
             resumed = self.manager.resume(session_id)
             self.managed.resume(resumed)
         elif action == "stop":
-            self.managed.cancel(session_id, reason="Stopping the session.")
+            # Durable state first: once the session row says stopped, the
+            # cancel below is cleanup, not the thing the user is waiting on.
             self.manager.stop(session_id, body.get("reason") or "stopped by the user")
+            self.managed.cancel(session_id, reason="Stopping the session.")
         elif action == "complete":
+            # Validate and complete BEFORE touching the agents: a refused
+            # completion (unsatisfied gates) must leave the team running.
+            self.manager.complete(session_id, force=bool(body.get("force")))
             self.managed.cancel(session_id, reason="Completing the session.")
-            self.manager.complete(session_id)
         elif action == "remove":
             self.broker.remove_participant(
                 record.room_id, body["participant"], credential=credential

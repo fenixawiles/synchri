@@ -914,6 +914,94 @@ def test_stopping_a_session_also_stops_its_room(manager, repo, agents):
     assert room["room"]["status"] == "stopped"
 
 
+def test_force_complete_waives_blocking_gates_and_records_the_override(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [
+        Gate("AUTH-01", "login works"),
+        Gate("API-01", "crud works", status="pass", evidence=["tests/test_api.py"],
+             builder_assessment="implemented", reviewer_assessment="verified independently"),
+    ])
+
+    with pytest.raises(StateError) as exc:
+        manager.complete(record.session_id)
+    assert exc.value.code == "gates_unsatisfied"
+    assert not manager.get(record.session_id).is_terminal
+
+    completed = manager.complete(record.session_id, force=True)
+    assert completed.status == SessionStatus.COMPLETE.value
+    assert completed.ended_reason == "completed by the user (1 gate waived)"
+
+    gates = {gate.gate_id: gate for gate in manager.gates(record.session_id)}
+    assert gates["AUTH-01"].status == "waived"
+    assert "Waived by the user at completion" in gates["AUTH-01"].evidence
+    # A gate that was genuinely satisfied keeps its verified status.
+    assert gates["API-01"].status == "pass"
+
+    changelog = manager.final_changelog(record.session_id)
+    assert "AUTH-01" in changelog["markdown"]
+    assert "waived" in changelog["markdown"].lower()
+
+
+def test_racing_stop_and_complete_finish_the_session_exactly_once(manager, repo, agents, workspace):
+    record = make_session(manager, repo, agents)
+    manager.set_gates(record.session_id, [
+        Gate("AUTH-01", "login works", status="pass", evidence=["tests/test_auth.py"],
+             builder_assessment="implemented", reviewer_assessment="verified"),
+        Gate("API-01", "crud works", status="pass", evidence=["tests/test_api.py"],
+             builder_assessment="implemented", reviewer_assessment="verified"),
+    ])
+
+    other_broker = Broker(workspace)
+    other_manager = SessionManager(other_broker)
+    barrier = threading.Barrier(2)
+    outcomes: dict[str, object] = {}
+
+    def run(label, action):
+        barrier.wait()
+        try:
+            outcomes[label] = action()
+        except StateError as error:
+            outcomes[label] = error
+
+    threads = [
+        threading.Thread(target=run, args=("stop", lambda: manager.stop(record.session_id))),
+        threading.Thread(
+            target=run, args=("complete", lambda: other_manager.complete(record.session_id))
+        ),
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+    finally:
+        other_broker.close()
+
+    final = manager.get(record.session_id)
+    assert final.is_terminal
+
+    # The terminal transition happened exactly once, whichever caller won.
+    ended = [
+        event
+        for event in manager.broker.events(
+            record.room_id, credential=manager._human_credential(record)
+        )["events"]
+        if event["event_type"] == "session.ended"
+    ]
+    assert len(ended) == 1
+
+    changelog_path = manager.broker.workspace.final_changelog_path(record.room_id)
+    if final.status == SessionStatus.COMPLETE.value:
+        assert changelog_path.exists()
+        assert not isinstance(outcomes["stop"], Exception)
+    else:
+        assert final.status == SessionStatus.STOPPED.value
+        assert not changelog_path.exists()
+        loser = outcomes["complete"]
+        assert isinstance(loser, StateError)
+        assert loser.code == "session_finished"
+
+
 def test_unverified_is_not_a_pass(manager, repo, agents):
     record = make_session(manager, repo, agents)
     manager.set_gates(record.session_id, [Gate("AUTH-01", "login works")])

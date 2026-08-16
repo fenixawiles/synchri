@@ -908,7 +908,29 @@ def test_gates_can_be_updated_from_the_ui(ui, repo):
                            "evidence": ["tests/test_auth.py::test_login"]})
     gates = call(ui, f"/api/gates?session={session_id}")
     assert gates["gates"][0]["status"] == "pass"
-    assert "AUTH-01 has no builder sign-off" in gates["summary"]["blockers"]
+    # A human marking a gate PASS is an acceptance decision: the missing
+    # sign-offs are recorded as the user's own, so the gate stops blocking.
+    assert gates["gates"][0]["builder_assessment"] == "Accepted by the user"
+    assert gates["gates"][0]["reviewer_assessment"] == "Accepted by the user"
+    assert gates["gates"][0]["evidence"] == ["tests/test_auth.py::test_login"]
+    assert gates["summary"]["blockers"] == []
+
+
+def test_human_pass_with_no_evidence_records_the_acceptance(ui, repo):
+    session_id = _active(ui, repo)
+    call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass"})
+    gates = call(ui, f"/api/gates?session={session_id}")
+    assert gates["gates"][0]["evidence"] == ["Accepted by the user from the Gates panel"]
+    assert gates["summary"]["complete"] is True
+
+
+def test_agent_gate_reports_do_not_inherit_the_human_acceptance(ui, repo):
+    session_id = _active(ui, repo)
+    call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass",
+                           "actor": "claude"})
+    gates = call(ui, f"/api/gates?session={session_id}")
+    assert gates["gates"][0]["builder_assessment"] is None
+    assert "AUTH-01 is marked pass with no evidence" in gates["summary"]["blockers"]
 
 
 # ----------------------------------------------------------------------
@@ -941,6 +963,34 @@ def test_stopping_from_the_ui_ends_the_session(ui, repo):
     call(ui, "/api/control", {"session": session_id, "action": "stop", "reason": "changed my mind"})
     session = call(ui, f"/api/session?session={session_id}")
     assert session["status"] == "stopped" and session["ended_reason"] == "changed my mind"
+
+
+class _RecordingRegistry:
+    """Stands in for the managed runner registry to observe cancel ordering."""
+
+    def __init__(self):
+        self.cancelled = []
+
+    def cancel(self, session_id, reason=""):
+        self.cancelled.append((session_id, reason))
+
+
+def test_refused_completion_leaves_the_agent_team_untouched(ui, repo):
+    session_id = _active(ui, repo)
+    registry = _RecordingRegistry()
+    ui["server"].api.managed = registry
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/control", {"session": session_id, "action": "complete"})
+    assert json.loads(exc.value.read())["error"]["code"] == "gates_unsatisfied"
+    # The refusal must not have signalled the agents to stop.
+    assert registry.cancelled == []
+
+    dashboard = call(ui, "/api/control", {"session": session_id, "action": "complete",
+                                          "force": True})
+    assert dashboard["session"]["status"] == "complete"
+    assert "waived" in dashboard["session"]["ended_reason"]
+    assert [entry[0] for entry in registry.cancelled] == [session_id]
 
 
 def test_completing_from_the_ui_closes_the_room_and_exposes_the_changelog(ui, repo):

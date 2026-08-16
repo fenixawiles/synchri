@@ -1912,12 +1912,17 @@ function renderSession() {
   if (pause) pause.onclick = guard(() => runSessionControl(pause, s.status === "active" ? "pause" : "resume"));
   const complete = document.getElementById("c-complete");
   if (complete) complete.onclick = () => guard(async () => {
-    if (!confirm("Complete this session? Synchri will verify its gates, close the room, and create the final changelog.")) return;
-    await runSessionControl(complete, "complete"); })();
+    if (S.dash?.gates?.summary?.complete) {
+      if (!confirm("Complete this session? Synchri will verify its gates, close the room, and create the final changelog.")) return;
+      await runSessionControl(complete, "complete");
+      return;
+    }
+    showForceCompleteDialog(complete); })();
   const stop = document.getElementById("c-stop");
   if (stop) stop.onclick = () => guard(async () => {
     if (!confirm("Stop this session? Agents stop immediately. The worktree and all work stay.")) return;
-    await runSessionControl(stop, "stop"); })();
+    await runSessionControl(stop, "stop");
+    confirmNotice("Session stopped. Agent processes are being shut down."); })();
   layout.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => {
     S.tab = button.dataset.tab; renderSession();
   });
@@ -1941,18 +1946,40 @@ function renderSession() {
   startClock(s.deadline, s.status);
 }
 
-async function runSessionControl(button, action) {
+async function runSessionControl(button, action, extra = {}) {
   const label = button.textContent;
   button.disabled = true;
   button.textContent = action === "complete" ? "Verifying…" : `${action[0].toUpperCase()+action.slice(1)}…`;
   try {
-    S.dash = await api("control", {session:S.session, action});
+    S.dash = await api("control", {session:S.session, action, ...extra});
     renderSession();
   } catch (error) {
     button.disabled = false;
     button.textContent = label;
     throw error;
   }
+}
+
+function showForceCompleteDialog(button) {
+  const blockers = S.dash?.gates?.summary?.blockers || [];
+  document.getElementById("force-complete-dialog")?.remove();
+  const dialog = $(`<div class="dialog stack" id="force-complete-dialog" role="dialog" aria-modal="true">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="kicker">COMPLETE SESSION</div>
+    <h2>${blockers.length === 1 ? "One acceptance gate is" : blockers.length + " acceptance gates are"} not satisfied</h2>
+    <p class="muted small" style="margin:.2rem 0 0">Completing now waives what remains. Each waiver is recorded on its gate and in the final changelog, so the delivery record stays honest.</p>
+    <div class="note warn small" style="margin:.4rem 0 0"><div class="mono">${blockers.map(esc).join("<br>")}</div></div>
+    <div class="row"><button class="primary" data-force>Complete anyway — waive ${blockers.length === 1 ? "the gate" : blockers.length + " gates"}</button><button data-review>Review gates</button><button class="ghost" data-close>Cancel</button></div>
+  </div>`);
+  document.body.append(dialog);
+  const close = () => dialog.remove();
+  dialog.querySelector(".detail-close").onclick = close;
+  dialog.querySelector("[data-close]").onclick = close;
+  dialog.querySelector("[data-review]").onclick = () => { close(); S.tab = "gates"; renderSession(); };
+  dialog.querySelector("[data-force]").onclick = guard(async () => {
+    close();
+    await runSessionControl(button, "complete", {force: true});
+  });
 }
 
 function refreshSessionChrome() {

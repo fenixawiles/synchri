@@ -38,7 +38,7 @@ from . import changelog as changelog_module
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
-from .gates import Gate, summarize
+from .gates import Gate, GateStatus, summarize
 from .modes import ModePolicy, ParticipantPlan, collaboration_pair, policy_for, resolve_role
 from .permissions import BY_KEY, Decision, PermissionDenied, PermissionSet
 from .spec import ProductSpec
@@ -836,51 +836,88 @@ class SessionManager:
             for row in rows
         ]
 
-    def complete(self, session_id: str) -> SessionRecord:
+    def complete(self, session_id: str, *, force: bool = False) -> SessionRecord:
         """Close a verified session and preserve its final changelog.
 
         Completion is deliberately unlike ``stop``: it proves every required
         gate, closes the room so no more work can be accepted, and writes a
-        permanent human-readable delivery record. The state change and room
-        closure share one SQLite transaction; the changelog write is restored
-        if that transaction cannot commit.
+        permanent human-readable delivery record. ``force`` is the human
+        override: every gate still blocking is waived, and the waiver is
+        recorded on the gate itself and in the session's ended reason — the
+        changelog stays honest about what was verified versus waived.
+
+        Validation and git work (change summary, changelog rendering) run
+        before the write transaction so the database lock is never held
+        across subprocess calls. The terminal transition re-checks state
+        inside the transaction, so a racing ``stop`` and ``complete`` can
+        never both finish the session.
         """
-        changelog_path = None
-        previous_changelog = None
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(f"session is already {record.status}", code="session_finished")
+        if not record.room_id:
+            raise StateError("cannot complete a session without a room", code="no_room")
+        gates = self.gates(session_id)
+        if not gates:
+            raise StateError(
+                "cannot complete a session with no acceptance gates defined",
+                code="no_gates",
+            )
+        report = summarize(gates)
+        waived: list[str] = []
+        if not report["complete"]:
+            if not force:
+                raise StateError(
+                    "cannot complete: " + "; ".join(report["blockers"]),
+                    code="gates_unsatisfied",
+                )
+            for gate in gates:
+                if gate.blocks_completion():
+                    self.update_gate(
+                        session_id,
+                        gate.gate_id,
+                        actor="human",
+                        status=GateStatus.WAIVED.value,
+                        evidence=_append_unique(
+                            gate.evidence, ["Waived by the user at completion"]
+                        ),
+                    )
+                    waived.append(gate.gate_id)
+            gates = self.gates(session_id)
+            report = summarize(gates)
+            if not report["complete"]:
+                raise StateError(
+                    "cannot complete: " + "; ".join(report["blockers"]),
+                    code="gates_unsatisfied",
+                )
+
+        completed_at = utc_now()
+        changes = self.changes(session_id)
+        markdown = changelog_module.render(
+            record,
+            gates,
+            changes,
+            self.last_test_run(session_id),
+            completed_at=completed_at,
+        )
+        reason = (
+            f"completed by the user ({len(waived)} gate{'s' if len(waived) != 1 else ''} waived)"
+            if waived
+            else "all acceptance gates satisfied"
+        )
+
+        changelog_path = self.broker.workspace.final_changelog_path(record.room_id)
+        previous_changelog = (
+            changelog_path.read_text(encoding="utf-8") if changelog_path.exists() else None
+        )
         wrote_changelog = False
         try:
             with db.transaction(self.conn):
+                # Re-read under the write lock: another caller may have
+                # finished the session while the changelog was rendering.
                 record = self.get(session_id)
                 if record.is_terminal:
                     raise StateError(f"session is already {record.status}", code="session_finished")
-                if not record.room_id:
-                    raise StateError("cannot complete a session without a room", code="no_room")
-                gates = self.gates(session_id)
-                if not gates:
-                    raise StateError(
-                        "cannot complete a session with no acceptance gates defined",
-                        code="no_gates",
-                    )
-                report = summarize(gates)
-                if not report["complete"]:
-                    raise StateError(
-                        "cannot complete: " + "; ".join(report["blockers"]),
-                        code="gates_unsatisfied",
-                    )
-
-                completed_at = utc_now()
-                changes = self.changes(session_id)
-                markdown = changelog_module.render(
-                    record,
-                    gates,
-                    changes,
-                    self.last_test_run(session_id),
-                    completed_at=completed_at,
-                )
-                changelog_path = self.broker.workspace.final_changelog_path(record.room_id)
-                previous_changelog = (
-                    changelog_path.read_text(encoding="utf-8") if changelog_path.exists() else None
-                )
                 write_private(changelog_path, markdown)
                 wrote_changelog = True
 
@@ -902,17 +939,21 @@ class SessionManager:
                 completed = self._finish(
                     record,
                     SessionStatus.COMPLETE,
-                    "all acceptance gates satisfied",
+                    reason,
                     metadata=metadata,
                     ended_at=completed_at,
                 )
                 self._log(
                     completed,
                     ev.SESSION_COMPLETED,
-                    {"final_changelog": str(changelog_path), "commits": changes.get("commits", 0)},
+                    {
+                        "final_changelog": str(changelog_path),
+                        "commits": changes.get("commits", 0),
+                        "waived_gates": waived,
+                    },
                 )
         except Exception:
-            if wrote_changelog and changelog_path is not None:
+            if wrote_changelog:
                 if previous_changelog is None:
                     changelog_path.unlink(missing_ok=True)
                 else:
@@ -964,6 +1005,11 @@ class SessionManager:
         # transition.  Otherwise a CLI caller could see a stopped session
         # while the queued agents continued to work underneath it.
         with db.transaction(self.conn):
+            # Re-read under the write lock: a racing complete() and stop()
+            # must never both finish the session.
+            record = self.get(session_id)
+            if record.is_terminal:
+                return record
             if record.room_id:
                 self.broker.stop_room(
                     record.room_id, credential=self._human_credential(record)

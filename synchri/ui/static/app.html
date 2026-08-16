@@ -1049,8 +1049,8 @@ function renderUpdate() {
     button.disabled = true;
     button.textContent = "Updating…";
   } else if (update.status === "current") {
-    button.textContent = `Synchri v${update.currentVersion} · Up to date`;
-    button.title = "Synchri is up to date. Click to check again.";
+    button.textContent = "All up to date!";
+    button.title = `Synchri v${update.currentVersion} is the newest version. Click to check again.`;
   } else if (update.status === "move_to_applications") {
     button.textContent = update.update ? "Move to Applications to update" : "Install Synchri in Applications";
     button.title = update.message;
@@ -1061,17 +1061,31 @@ function renderUpdate() {
   }
 }
 
-async function checkForUpdate({manual=false}={}) {
+async function checkForUpdate({manual=false, silent=false}={}) {
   if (!window.__TAURI__?.core?.invoke) return;
-  S.update = {status:"checking"}; renderUpdate();
+  if (!silent) { S.update = {status:"checking"}; renderUpdate(); }
+  const revertSoon = () => {
+    window.clearTimeout(S.updateRevert);
+    S.updateRevert = window.setTimeout(() => { S.update = null; renderUpdate(); }, 4000);
+  };
   try {
-    S.update = await nativeInvoke("check_for_update");
+    const result = await nativeInvoke("check_for_update");
+    if (silent) {
+      // The button rests on "Check for updates": a background check may only
+      // surface an actionable outcome, never a reassurance state.
+      S.update = ["available", "move_to_applications"].includes(result.status) ? result : null;
+      renderUpdate();
+      return;
+    }
+    S.update = result;
     renderUpdate();
-    if (manual && S.update.status === "current") confirmNotice(S.update.message);
+    if (result.status === "current") revertSoon();
   } catch (error) {
+    if (silent) { S.update = null; renderUpdate(); return; }
     S.update = {status:"error", message:error.message || "Synchri could not check for updates."};
     renderUpdate();
-    if (manual) flash(S.update.message);
+    flash(S.update.message);
+    revertSoon();
   }
 }
 
@@ -1084,7 +1098,10 @@ async function home() {
   listen();
   document.getElementById("ctx").textContent = S.boot.workspace;
   renderGitHubAccount();
-  void checkForUpdate();
+  if (!S.updateChecked) {
+    S.updateChecked = true;
+    void checkForUpdate({silent:true});
+  }
   const list = S.boot.sessions;
   const workflows = S.boot.presets || [];
   app().innerHTML = "";

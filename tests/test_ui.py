@@ -1077,6 +1077,20 @@ def test_agent_names_derive_from_the_runtime_selector(ui):
     assert [agent["name"] for agent in result["draft"]["agents"]] == ["Codex", "Codex-2", "Claude"]
 
 
+def test_the_updater_rests_on_check_for_updates():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'button.textContent = "All up to date!";' in source
+    assert "· Up to date" not in source
+    # Startup checks are silent and once per app load; only an actionable
+    # outcome (an available update) may replace the resting state.
+    assert "S.updateChecked" in source
+    assert "checkForUpdate({silent:true})" in source
+    assert '["available", "move_to_applications"].includes(result.status) ? result : null' in source
+    assert "S.updateRevert = window.setTimeout" in source
+
+
 def test_every_theme_defines_the_complete_token_set():
     import re
     from pathlib import Path

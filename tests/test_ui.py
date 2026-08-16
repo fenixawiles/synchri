@@ -1077,6 +1077,41 @@ def test_agent_names_derive_from_the_runtime_selector(ui):
     assert [agent["name"] for agent in result["draft"]["agents"]] == ["Codex", "Codex-2", "Claude"]
 
 
+def test_every_theme_defines_the_complete_token_set():
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+
+    def tokens(block):
+        return set(re.findall(r"--[a-z0-9-]+(?=\s*:)", block))
+
+    root = re.search(r"\n:root\{(.*?)\n\}", source, re.S)
+    themed = tokens(root.group(1)) - {"--radius", "--radius-s", "--sans", "--mono"}
+    themes = dict(re.findall(r':root\[data-theme="([a-z]+)"\]\{(.*?)\n\}', source, re.S))
+    assert set(themes) == {
+        "daylight", "midnight", "sage",
+        "ember", "copper", "solar", "harbor", "iris", "orchid",
+    }
+    for name, block in themes.items():
+        missing = themed - tokens(block)
+        assert not missing, f"theme {name} is missing tokens: {sorted(missing)}"
+        assert "color-scheme" in block, f"theme {name} must set color-scheme"
+
+    # The System-follows-OS-light block must stay byte-identical to Daylight.
+    system_light = re.search(
+        r"@media \(prefers-color-scheme:light\)\{:root:not\(\[data-theme\]\)\{(.*?)\n\}\}",
+        source, re.S,
+    )
+    assert system_light is not None
+    assert system_light.group(1).strip() == themes["daylight"].strip()
+
+    # Every palette is offered in the picker.
+    for key in ("terminal", "midnight", "ember", "copper", "orchid",
+                "daylight", "sage", "solar", "harbor", "iris"):
+        assert f'{{key: "{key}"' in source
+
+
 def test_home_leads_with_workflows_and_keeps_sessions_compact():
     from pathlib import Path
 

@@ -572,4 +572,128 @@ def list_events(
     return [Event.from_row(r) for r in conn.execute(sql, params).fetchall()]
 
 
+# -- agent stream events (durable live-work feed) -----------------------------
+
+
+def insert_stream_event(
+    conn: sqlite3.Connection,
+    room_id: str,
+    *,
+    session_id: str | None,
+    participant: str,
+    invoke_key: str,
+    kind: str,
+    title: str = "",
+    detail: str = "",
+    file_path: str | None = None,
+    payload: dict | None = None,
+) -> int:
+    cursor = conn.execute(
+        "INSERT INTO agent_stream_events (room_id, session_id, participant, invoke_key, "
+        "kind, title, detail, file_path, payload, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            room_id,
+            session_id,
+            participant,
+            invoke_key,
+            kind,
+            title,
+            detail,
+            file_path,
+            json.dumps(payload or {}, ensure_ascii=False),
+            utc_now(),
+        ),
+    )
+    return int(cursor.lastrowid or 0)
+
+
+def list_stream_events(conn: sqlite3.Connection, room_id: str, *, limit: int = 200) -> list[dict]:
+    """The newest ``limit`` events for a room, oldest first."""
+    rows = conn.execute(
+        "SELECT * FROM (SELECT * FROM agent_stream_events WHERE room_id = ? "
+        "ORDER BY event_id DESC LIMIT ?) ORDER BY event_id",
+        (room_id, int(limit)),
+    ).fetchall()
+    events = []
+    for row in rows:
+        entry = dict(row)
+        try:
+            entry["payload"] = json.loads(entry.get("payload") or "{}")
+        except ValueError:
+            entry["payload"] = {}
+        events.append(entry)
+    return events
+
+
+def max_stream_event_id(conn: sqlite3.Connection, room_id: str) -> int:
+    row = conn.execute(
+        "SELECT MAX(event_id) AS latest FROM agent_stream_events WHERE room_id = ?",
+        (room_id,),
+    ).fetchone()
+    return int(row["latest"] or 0)
+
+
+def prune_stream_events(conn: sqlite3.Connection, room_id: str, *, keep: int = 1000) -> int:
+    """Drop all but the newest ``keep`` events for a room; returns rows removed."""
+    cursor = conn.execute(
+        "DELETE FROM agent_stream_events WHERE room_id = ? AND event_id < ("
+        "SELECT COALESCE(MIN(event_id), 0) FROM (SELECT event_id FROM agent_stream_events "
+        "WHERE room_id = ? ORDER BY event_id DESC LIMIT ?))",
+        (room_id, room_id, int(keep)),
+    )
+    return cursor.rowcount
+
+
+# -- per-invocation usage telemetry -------------------------------------------
+
+
+def insert_turn_usage(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    room_id: str | None,
+    participant: str,
+    runtime: str = "",
+    model: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cached_input_tokens: int = 0,
+    cost_usd: float | None = None,
+    duration_seconds: float | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO agent_turn_usage (session_id, room_id, participant, runtime, model, "
+        "input_tokens, output_tokens, cached_input_tokens, cost_usd, duration_seconds, "
+        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            session_id,
+            room_id,
+            participant,
+            runtime,
+            model,
+            int(input_tokens or 0),
+            int(output_tokens or 0),
+            int(cached_input_tokens or 0),
+            cost_usd,
+            duration_seconds,
+            utc_now(),
+        ),
+    )
+
+
+def usage_for_session(conn: sqlite3.Connection, session_id: str) -> list[dict]:
+    """Per-participant usage totals plus how many invocations were measured."""
+    rows = conn.execute(
+        "SELECT participant, runtime, MAX(model) AS model, COUNT(*) AS invocations, "
+        "SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, "
+        "SUM(cached_input_tokens) AS cached_input_tokens, SUM(cost_usd) AS cost_usd, "
+        "SUM(duration_seconds) AS duration_seconds "
+        "FROM agent_turn_usage WHERE session_id = ? GROUP BY participant, runtime "
+        "ORDER BY participant",
+        (session_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 __all__ = [name for name in dir() if not name.startswith("_")]

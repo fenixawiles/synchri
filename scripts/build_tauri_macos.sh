@@ -146,6 +146,15 @@ while :; do
   sleep 3
 done
 mv -f "$DMG_STAGING" "$DMG"
+# A stapled ticket alone does not give the disk image a Developer ID
+# signature. Gatekeeper assesses the DMG itself before mounting it, so sign
+# the outer distribution container before the release workflow submits it for
+# notarization. The identifier is intentionally distinct from the app bundle.
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; then
+  codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" \
+    --identifier "com.synchri.desktop.dmg" "$DMG"
+  codesign --verify --verbose=2 "$DMG"
+fi
 
 # Tauri's macOS updater consumes a gzip-compressed tarball of the app bundle.
 # Updating from a DMG is not supported because a DMG is an installation medium,

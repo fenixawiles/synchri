@@ -86,6 +86,7 @@ class Api:
             ("GET", "session"): self.session,
             ("POST", "session/rename"): self.rename_session,
             ("POST", "session/delete"): self.delete_session,
+            ("POST", "package/save"): self.save_package,
             ("GET", "dashboard"): self.dashboard,
             ("GET", "contract"): self.contract,
             ("POST", "ack"): self.acknowledge,
@@ -608,6 +609,28 @@ class Api:
     def delete_session(self, query: dict, body: dict) -> dict:
         outcome = self.manager.delete_session(self._session_id(query, body))
         return {**outcome, "sessions": [s.to_dict() for s in self.manager.list_sessions()]}
+
+    def save_package(self, query: dict, body: dict) -> dict:
+        """Write the session package into the room directory and say where.
+
+        The desktop webview cannot reliably run anchor downloads, so the
+        native path is: build once, save next to the room's other artifacts,
+        show the user the path.
+        """
+        from ..session import package as package_module
+
+        session_id = self._session_id(query, body)
+        filename, data = package_module.build(self.broker, self.manager, session_id)
+        record = self.manager.get(session_id)
+        if not record.room_id:
+            raise ValidationError("this session has no room directory to save into")
+        path = self.broker.workspace.ensure_room_dir(record.room_id) / "session-package.zip"
+        path.write_bytes(data)
+        try:
+            path.chmod(0o600)
+        except OSError:  # pragma: no cover - platform dependent
+            pass
+        return {"path": str(path), "filename": filename, "bytes": len(data)}
 
     def session(self, query: dict, body: dict) -> dict:
         return self.manager.get(self._session_id(query)).to_dict()

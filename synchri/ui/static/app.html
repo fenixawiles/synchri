@@ -2395,6 +2395,40 @@ function gateAddForm(editable) {
       <button class="primary" id="gate-new-save">Add gate</button></div></details>`;
 }
 
+async function downloadSessionPackage(button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparing…";
+  try {
+    if (window.__TAURI__?.core?.invoke) {
+      // Anchor downloads are unreliable in the desktop webview; save the zip
+      // next to the room's other artifacts and say where it went.
+      const saved = await api("package/save", {session: S.session});
+      confirmNotice(`Session package saved to ${saved.path}`);
+    } else {
+      const response = await fetch(`/api/package?session=${encodeURIComponent(S.session)}`, {
+        headers: {"X-Synchri-Token": TOKEN},
+      });
+      if (!response.ok) throw new Error("The session package could not be prepared.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = (response.headers.get("Content-Disposition") || "")
+        .match(/filename="([^"]+)"/)?.[1] || "synchri-session.zip";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+  } catch (error) {
+    flash(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
 function commitUrl(remote, sha) {
   // Only GitHub remotes become links; anything else stays plain text.
   if (!remote || !sha) return null;
@@ -2557,7 +2591,10 @@ async function paint(tab, el) {
       const closed = d.session.status === "complete"
         ? "Session complete — the final changelog is available in the rail."
         : `Session ${d.session.status.replace("_", " ")} — messaging is closed.`;
-      el.append($(`<div class="chat-compose muted small">${esc(closed)}</div>`));
+      const terminal = ["complete", "stopped", "failed", "timed_out"].includes(d.session.status);
+      const strip = $(`<div class="chat-compose muted small" style="display:flex;align-items:center;justify-content:space-between;gap:.8rem"><span>${esc(closed)}</span>${terminal ? `<button class="ghost" data-package style="flex:none">Download session package</button>` : ""}</div>`);
+      strip.querySelector("[data-package]")?.addEventListener("click", event => downloadSessionPackage(event.target));
+      el.append(strip);
       return;
     }
     const send = $(`<div class="chat-compose"><div class="composer">
@@ -2612,7 +2649,8 @@ async function paint(tab, el) {
     });
   } else if (tab === "changelog") {
     const r = await api("changelog" + q);
-    el.innerHTML = `<div class="rich">${rich(r.markdown)}</div>`;
+    el.innerHTML = `<div class="between" style="margin-bottom:.9rem"><span class="small muted">The verified delivery record for this session.</span><button class="primary" id="package-download">Download session package</button></div><div class="rich">${rich(r.markdown)}</div>`;
+    el.querySelector("#package-download").onclick = event => downloadSessionPackage(event.target);
   } else if (tab === "gates") {
     const r = await api("gates" + q);
     const editable = !["complete", "stopped", "failed", "timed_out"].includes(d.session.status);

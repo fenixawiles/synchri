@@ -1343,6 +1343,74 @@ def test_completing_from_the_ui_closes_the_room_and_exposes_the_changelog(ui, re
     assert "AUTH-01" in changelog["markdown"]
 
 
+def test_the_session_package_downloads_as_a_zip_with_no_secrets(ui, repo):
+    import io
+    import zipfile
+
+    from synchri.session.manager import SessionManager
+
+    session_id = _active(ui, repo)
+    call(ui, "/api/message", {"session": session_id, "content": "note for the record",
+                              "interrupt": True})
+    call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass"})
+    call(ui, "/api/control", {"session": session_id, "action": "complete"})
+
+    request = urllib.request.Request(f"{ui['base']}/api/package?session={session_id}")
+    request.add_header("X-Synchri-Token", ui["token"])
+    with urllib.request.urlopen(request, timeout=20) as response:
+        disposition = response.headers.get("Content-Disposition") or ""
+        content_type = response.headers.get("Content-Type")
+        data = response.read()
+    assert content_type == "application/zip"
+    assert 'filename="synchri-' in disposition
+    assert data[:4] == b"PK\x03\x04"
+
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    names = set(archive.namelist())
+    assert {"session.md", "transcript.md", "transcript.jsonl", "final-changelog.md",
+            "gates.md", "usage-summary.md", "usage.json", "commits.md", "diff.patch"} <= names
+    assert "note for the record" in archive.read("transcript.md").decode()
+    assert "No usage was recorded" in archive.read("usage-summary.md").decode()
+    assert "AUTH-01" in archive.read("gates.md").decode()
+
+    # No secret material may leak into any member: metadata carries invite
+    # tokens and the human's room secret, and none of it belongs in a file
+    # meant to be shared.
+    record = SessionManager(ui["broker"]).get(session_id)
+    secrets_to_check = [record.metadata["human"]["secret"]]
+    secrets_to_check += [invite["token"] for invite in record.metadata.get("invites", [])]
+    blob = b"".join(archive.read(name) for name in names)
+    for secret in secrets_to_check:
+        assert secret and secret.encode() not in blob
+
+
+def test_the_package_requires_a_finished_session(ui, repo):
+    session_id = _active(ui, repo)
+    request = urllib.request.Request(f"{ui['base']}/api/package?session={session_id}")
+    request.add_header("X-Synchri-Token", ui["token"])
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(request, timeout=20)
+    assert exc.value.code == 400
+    assert json.loads(exc.value.read())["error"]["code"] == "session_not_finished"
+
+
+def test_the_package_can_be_saved_next_to_the_room_artifacts(ui, repo):
+    import io
+    import zipfile
+    from pathlib import Path
+
+    session_id = _active(ui, repo)
+    call(ui, "/api/control", {"session": session_id, "action": "stop"})
+    saved = call(ui, "/api/package/save", {"session": session_id})
+    path = Path(saved["path"])
+    assert path.name == "session-package.zip"
+    data = path.read_bytes()
+    assert data[:4] == b"PK\x03\x04"
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    # A stopped session's record is honest about not being verified-complete.
+    assert "ended without a verified completion" in archive.read("final-changelog.md").decode()
+
+
 def test_presets_can_be_saved_from_the_wizard(ui, repo):
     _ready_draft(ui, repo)
     result = call(ui, "/api/preset", {"draft": "d", "name": "UI Preset"})

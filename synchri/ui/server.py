@@ -154,6 +154,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/stream":
             self._stream(query.get("session", [None])[0])
             return
+        if parsed.path == "/api/package":
+            # The one non-JSON API response: a zip download. _dispatch cannot
+            # serve it, and the same-site cookie set at page load authorizes
+            # plain anchor navigation here.
+            self._package(query)
+            return
         if parsed.path.startswith("/api/"):
             self._dispatch("GET", parsed.path[5:], query, {})
             return
@@ -179,6 +185,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": {"code": "not_found", "message": parsed.path}}, HTTPStatus.NOT_FOUND)
             return
         self._dispatch("POST", parsed.path[5:], query, body)
+
+    def _package(self, query: dict) -> None:
+        from ..session import package as package_module
+
+        session_id = (query.get("session") or [None])[0] or ""
+        api = self.server.api
+        try:
+            filename, data = package_module.build(api.broker, api.manager, session_id)
+        except SynchriError as exc:
+            self._json(exc.to_dict(), HTTPStatus.BAD_REQUEST)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self._security_headers()
+        self.end_headers()
+        self.wfile.write(data)
 
     def _stream(self, session_id: str | None) -> None:
         """Hold the connection open and push changes as they happen."""

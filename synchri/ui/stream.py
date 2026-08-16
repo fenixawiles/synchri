@@ -51,6 +51,8 @@ class Fingerprint:
     drafts: tuple
     #: Newest agent_stream_events id for the watched room — one indexed MAX().
     stream: int
+    #: Per-agent runtime supervision state for the watched session.
+    participants: tuple
 
     @classmethod
     def take(cls, manager: SessionManager, session_id: str | None) -> "Fingerprint":
@@ -63,6 +65,7 @@ class Fingerprint:
         activities: tuple = ()
         activity_entries: tuple = ()
         stream = 0
+        participants: tuple = ()
         if session_id:
             try:
                 record = manager.get(session_id, sweep=False)
@@ -90,6 +93,12 @@ class Fingerprint:
                      gate.updated_at)
                     for gate in manager.gates(record.session_id)
                 )
+                participants = tuple(
+                    sorted(
+                        (name, state["state"], state["failures"], state["updated_at"])
+                        for name, state in manager.participant_states(record.session_id).items()
+                    )
+                )
         return cls(
             sessions=sessions,
             room_seq=room_seq,
@@ -98,6 +107,7 @@ class Fingerprint:
             activity_entries=activity_entries,
             drafts=tuple(sorted(drafts_module.versions(manager.conn).items())),
             stream=stream,
+            participants=participants,
         )
 
 
@@ -144,6 +154,8 @@ def events(workspace: Workspace, session_id: str | None, *, stop=lambda: False):
                 if current.activity_entries != previous.activity_entries and "conversation" not in changed:
                     changed.append("conversation")
                 if current.stream != previous.stream and "conversation" not in changed:
+                    changed.append("conversation")
+                if current.participants != previous.participants and "conversation" not in changed:
                     changed.append("conversation")
                 if current.drafts != previous.drafts:
                     changed.append("drafts")

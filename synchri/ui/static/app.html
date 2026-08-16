@@ -374,6 +374,14 @@ details.adv summary:hover{color:var(--ink)}
 .presence{display:inline-flex;align-items:center;gap:.45rem;min-width:0;
   font:11.5px var(--mono);overflow:hidden;text-overflow:ellipsis}
 .presence i{width:6px;height:6px;border-radius:50%;background:var(--line2);display:inline-block;flex:none}
+.presence i.warn{background:var(--warn)}
+.presence i.bad{background:var(--bad)}
+.agent-alerts{padding:.55rem clamp(1.25rem,3vw,2.5rem) 0;display:grid;gap:.45rem}
+.agent-alert{display:flex;align-items:center;justify-content:space-between;gap:.8rem;max-width:56rem;
+  border:1px solid var(--bad-line);border-left:3px solid var(--bad);background:var(--bad-soft);
+  border-radius:var(--radius);padding:.55rem .8rem;font-size:12.5px}
+.agent-alert.warn{border-color:var(--warn-line);border-left-color:var(--warn);background:var(--warn-soft)}
+.agent-alert button{flex:none}
 .presence i.live{background:var(--accent);box-shadow:0 0 6px var(--accent)}
 .rail-controls{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;border-top:1px solid var(--line);
   padding-top:.8rem}
@@ -1885,10 +1893,16 @@ function renderSession() {
   const activeNotes = new Set((d.activities || []).map(note => note.name));
   const gatePercent = g.required ? Math.round((g.satisfied / g.required) * 100) : 0;
   app().innerHTML = "";
+  const runtimeStates = d.participant_states || {};
   const team = s.participants.map(p => {
+    const runtime = runtimeStates[p.name] || {};
+    const trouble = ["failed", "timed_out", "dropped"].includes(runtime.state);
     const active = p.name === d.current_actor;
-    return `<div class="team-line" data-member="${esc(p.name)}"><span class="presence"><i class="${active ? "live" : ""}"></i>${esc(p.name)}</span>
-      <span class="muted small" data-team-state>${activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting")}</span></div>`;
+    const dot = trouble ? (runtime.state === "dropped" ? "bad" : "warn") : (active ? "live" : "");
+    const label = trouble ? runtime.state.replace("_", " ")
+      : (activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting"));
+    return `<div class="team-line" data-member="${esc(p.name)}"${runtime.detail ? ` title="${esc(runtime.detail)}"` : ""}><span class="presence"><i class="${dot}"></i>${esc(p.name)}</span>
+      <span class="muted small" data-team-state${trouble ? ' style="color:var(--bad)"' : ""}>${esc(label)}</span></div>`;
   }).join("");
   const nav = ["conversation", ...DETAIL_TABS.filter(tab => tab !== "changelog" || s.status === "complete")];
   const layout = $(`<div class="session-layout"><aside class="session-rail">
@@ -1946,6 +1960,25 @@ function renderSession() {
   startClock(s.deadline, s.status);
 }
 
+function agentAlerts(d) {
+  const states = d.participant_states || {};
+  const blocks = Object.entries(states).map(([name, runtime]) => {
+    if (!runtime || !runtime.state) return "";
+    if (["failed", "timed_out", "dropped"].includes(runtime.state)) {
+      const label = runtime.state === "dropped" ? "stopped responding and was dropped"
+        : (runtime.state === "timed_out" ? "timed out" : "failed");
+      return `<div class="agent-alert"><div><b>${esc(name)}</b> ${esc(label)}${runtime.detail ? ` — ${esc(runtime.detail)}` : ""}.</div>
+        <button data-restart="${esc(name)}">Restart ${esc(name)}</button></div>`;
+    }
+    if (runtime.state === "active" && runtime.detail && runtime.detail.includes("refusing")) {
+      return `<div class="agent-alert warn"><div><b>${esc(name)}</b> ${esc(runtime.detail)}.</div>
+        <button class="ghost" data-restart="${esc(name)}">Restart ${esc(name)}</button></div>`;
+    }
+    return "";
+  }).filter(Boolean);
+  return blocks.length ? `<div class="agent-alerts">${blocks.join("")}</div>` : "";
+}
+
 async function runSessionControl(button, action, extra = {}) {
   const label = button.textContent;
   button.disabled = true;
@@ -1994,13 +2027,25 @@ function refreshSessionChrome() {
   if (gateText) gateText.textContent = `${g.satisfied}/${g.required}`;
   const gateBar = document.getElementById("rail-gates-bar");
   if (gateBar) gateBar.style.width = `${g.required ? Math.round((g.satisfied / g.required) * 100) : 0}%`;
+  const runtimeStates = d.participant_states || {};
   document.querySelectorAll(".team-line[data-member]").forEach(row => {
     const name = row.dataset.member;
     const active = name === d.current_actor;
+    const runtime = runtimeStates[name] || {};
+    const trouble = ["failed", "timed_out", "dropped"].includes(runtime.state);
     const state = row.querySelector("[data-team-state]");
-    if (state) state.textContent = activeNotes.has(name) ? "working" : (active ? "on point" : "waiting");
+    if (state) {
+      state.textContent = trouble ? runtime.state.replace("_", " ")
+        : (activeNotes.has(name) ? "working" : (active ? "on point" : "waiting"));
+      state.style.color = trouble ? "var(--bad)" : "";
+    }
     const presence = row.querySelector(".presence i");
-    if (presence) presence.classList.toggle("live", active);
+    if (presence) {
+      presence.classList.toggle("live", active && !trouble);
+      presence.classList.toggle("warn", trouble && runtime.state !== "dropped");
+      presence.classList.toggle("bad", runtime.state === "dropped");
+    }
+    if (runtime.detail) row.title = runtime.detail; else row.removeAttribute("title");
   });
 }
 
@@ -2045,9 +2090,16 @@ async function paint(tab, el) {
         ${responseState ? `<div class="response-state">${esc(responseState)}</div>` : ""}
         ${m.handoff_target ? `<div class="handoff">HANDOFF → ${esc(m.handoff_target)}</div>` : ""}${decision}</div>`;
     }).join("") : `<span class="muted small">Nothing said yet.</span>`;
-    el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork + timeboxNudge(d);
+    el.innerHTML = `<div class="message-list">${messages}</div>` + liveWork + agentAlerts(d) + timeboxNudge(d);
     const list = el.querySelector(".message-list");
     requestAnimationFrame(() => list.scrollTo({ top: list.scrollHeight, behavior: "smooth" }));
+    el.querySelectorAll("[data-restart]").forEach(button => button.onclick = guard(async () => {
+      button.disabled = true;
+      button.textContent = "Restarting…";
+      S.dash = await api("control", {session: S.session, action: "restart_agent",
+                                     participant: button.dataset.restart});
+      renderSession();
+    }));
     if (d.session.status !== "active") {
       const closed = d.session.status === "complete"
         ? "Session complete — the final changelog is available in the rail."

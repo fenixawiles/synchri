@@ -34,6 +34,7 @@ STOP_TURN_LIMIT = "turn_limit"
 STOP_IDLE = "idle"
 STOP_UNMANAGED_SPEAKER = "unmanaged_speaker"
 STOP_CANCELLED = "cancelled"
+STOP_AGENT_FAILED = "agent_failed"
 
 
 @dataclass
@@ -44,6 +45,8 @@ class ConductorReport:
     reason: str
     turns: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: Set when ``reason == "agent_failed"``: who tripped the breaker.
+    failed_participant: str | None = None
 
     @property
     def turn_count(self) -> int:
@@ -76,6 +79,7 @@ class Conductor:
         session_id: str | None = None,
         cancel_event=None,
         on_event: Callable[[str, dict], None] | None = None,
+        max_consecutive_failures: int = 2,
     ) -> None:
         if not agents:
             raise ValidationError("at least one --agent is required")
@@ -96,6 +100,9 @@ class Conductor:
         self.session_id = session_id
         self.cancel_event = cancel_event
         self.on_event = on_event or (lambda event, payload: None)
+        self.max_consecutive_failures = max(1, int(max_consecutive_failures))
+        self._failures: dict[str, int] = {}
+        self._low_signal: dict[str, int] = {}
 
     # ------------------------------------------------------------------
 
@@ -146,6 +153,22 @@ class Conductor:
             report.turns.append(outcome)
             report.warnings.extend(outcome.get("warnings") or [])
 
+            # Circuit breaker: an agent failing turn after turn must not keep
+            # receiving the floor forever — after the limit, hand the problem
+            # to the human instead of burning further invocations.
+            if outcome.get("status") == "failed":
+                count = self._failures.get(speaker, 0) + 1
+                self._failures[speaker] = count
+                if count >= self.max_consecutive_failures:
+                    report.reason = STOP_AGENT_FAILED
+                    report.failed_participant = speaker
+                    report.warnings.append(
+                        f"{speaker} failed {count} consecutive turn(s); supervision stopped"
+                    )
+                    return report
+            elif outcome.get("status") in {"spoke", "passed"}:
+                self._failures[speaker] = 0
+
     # ------------------------------------------------------------------
 
     def _take_turn(self, name: str) -> dict:
@@ -180,10 +203,38 @@ class Conductor:
                 "participant": name,
                 "returncode": result.returncode,
                 "timed_out": result.timed_out,
+                "cancelled": result.cancelled,
                 "output_chars": len(result.stdout),
             },
         )
         return self._post(name, result)
+
+    def _note_low_signal(self, name: str, result, body: str, directives) -> bool:
+        """Warn-only heuristic for clean exits that did no visible work.
+
+        Only streaming runtimes report ``tool_events``; for them, a turn with
+        zero tool activity, a tiny reply, and no directives twice in a row
+        usually means the provider refused or stalled. This never drops the
+        agent — a clean exit can be legitimate — it only raises a flag.
+        """
+        if result.tool_events is None:
+            return False
+        low = (
+            result.tool_events == 0
+            and len(body.strip()) < 200
+            and not directives.gate_updates
+            and not directives.to
+            and not directives.handoff
+            and not directives.complete_requested
+        )
+        if not low:
+            self._low_signal[name] = 0
+            return False
+        count = self._low_signal.get(name, 0) + 1
+        self._low_signal[name] = count
+        if count >= 2:
+            self.on_event("agent.low_signal", {"participant": name, "consecutive": count})
+        return True
 
     def _post(self, name: str, result) -> dict:
         credential = self.credentials[name]
@@ -225,6 +276,7 @@ class Conductor:
             # a pass.  Recording it first keeps a terse evidence report from
             # disappearing just because the agent had no prose to add.
             gate_updates = self._record_gate_updates(name, directives, warnings)
+            low_signal = self._note_low_signal(name, result, body, directives)
 
             if directives.passed or not body.strip():
                 passed = self.broker.pass_turn(
@@ -239,6 +291,8 @@ class Conductor:
                     "next_speaker": passed.get("next_speaker"),
                     "warnings": warnings,
                 }
+                if low_signal:
+                    outcome["low_signal"] = True
                 if gate_updates:
                     outcome["gate_updates"] = gate_updates
                 if directives.complete_requested:
@@ -278,6 +332,8 @@ class Conductor:
                 "next_speaker": sent.get("next_speaker"),
                 "warnings": warnings,
             }
+            if low_signal:
+                outcome["low_signal"] = True
             if gate_updates:
                 outcome["gate_updates"] = gate_updates
             if directives.complete_requested:

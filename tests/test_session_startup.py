@@ -914,6 +914,32 @@ def test_stopping_a_session_also_stops_its_room(manager, repo, agents):
     assert room["room"]["status"] == "stopped"
 
 
+def test_participant_runtime_states_are_durable(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    assert manager.participant_states(record.session_id)["claude"]["state"] is None
+
+    manager.set_participant_state(record.session_id, "claude", "active", "working")
+    manager.record_participant_failure(record.session_id, "claude", "failed", "exit 1")
+    manager.record_participant_failure(record.session_id, "claude", "failed", "exit 1")
+    state = manager.participant_states(record.session_id)["claude"]
+    assert state["state"] == "failed"
+    assert state["failures"] == 2
+    assert state["detail"] == "exit 1"
+
+    manager.set_participant_state(
+        record.session_id, "claude", "active", None, reset_failures=True
+    )
+    state = manager.participant_states(record.session_id)["claude"]
+    assert state["state"] == "active" and state["failures"] == 0
+
+    dashboard = manager.dashboard(record.session_id)
+    assert dashboard["participant_states"]["claude"]["state"] == "active"
+
+    manager.stop(record.session_id)
+    states = manager.participant_states(record.session_id)
+    assert all(s["state"] == "stopped" for s in states.values())
+
+
 def test_force_complete_waives_blocking_gates_and_records_the_override(manager, repo, agents):
     record = make_session(manager, repo, agents)
     manager.set_gates(record.session_id, [

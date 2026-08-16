@@ -1030,6 +1030,41 @@ class _RecordingRegistry:
         self.cancelled.append((session_id, reason))
 
 
+def test_restart_agent_resets_state_and_resolves_the_escalation(ui, repo):
+    from synchri.session.manager import SessionManager
+
+    session_id = _active(ui, repo)
+    manager = SessionManager(ui["broker"])
+    manager.record_participant_failure(session_id, "claude", "failed", "exit 1")
+    manager.record_participant_failure(session_id, "claude", "dropped",
+                                       "dropped after 2 consecutive failed turns")
+    manager.escalate(session_id, "agent_failed", "claude dropped", raised_by="claude")
+    assert call(ui, f"/api/dashboard?session={session_id}")["user_intervention_required"] is True
+
+    class _RestartStub:
+        def __init__(self):
+            self.restarted = []
+
+        def restart(self, record):
+            self.restarted.append(record.session_id)
+            return {"phase": "resuming"}
+
+    stub = _RestartStub()
+    ui["server"].api.managed = stub
+
+    dashboard = call(ui, "/api/control", {"session": session_id, "action": "restart_agent",
+                                          "participant": "claude"})
+    assert dashboard["participant_states"]["claude"]["state"] == "active"
+    assert dashboard["participant_states"]["claude"]["failures"] == 0
+    assert dashboard["user_intervention_required"] is False
+    assert stub.restarted == [session_id]
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/control", {"session": session_id, "action": "restart_agent",
+                                  "participant": "ghost"})
+    assert exc.value.code == 400
+
+
 def test_refused_completion_leaves_the_agent_team_untouched(ui, repo):
     session_id = _active(ui, repo)
     registry = _RecordingRegistry()

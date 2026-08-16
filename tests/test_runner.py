@@ -500,6 +500,74 @@ def test_a_failing_agent_reports_into_the_room_and_releases_the_floor(broker, tm
     assert room.active_speaker() is None, "a crashed agent must not hold the floor forever"
 
 
+def test_repeated_failures_trip_the_breaker_and_name_the_agent(broker, tmp_path):
+    """A crashing agent must not receive the floor forever."""
+    room = make_room(broker, "claude", "codex")
+    room.send(
+        "human",
+        "Prioritize auth.",
+        target="claude",
+        metadata={"human_direction": {"lead": "claude", "reviewer": "codex"}},
+    )
+    events = []
+    conductor = conductor_for(
+        room,
+        tmp_path,
+        {
+            "claude": "sys.stderr.write('provider failed')\nsys.exit(3)\n",
+            "codex": "print('Builder, please retry.')\nprint('SYNCHRI-TO: claude')\n",
+        },
+        on_event=lambda event, payload: events.append((event, payload)),
+    )
+
+    report = conductor.run(max_turns=10)
+
+    assert report.reason == "agent_failed"
+    assert report.failed_participant == "claude"
+    failed_turns = [t for t in report.turns if t.get("status") == "failed"]
+    assert len(failed_turns) == 2, report.turns
+    assert any("failed 2 consecutive" in warning for warning in report.warnings)
+    returned = [payload for event, payload in events if event == "agent.returned"]
+    assert returned and returned[-1]["returncode"] == 3
+
+
+def test_a_success_resets_the_breaker_count(broker, tmp_path):
+    room = make_room(broker, "claude", "codex")
+    room.send("claude", "review", target="codex", message_type="task")
+    conductor = conductor_for(room, tmp_path, {"codex": "print('All good.')\n"})
+    conductor._failures["codex"] = 1
+    report = conductor.run(max_turns=2)
+    assert report.reason != "agent_failed"
+    assert conductor._failures["codex"] == 0
+
+
+def test_low_signal_warns_after_two_quiet_streamed_turns(broker, tmp_path):
+    from synchri.runner.agent_command import AgentResult
+
+    room = make_room(broker, "claude", "codex")
+    events = []
+    conductor = conductor_for(
+        room, tmp_path, {"claude": "print('hi')\n", "codex": "print('hi')\n"},
+        on_event=lambda event, payload: events.append((event, payload)),
+    )
+    quiet = AgentResult("claude", "I cannot help with that.", "", 0, tool_events=0)
+    body, directives = parse_directives(quiet.stdout)
+
+    assert conductor._note_low_signal("claude", quiet, body, directives) is True
+    assert events == [], "the first quiet turn is not worth an alarm"
+    assert conductor._note_low_signal("claude", quiet, body, directives) is True
+    assert events[-1][0] == "agent.low_signal"
+    assert events[-1][1]["consecutive"] == 2
+
+    busy = AgentResult("claude", "Refactored the module as requested.", "", 0, tool_events=4)
+    assert conductor._note_low_signal("claude", busy, body, directives) is False
+    assert conductor._low_signal["claude"] == 0
+
+    # Non-streaming runtimes never produce the signal.
+    plain = AgentResult("claude", "ok", "", 0, tool_events=None)
+    assert conductor._note_low_signal("claude", plain, body, directives) is False
+
+
 def test_conductor_stops_at_the_autonomy_limit_instead_of_looping(broker, tmp_path):
     """Two agents that keep addressing each other must still hand the room back."""
     room = make_room(broker, "claude", "codex", max_consecutive_agent_turns=4)

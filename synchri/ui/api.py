@@ -808,6 +808,23 @@ class Api:
             self.broker.resume_room(record.room_id, credential=credential)
             resumed = self.manager.resume(session_id)
             self.managed.resume(resumed)
+        elif action == "restart_agent":
+            participant = (body.get("participant") or "").strip()
+            plan = next((p for p in record.participants if p.name == participant), None)
+            if plan is None:
+                raise ValidationError(f"{participant!r} is not a participant in this session")
+            self.manager.set_participant_state(
+                session_id, participant, "active", "restarted by the user",
+                reset_failures=True,
+            )
+            for escalation in self.manager.open_escalations(session_id):
+                if escalation["rule"] == "agent_failed":
+                    self.manager.resolve_escalation(
+                        escalation["escalation_id"], f"{participant} restarted by the user"
+                    )
+            refreshed = self.manager.get(session_id)
+            if refreshed.status == "active":
+                self.managed.restart(refreshed)
         elif action == "stop":
             # Durable state first: once the session row says stopped, the
             # cancel below is cleanup, not the thing the user is waiting on.

@@ -49,6 +49,49 @@ def _looks_like_flag_rejection(result) -> bool:
     stderr = (result.stderr or "").lower()
     return any(marker in stderr for marker in _FLAG_REJECTION_MARKERS)
 
+
+class _ParticipantStateBridge:
+    """Map conductor events onto durable per-agent runtime state.
+
+    Runs on the worker thread, against the worker's own manager/connection.
+    Supervision must never break the run, so every write is best-effort.
+    """
+
+    def __init__(self, manager, session_id: str) -> None:
+        self.manager = manager
+        self.session_id = session_id
+
+    def handle(self, event: str, payload: dict) -> None:
+        name = payload.get("participant")
+        if not name:
+            return
+        try:
+            if event == "agent.invoking":
+                self.manager.set_participant_state(self.session_id, name, "active", "working")
+            elif event == "agent.returned":
+                if payload.get("cancelled"):
+                    return  # the session-level stop writes the terminal states
+                if payload.get("timed_out"):
+                    self.manager.record_participant_failure(
+                        self.session_id, name, "timed_out", "the last turn timed out"
+                    )
+                elif payload.get("returncode") not in (0, None):
+                    self.manager.record_participant_failure(
+                        self.session_id, name, "failed",
+                        f"the last turn exited with code {payload.get('returncode')}",
+                    )
+                elif payload.get("returncode") == 0:
+                    self.manager.set_participant_state(
+                        self.session_id, name, "active", None, reset_failures=True
+                    )
+            elif event == "agent.low_signal":
+                self.manager.set_participant_state(
+                    self.session_id, name, "active",
+                    "may be refusing or stuck — check its last message",
+                )
+        except Exception:  # pragma: no cover - supervision must not break the run
+            pass
+
 if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
     from ..config import Workspace
     from ..session.manager import SessionRecord
@@ -175,6 +218,23 @@ class ManagedRunnerRegistry:
         if thread is not None and thread.is_alive() and event is not None and event.is_set():
             thread.join(timeout=4)
         return self._spawn(record.session_id, "resuming", "Your reply reached the agents; continuing the session.")
+
+    def restart(self, record: "SessionRecord") -> dict:
+        """Respawn supervision after the user restarts a dropped agent.
+
+        Unlike ``resume``, this actively cancels a live worker first: the
+        point of Restart is a fresh invocation, not joining a wedged one.
+        """
+        if not self.readiness(record)["available"] or record.status != "active":
+            return self.status(record.session_id)
+        with self._lock:
+            thread = self._threads.get(record.session_id)
+            event = self._cancel.get(record.session_id)
+        if thread is not None and thread.is_alive():
+            if event is not None:
+                event.set()
+            thread.join(timeout=4)
+        return self._spawn(record.session_id, "resuming", "Restarting the agent team.")
 
     def _spawn(self, session_id: str, phase: str, detail: str) -> dict:
         with self._lock:
@@ -311,6 +371,7 @@ class ManagedRunnerRegistry:
             for plan in record.participants
         }
 
+        states = _ParticipantStateBridge(manager, record.session_id)
         conductor = Conductor(
             broker,
             record.room_id,
@@ -320,8 +381,32 @@ class ManagedRunnerRegistry:
             role_guidance=role_guidance,
             session_id=record.session_id,
             cancel_event=self._cancel.get(record.session_id),
+            on_event=states.handle,
         )
         report = conductor.run()
+        if report.reason == "agent_failed" and report.failed_participant:
+            name = report.failed_participant
+            try:
+                manager.set_participant_state(
+                    record.session_id, name, "dropped",
+                    f"dropped after {conductor.max_consecutive_failures} consecutive failed turns",
+                )
+                manager.escalate(
+                    record.session_id,
+                    "agent_failed",
+                    f"{name} failed {conductor.max_consecutive_failures} turns in a row and was "
+                    "dropped. Restart it from the conversation, or stop the session.",
+                    raised_by=name,
+                )
+            except SynchriError:  # pragma: no cover - session may have ended underneath
+                pass
+            self._set(
+                record.session_id,
+                "needs_attention",
+                f"{name} stopped and needs your attention.",
+                reason="agent_failed",
+            )
+            return
         phrases = {
             "awaiting_human": "The agents need your decision before they can continue.",
             "room_paused": "The session is paused.",

@@ -836,6 +836,69 @@ class SessionManager:
             for row in rows
         ]
 
+    # ------------------------------------------------------------------
+    # per-agent runtime state
+    # ------------------------------------------------------------------
+
+    def participant_states(self, session_id: str) -> dict[str, dict]:
+        """Durable supervision state per agent (state is None until launched)."""
+        rows = self.conn.execute(
+            "SELECT name, runtime_status, runtime_detail, consecutive_failures, "
+            "runtime_updated_at FROM session_participants WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+        return {
+            row["name"]: {
+                "state": row["runtime_status"],
+                "detail": row["runtime_detail"],
+                "failures": row["consecutive_failures"] or 0,
+                "updated_at": row["runtime_updated_at"],
+            }
+            for row in rows
+        }
+
+    def set_participant_state(
+        self,
+        session_id: str,
+        name: str,
+        state: str,
+        detail: str | None = None,
+        *,
+        reset_failures: bool = False,
+    ) -> None:
+        with db.transaction(self.conn):
+            if reset_failures:
+                self.conn.execute(
+                    "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+                    "consecutive_failures = 0, runtime_updated_at = ? "
+                    "WHERE session_id = ? AND name = ?",
+                    (state, detail, utc_now(), session_id, name),
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+                    "runtime_updated_at = ? WHERE session_id = ? AND name = ?",
+                    (state, detail, utc_now(), session_id, name),
+                )
+
+    def record_participant_failure(
+        self, session_id: str, name: str, state: str, detail: str | None = None
+    ) -> None:
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+                "consecutive_failures = consecutive_failures + 1, runtime_updated_at = ? "
+                "WHERE session_id = ? AND name = ?",
+                (state, detail, utc_now(), session_id, name),
+            )
+
+    def _set_all_participant_states(self, session_id: str, state: str, detail: str) -> None:
+        self.conn.execute(
+            "UPDATE session_participants SET runtime_status = ?, runtime_detail = ?, "
+            "runtime_updated_at = ? WHERE session_id = ?",
+            (state, detail, utc_now(), session_id),
+        )
+
     def complete(self, session_id: str, *, force: bool = False) -> SessionRecord:
         """Close a verified session and preserve its final changelog.
 
@@ -936,6 +999,9 @@ class SessionManager:
                         "commits": changes.get("commits", 0),
                     },
                 }
+                self._set_all_participant_states(
+                    session_id, "stopped", "the session completed"
+                )
                 completed = self._finish(
                     record,
                     SessionStatus.COMPLETE,
@@ -1014,6 +1080,7 @@ class SessionManager:
                 self.broker.stop_room(
                     record.room_id, credential=self._human_credential(record)
                 )
+            self._set_all_participant_states(session_id, "stopped", reason)
             return self._finish(record, SessionStatus.STOPPED, reason)
 
     def pause(self, session_id: str) -> SessionRecord:
@@ -1221,6 +1288,7 @@ class SessionManager:
             "activities": (room_status or {}).get("activities", []),
             "activity_entries": (room_status or {}).get("activity_entries", []),
             "gates": {"summary": report, "items": [g.to_dict() for g in gates]},
+            "participant_states": self.participant_states(session_id),
             "tests": (record.metadata or {}).get("last_test_run"),
             "test_command": self.detected_test_command(session_id),
             "changes": changes,

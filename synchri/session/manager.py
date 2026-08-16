@@ -739,6 +739,25 @@ class SessionManager:
                 self._write_gate(session_id, gate)
         return self.gates(session_id)
 
+    def add_gate(self, session_id: str, gate: Gate) -> Gate:
+        """Insert one new gate without touching the others' evidence."""
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(
+                f"cannot add a gate after the session is {record.status}",
+                code="session_finished",
+            )
+        if any(existing.gate_id == gate.gate_id for existing in self.gates(session_id)):
+            raise ConflictError(f"gate {gate.gate_id} already exists in this session")
+        with db.transaction(self.conn):
+            self._write_gate(session_id, gate)
+        self._log(
+            record,
+            ev.SESSION_GATE_UPDATED,
+            {"gate_id": gate.gate_id, "status": gate.status, "actor": "human", "added": True},
+        )
+        return gate
+
     def update_gate(self, session_id: str, gate_id: str, *, actor: str | None = None, **fields) -> Gate:
         record = self.get(session_id)
         if record.is_terminal:

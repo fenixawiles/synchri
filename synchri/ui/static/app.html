@@ -1064,6 +1064,7 @@ async function quickStartFromRepository(repoPath) {
   await quickStart();
   S.quick.repo_path = repoPath;
   S.quick.existing_worktree_path = null;
+  S.quick.workspace_choice = null;
   await loadWorktreeChoices(repoPath);
   renderQuick();
 }
@@ -1083,6 +1084,7 @@ async function quickStart(selectedWorkflow) {
     deadline: "",
     preset: workflow.name,
     existing_worktree_path: null,
+    workspace_choice: null,
   };
   S.worktreeChoices = null;
   await loadQuickRepositories();
@@ -1110,6 +1112,7 @@ async function selectQuickRepository(reference) {
   const result = await api("repository/resolve", {reference});
   S.quick.repo_path = result.repository.path;
   S.quick.existing_worktree_path = null;
+  S.quick.workspace_choice = null;
   await loadWorktreeChoices(S.quick.repo_path);
   confirmNotice(result.repository.reused
     ? `Using the existing checkout. This session will get a new isolated worktree.`
@@ -1247,17 +1250,19 @@ function renderQuick() {
   const worktrees = S.worktreeChoices?.repository === q.repo_path
     ? S.worktreeChoices.worktrees : [];
   const chain = (workflow?.agents || []).map(agent => agent.name).join(" → ") || "saved team";
-  const workspacePicker = q.repo_path ? `<details class="adv">
-      <summary class="small muted">Workspace: ${q.existing_worktree_path ? "existing worktree selected" : "new isolated worktree (default)"}</summary>
-      <div class="stack" style="margin-top:.55rem">
-        <div class="small muted">Use an existing worktree only when you deliberately want this session to continue work already in it.</div>
-        <select id="quick-worktree">
-          <option value="" ${q.existing_worktree_path ? "" : "selected"}>Create a new isolated worktree</option>
-          ${worktrees.map(tree => `<option value="${esc(tree.path)}" ${tree.path===q.existing_worktree_path ? "selected" : ""}>${esc(tree.name)} · ${esc(tree.branch)}</option>`).join("")}
-        </select>
-        ${!worktrees.length ? `<div class="small muted">${S.worktreeLoading ? "Scanning for existing worktrees…" : "No existing worktrees found."}</div>` : ""}
+  const workspaceChoice = q.repo_path ? `<div class="fieldset" id="workspace-fieldset">
+      <div class="fieldset-head"><span class="fieldset-num">03</span><span class="fieldset-title">Workspace</span><span class="small faint">required</span></div>
+      <div class="small muted" style="margin-bottom:.5rem">Every session works in a git worktree. Choose where this one runs — even a new worktree is a deliberate choice, never assumed.</div>
+      <div class="repo-grid">
+        <button class="choice ${q.workspace_choice === "new" ? "on" : ""}" data-workspace="new">
+          <div class="repo-row"><b>New isolated worktree</b>${q.workspace_choice === "new" ? `<span class="pill">selected</span>` : ""}</div>
+          <span class="small muted">A fresh branch and folder created for this session.</span></button>
+        ${worktrees.map(tree => `<button class="choice ${q.workspace_choice === "existing" && tree.path === q.existing_worktree_path ? "on" : ""}" data-workspace="${esc(tree.path)}">
+          <div class="repo-row"><b>${esc(tree.name)}</b><span class="mono small muted">${esc(tree.branch)}</span></div>
+          <span class="mono small faint">${esc(tree.path)}</span></button>`).join("")}
       </div>
-    </details>` : "";
+      ${!worktrees.length ? `<div class="small muted" style="margin-top:.4rem">${S.worktreeLoading ? "Scanning for existing worktrees…" : "No existing worktrees found — the new worktree still needs an explicit pick."}</div>` : ""}
+    </div>` : "";
   const repoChoices = [...repos.local.slice(0, 8).map(repo =>
     `<button class="choice ${repo.path===q.repo_path?"on":""}" data-repo="${esc(repo.path)}">
       <div class="repo-row"><b>${esc(repo.name)}</b><span class="mono small muted">${esc(repo.branch || "")}</span></div>
@@ -1295,14 +1300,16 @@ function renderQuick() {
       <div id="quick-repositories" class="repo-grid">${repoChoices || `<div class="small muted">Scanning for repositories…</div>`}</div>
       ${repos.github_status?.authenticated && S.githubReposLoading ? `<div class="small muted" style="margin-top:.45rem">Loading GitHub repositories…</div>` : ""}
       ${githubState}
-      <details class="adv"><summary class="small muted">Paste a repository link or path instead</summary><div class="row" style="margin-top:.5rem;flex-wrap:nowrap"><input id="quick-repo" class="mono" value="${esc(q.repo_path)}" placeholder="owner/repository, GitHub URL, or folder path"><button id="quick-use-repo">Use</button></div></details>
-      ${workspacePicker}</div>
+      <details class="adv"><summary class="small muted">Paste a repository link or path instead</summary><div class="row" style="margin-top:.5rem;flex-wrap:nowrap"><input id="quick-repo" class="mono" value="${esc(q.repo_path)}" placeholder="owner/repository, GitHub URL, or folder path"><button id="quick-use-repo">Use</button></div></details></div>
 
-    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">03</span><span class="fieldset-title">Brief</span></div>
+    ${workspaceChoice}
+
+    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">04</span><span class="fieldset-title">Brief</span></div>
       <textarea id="quick-goal" placeholder="Paste a spec, ticket, notes, or a plain-language brief — any text works.">${esc(q.goal)}</textarea>
-      <div class="small faint" style="margin-top:.35rem">Kept verbatim as the contract's source of truth. Gate IDs like <span class="mono">AUTH-01</span> become individually tracked acceptance gates.</div></div>
+      <div class="small faint" style="margin-top:.35rem">Kept verbatim as the contract's source of truth. Gate IDs like <span class="mono">AUTH-01</span> become individually tracked acceptance gates.</div>
+      <div id="gate-preview" class="small muted" style="margin-top:.35rem"></div></div>
 
-    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">04</span><span class="fieldset-title">Pacing</span><span class="small faint">optional</span></div>
+    <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">05</span><span class="fieldset-title">Pacing</span><span class="small faint">optional</span></div>
       <div class="row"><input id="quick-deadline" value="${esc(q.deadline||"")}" placeholder="timebox — e.g. 2 hours" style="max-width:14rem"></div>
       <div class="small faint" style="margin-top:.35rem">The clock starts when collaboration begins, and never ends the work by itself.</div></div>
     </div>
@@ -1313,7 +1320,7 @@ function renderQuick() {
         <div class="plan-row"><span>Workflow</span><b>${esc(workflow?.name || "—")}</b></div>
         <div class="plan-row"><span>Team</span><b class="mono" style="font-weight:500">${esc(chain)}</b></div>
         <div class="plan-row"><span>Repository</span><b>${planRepo ? esc(planRepo) : `<span class="faint">not selected</span>`}</b></div>
-        <div class="plan-row"><span>Workspace</span><b>${q.existing_worktree_path ? "existing worktree" : "new worktree"}</b></div>
+        <div class="plan-row"><span>Workspace</span><b>${q.workspace_choice === "existing" ? "existing worktree" : q.workspace_choice === "new" ? "new worktree" : `<span class="faint">choose a workspace</span>`}</b></div>
         <div class="plan-row"><span>Timebox</span><b id="plan-timebox">${esc(planTimebox)}</b></div>
       </div>
       <button class="primary" id="quick-go" style="width:100%;margin-top:.9rem">Create session</button>
@@ -1332,25 +1339,55 @@ function renderQuick() {
   document.getElementById("quick-use-repo")?.addEventListener("click", guard(async () => {
     await selectQuickRepository(document.getElementById("quick-repo").value.trim());
   }));
-  document.getElementById("quick-worktree")?.addEventListener("change", event => {
-    q.existing_worktree_path = event.target.value || null; renderQuick();
+  document.querySelectorAll("[data-workspace]").forEach(button => button.onclick = () => {
+    const value = button.dataset.workspace;
+    if (value === "new") { q.workspace_choice = "new"; q.existing_worktree_path = null; }
+    else { q.workspace_choice = "existing"; q.existing_worktree_path = value; }
+    renderQuick();
   });
+  const refreshGatePreview = () => {
+    const target = document.getElementById("gate-preview");
+    if (!target) return;
+    const text = document.getElementById("quick-goal")?.value || "";
+    if (!text.trim()) { target.innerHTML = ""; return; }
+    clearTimeout(S.gatePreviewTimer);
+    S.gatePreviewTimer = setTimeout(async () => {
+      try {
+        const r = await api("gates/preview", {spec: text});
+        const chips = r.gates.slice(0, 8).map(g => esc(g.gate_id)).join(" · ");
+        target.innerHTML = `${esc(r.note)}${chips ? ` <span class="mono">${chips}${r.gates.length > 8 ? " …" : ""}</span>` : ""}`;
+      } catch (error) { /* the preview is best-effort */ }
+    }, 500);
+  };
   // Typed text survives every repaint (repo selection, the GitHub repository
   // list arriving, workflow switches) by living in state, not just the DOM.
-  document.getElementById("quick-goal").oninput = event => { q.goal = event.target.value; };
+  document.getElementById("quick-goal").oninput = event => { q.goal = event.target.value; refreshGatePreview(); };
+  refreshGatePreview();
   document.getElementById("quick-deadline").oninput = event => {
     q.deadline = event.target.value;
     const plan = document.getElementById("plan-timebox");
     if (plan) plan.textContent = q.deadline.trim() || workflow?.deadline_duration || "open-ended";
   };
-  document.getElementById("quick-go").onclick = guard(async () => {
+  const go = document.getElementById("quick-go");
+  // The workspace pick is mandatory: once a repository is chosen, Create
+  // stays disabled until the user explicitly picks new-or-existing.
+  go.disabled = Boolean(q.repo_path && !q.workspace_choice);
+  go.title = go.disabled ? "Choose a workspace in step 03 first" : "";
+  go.onclick = guard(async () => {
     q.repo_path = document.getElementById("quick-repo")?.value.trim() || q.repo_path;
     if (S.worktreeChoices?.repository !== q.repo_path) await loadWorktreeChoices(q.repo_path);
     q.goal = document.getElementById("quick-goal").value.trim();
     q.deadline = document.getElementById("quick-deadline").value.trim();
+    if (q.repo_path && !q.workspace_choice) {
+      renderQuick();
+      document.getElementById("workspace-fieldset")?.scrollIntoView({behavior:"smooth", block:"center"});
+      flash({message: "Choose a workspace for this session — a new isolated worktree, or one of the existing ones."});
+      return;
+    }
     const result = await api("quick-start", {
       repo_path:q.repo_path, goal:q.goal, deadline:q.deadline, preset:q.preset,
-      existing_worktree_path:q.existing_worktree_path,
+      worktree_strategy:q.workspace_choice,
+      existing_worktree_path:q.workspace_choice === "existing" ? q.existing_worktree_path : null,
     });
     showLaunch(result);
   });
@@ -2140,6 +2177,15 @@ function applyFileCard(card, entry) {
   if (stats) stats.textContent = entry.stats;
 }
 
+function gateAddForm(editable) {
+  if (!editable) return "";
+  return `<details class="adv" style="margin-top:.9rem"><summary class="small muted">+ Add a gate</summary>
+    <div class="row" style="margin-top:.5rem;flex-wrap:nowrap">
+      <input id="gate-new-id" class="mono" placeholder="GATE-03" style="max-width:9rem">
+      <input id="gate-new-description" placeholder="What must be true to accept this work">
+      <button class="primary" id="gate-new-save">Add gate</button></div></details>`;
+}
+
 function commitUrl(remote, sha) {
   // Only GitHub remotes become links; anything else stays plain text.
   if (!remote || !sha) return null;
@@ -2370,8 +2416,15 @@ async function paint(tab, el) {
         <div class="small muted" style="margin-top:.25rem">Builder: ${esc(x.builder_assessment || "not recorded")} · Reviewer: ${esc(x.reviewer_assessment || "not recorded")}</div>
         ${editable?`<details style="margin-top:.65rem"><summary class="small muted" style="cursor:pointer">Add evidence or override</summary><div class="grid" style="margin-top:.55rem"><input class="gate-evidence mono" placeholder="Evidence, test, or commit"><input class="gate-builder" placeholder="Builder assessment"><input class="gate-reviewer" placeholder="Reviewer assessment"><button class="primary gate-save">Save gate</button></div></details>`:""}
         ${x.blocker?`<div class="small" style="color:var(--warn);margin-top:.55rem">${esc(x.blocker)}</div>`:""}</div>`).join("")}</div>
-      <div class="small muted" style="margin-top:.9rem">A gate passes only with evidence and both sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>`
-      : `<span class="muted">No gates defined. Add acceptance criteria to the spec.</span>`;
+      <div class="small muted" style="margin-top:.9rem">A gate passes only with evidence and both sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>${gateAddForm(editable)}`
+      : `<span class="muted">No gates defined yet.</span>${gateAddForm(editable)}`;
+    document.getElementById("gate-new-save")?.addEventListener("click", guard(async () => {
+      const gateId = document.getElementById("gate-new-id").value.trim();
+      const description = document.getElementById("gate-new-description").value.trim();
+      await api("gate", {session:S.session, add:{gate_id:gateId, description}});
+      S.dash = await api("dashboard" + q); await paint("gates", el);
+      confirmNotice(`Added ${gateId.toUpperCase()}.`);
+    }));
     if (editable) el.querySelectorAll(".gate-card").forEach(card => {
       const id = card.dataset.gate;
       card.querySelector(".gate-status").onchange = guard(async event => {

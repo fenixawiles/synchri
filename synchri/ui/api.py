@@ -93,6 +93,7 @@ class Api:
             ("POST", "approval"): self.approval,
             ("GET", "gates"): self.gates,
             ("POST", "gate"): self.update_gate,
+            ("POST", "gates/preview"): self.preview_gates,
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
             ("GET", "changes/files"): self.file_changes,
@@ -402,6 +403,18 @@ class Api:
         )
         draft.set_mode("long_horizon")
         draft.set_repository(repo_path)
+        strategy = (body.get("worktree_strategy") or "").strip()
+        if strategy:
+            # The UI always sends an explicit choice; when present it must be
+            # internally consistent so a half-migrated client can never get a
+            # worktree it did not pick. Absent = legacy default-to-new.
+            existing = (body.get("existing_worktree_path") or "").strip()
+            if strategy == "existing" and not existing:
+                raise ValidationError("choose which existing worktree to use")
+            if strategy == "new" and existing:
+                raise ValidationError("a new worktree cannot also name an existing one")
+            if strategy not in {"new", "existing"}:
+                raise ValidationError(f"unknown worktree strategy {strategy!r}")
         if "existing_worktree_path" in body:
             draft.set_worktree(existing_path=body.get("existing_worktree_path") or None)
         if body.get("agents") is not None:
@@ -730,8 +743,32 @@ class Api:
         gates = self.manager.gates(session_id)
         return {"gates": [g.to_dict() for g in gates], "summary": summarize(gates)}
 
+    def preview_gates(self, query: dict, body: dict) -> dict:
+        """What gate detection would make of a brief, before anything exists."""
+        gates = extract_gates(body.get("spec") or "")
+        if len(gates) == 1 and gates[0].gate_id == "SPEC-01":
+            note = (
+                "No explicit acceptance criteria detected — the session gets one generic "
+                "SPEC-01 gate. Add 'Acceptance criteria:' bullets or AUTH-01-style ids to "
+                "track more."
+            )
+        else:
+            note = describe_gates(gates)
+        return {
+            "gates": [{"gate_id": g.gate_id, "description": g.description} for g in gates],
+            "note": note,
+        }
+
     def update_gate(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)
+        if body.get("add"):
+            added = body["add"] or {}
+            gate = Gate(
+                gate_id=str(added.get("gate_id", "")).strip().upper(),
+                description=str(added.get("description", "")).strip(),
+            )
+            self.manager.add_gate(session_id, gate)
+            return self.gates({"session": session_id}, {})
         if body.get("replace"):
             self.manager.set_gates(
                 session_id,

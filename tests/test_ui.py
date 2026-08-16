@@ -1024,6 +1024,62 @@ def test_memory_and_raw_tabs_expose_underlying_state(ui, repo):
     assert "session.created" in types and "session.activated" in types
 
 
+def test_gate_preview_reports_what_the_brief_will_produce(ui):
+    r = call(ui, "/api/gates/preview", {"spec": "Acceptance criteria:\n- login works\n- logout works"})
+    assert [g["gate_id"] for g in r["gates"]] == ["GATE-01", "GATE-02"]
+    assert "2" in r["note"]
+
+    fallback = call(ui, "/api/gates/preview", {"spec": "Make it nicer."})
+    assert [g["gate_id"] for g in fallback["gates"]] == ["SPEC-01"]
+    assert "No explicit acceptance criteria" in fallback["note"]
+
+
+def test_gates_can_be_added_from_the_gates_panel(ui, repo):
+    session_id = _active(ui, repo)
+    gates = call(ui, "/api/gate", {"session": session_id,
+                                   "add": {"gate_id": "perf-01", "description": "p95 under 200ms"}})
+    ids = [g["gate_id"] for g in gates["gates"]]
+    assert "PERF-01" in ids
+    assert "AUTH-01" in ids, "adding must not wipe the existing gates"
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/gate", {"session": session_id,
+                               "add": {"gate_id": "PERF-01", "description": "duplicate"}})
+    assert exc.value.code == 400
+
+
+def test_quick_start_validates_the_worktree_strategy(ui, repo):
+    base = {
+        "repo_path": str(repo),
+        "goal": "Do the thing.",
+        "agents": [
+            {"name": "a", "runtime": "generic", "role": "primary_builder", "command": "true {prompt}"},
+            {"name": "b", "runtime": "generic", "role": "adversarial_reviewer", "command": "true {prompt}"},
+        ],
+    }
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/quick-start", {**base, "worktree_strategy": "existing"})
+    assert "existing worktree" in json.loads(exc.value.read())["error"]["message"]
+
+    with pytest.raises(urllib.error.HTTPError):
+        call(ui, "/api/quick-start", {**base, "worktree_strategy": "new",
+                                      "existing_worktree_path": "/tmp/somewhere"})
+
+    started = call(ui, "/api/quick-start", {**base, "worktree_strategy": "new"})
+    assert started["session"]["session_id"]
+
+
+def test_worktree_choice_is_an_explicit_selection():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'data-workspace="new"' in source
+    assert "workspace_choice: null" in source
+    assert "choose a workspace" in source
+    assert "worktree_strategy:q.workspace_choice" in source
+    # The old buried default-to-new select is gone.
+    assert "quick-worktree" not in source
+
+
 def test_gates_can_be_updated_from_the_ui(ui, repo):
     session_id = _active(ui, repo)
     call(ui, "/api/gate", {"session": session_id, "gate_id": "AUTH-01", "status": "pass",

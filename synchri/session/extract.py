@@ -24,6 +24,14 @@ _ACCEPTANCE_HEADING = re.compile(
     r"definition of done)\b",
     re.I,
 )
+#: The same section openers written as a plain line ("Acceptance criteria:").
+#: Briefs pasted from tickets and chats rarely carry markdown '#' marks, and
+#: they used to fall through to the generic SPEC-01 gate.
+_ACCEPTANCE_LINE = re.compile(
+    r"^\s*(acceptance|acceptance criteria|requirements|gates|success criteria|"
+    r"definition of done)\s*[:\-]?\s*$",
+    re.I,
+)
 _ANY_HEADING = re.compile(r"^#{1,6}\s+")
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(?P<text>.+?)\s*$")
 
@@ -69,23 +77,34 @@ def _explicit_gates(spec_text: str) -> list[Gate]:
 
 
 def _acceptance_section_gates(spec_text: str) -> list[Gate]:
-    """Bullets under an acceptance-style heading, numbered for us."""
+    """Bullets under an acceptance-style heading (markdown or plain), numbered."""
     lines = spec_text.splitlines()
     collecting = False
+    plain_section = False
+    saw_bullet = False
     items: list[str] = []
     for line in lines:
         if _ACCEPTANCE_HEADING.match(line):
-            collecting = True
+            collecting, plain_section, saw_bullet = True, False, False
             continue
-        if collecting and _ANY_HEADING.match(line):
-            break  # a different section began
+        if _ACCEPTANCE_LINE.match(line):
+            collecting, plain_section, saw_bullet = True, True, False
+            continue
         if not collecting:
             continue
+        if _ANY_HEADING.match(line):
+            break  # a different section began
         bullet = _BULLET.match(line)
         if bullet:
+            saw_bullet = True
             text = bullet.group("text").strip()
             if text:
                 items.append(text)
+            continue
+        if plain_section and saw_bullet and line.strip():
+            # A plain-text section has no closing '#'; the first prose line
+            # after the bullets ends it.
+            break
 
     return [
         Gate(gate_id=f"GATE-{index:02d}", description=_trim(text))

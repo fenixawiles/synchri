@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from synchri.broker import Broker
-from synchri.errors import NotFoundError, StateError, ValidationError
+from synchri.errors import ConflictError, NotFoundError, StateError, ValidationError
 from synchri.session import presets as presets_module
 from synchri.session import worktree as worktree_module
 from synchri.session.contract import ACK_TOKEN, parse_acknowledgment
@@ -1079,6 +1079,44 @@ def test_unverified_is_not_a_pass(manager, repo, agents):
     with pytest.raises(StateError):
         manager.complete(record.session_id)
     assert manager.handoff_report(record.session_id)["gates"]["unverified"] == ["AUTH-01"]
+
+
+def test_plain_text_acceptance_sections_are_detected(manager, repo, agents):
+    # 'Acceptance criteria:' without a markdown heading used to fall through
+    # to the generic SPEC-01 gate.
+    spec = "Ship the auth flow.\n\nAcceptance criteria:\n- login works\n- logout works\n\nThanks!"
+    record = make_session(manager, repo, agents, spec=ProductSpec(text=spec))
+    gates = manager.gates(record.session_id)
+    assert [(gate.gate_id, gate.description) for gate in gates] == [
+        ("GATE-01", "login works"),
+        ("GATE-02", "logout works"),
+    ]
+
+
+def test_markdown_acceptance_sections_tolerate_interleaved_prose():
+    from synchri.session.extract import extract_gates
+
+    spec = "# Task\n\n## Acceptance\n- one\n\nprose inside the section\n- two\n\n## Next\n- ignored"
+    assert [gate.description for gate in extract_gates(spec)] == ["one", "two"]
+
+
+def test_plain_acceptance_sections_end_at_the_first_prose_line():
+    from synchri.session.extract import extract_gates
+
+    spec = "Fix the bug.\n\nacceptance criteria\n- crash gone\n- test added\nSome closing prose\n- not a gate"
+    assert [gate.description for gate in extract_gates(spec)] == ["crash gone", "test added"]
+
+
+def test_added_gates_join_without_touching_their_neighbors(manager, repo, agents):
+    record = make_session(manager, repo, agents)
+    manager.update_gate(record.session_id, "AUTH-01", status="pass",
+                        evidence=["tests/test_auth.py"])
+    manager.add_gate(record.session_id, Gate("PERF-01", "p95 under 200ms"))
+    gates = {gate.gate_id: gate for gate in manager.gates(record.session_id)}
+    assert gates["PERF-01"].status == "pending"
+    assert gates["AUTH-01"].evidence == ["tests/test_auth.py"], "existing evidence must survive"
+    with pytest.raises(ConflictError):
+        manager.add_gate(record.session_id, Gate("PERF-01", "duplicate"))
 
 
 def test_plain_text_spec_gets_one_honest_generic_gate(manager, repo, agents):

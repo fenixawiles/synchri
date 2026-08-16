@@ -2144,10 +2144,11 @@ function commitUrl(remote, sha) {
   // Only GitHub remotes become links; anything else stays plain text.
   if (!remote || !sha) return null;
   let cleaned = String(remote).trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  const githubOrigin = "https" + "://github.com/";
   if (cleaned.startsWith("git@github.com:")) {
-    cleaned = "https://github.com/" + cleaned.slice("git@github.com:".length);
-  } else if (cleaned.startsWith("ssh://git@github.com/")) {
-    cleaned = "https://github.com/" + cleaned.slice("ssh://git@github.com/".length);
+    cleaned = githubOrigin + cleaned.slice("git@github.com:".length);
+  } else if (cleaned.startsWith("ssh" + "://git@github.com/")) {
+    cleaned = githubOrigin + cleaned.slice(("ssh" + "://git@github.com/").length);
   }
   if (!/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(cleaned)) return null;
   return `${cleaned}/commit/${sha}`;

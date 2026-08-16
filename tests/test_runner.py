@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
@@ -193,6 +196,104 @@ def test_missing_executable_is_reported_not_raised():
     result = agent.invoke("go")
     assert result.ok is False
     assert "could not run the agent" in result.stderr
+
+
+# ----------------------------------------------------------------------
+# ending the whole process tree
+# ----------------------------------------------------------------------
+
+#: A stand-in for a wrapper CLI: it forks a long-lived tool process (the
+#: grandchild), records that pid, and keeps running itself.
+_FORKER = """import subprocess, sys, time
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
+open(sys.argv[1], 'w').write(str(child.pid))
+time.sleep(120)
+"""
+
+posix_only = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+
+
+def _forker_agent(tmp_path, *, timeout):
+    script = tmp_path / "forker.py"
+    script.write_text(_FORKER, encoding="utf-8")
+    pid_file = tmp_path / "grandchild.pid"
+    agent = AgentCommand.parse(
+        f"x={sys.executable} {script} {pid_file} {{prompt}}", timeout=timeout
+    )
+    return agent, pid_file
+
+
+def _wait_until(predicate, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def _process_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:  # pragma: no cover - other-user pid reuse
+        return False
+    return False
+
+
+@posix_only
+def test_cancel_kills_the_agents_grandchildren(tmp_path):
+    agent, pid_file = _forker_agent(tmp_path, timeout=60)
+    cancel = threading.Event()
+    outcome = {}
+    runner = threading.Thread(
+        target=lambda: outcome.setdefault("result", agent.invoke("go", cancel_event=cancel))
+    )
+    runner.start()
+    assert _wait_until(pid_file.exists), "the fake agent never spawned its grandchild"
+    grandchild = int(pid_file.read_text())
+    cancel.set()
+    runner.join(timeout=20)
+    assert not runner.is_alive()
+
+    result = outcome["result"]
+    assert result.cancelled is True
+    assert result.returncode is not None, "the agent process must be reaped, not left a zombie"
+    assert _wait_until(lambda: _process_gone(grandchild), timeout=5), (
+        "cancelling must end the whole process group, not just the wrapper CLI"
+    )
+
+
+@posix_only
+def test_timeout_kills_the_agents_grandchildren(tmp_path):
+    agent, pid_file = _forker_agent(tmp_path, timeout=1.0)
+    result = agent.invoke("go")
+    assert result.timed_out is True
+    assert result.returncode is not None
+    assert pid_file.exists()
+    grandchild = int(pid_file.read_text())
+    assert _wait_until(lambda: _process_gone(grandchild), timeout=5)
+
+
+@posix_only
+def test_registry_cancel_signals_tracked_groups_without_a_worker(workspace):
+    """Stop must still kill provider processes when the worker entry is gone."""
+    from synchri.runner.managed import ManagedRunnerRegistry
+
+    registry = ManagedRunnerRegistry(workspace)
+    victim = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
+    )
+    try:
+        registry._track_pid("sess", victim.pid)
+        status = registry.cancel("sess", reason="Stopping the session.")
+        assert status["phase"] == "stopping"
+        victim.wait(timeout=10)
+        assert victim.returncode is not None
+    finally:
+        if victim.poll() is None:  # pragma: no cover - cleanup on failure
+            victim.kill()
 
 
 # ----------------------------------------------------------------------

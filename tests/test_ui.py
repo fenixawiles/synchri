@@ -524,6 +524,45 @@ def test_quick_start_uses_the_saved_workflow_instead_of_reasking_for_agents(ui, 
     assert [agent["name"] for agent in result["launch"]["agents"]] == ["builder", "reviewer"]
 
 
+def test_stop_interrupts_the_agreement_phase(ui, repo, tmp_path):
+    """Stop during attach/agree must end the run promptly, not after the CLI timeout."""
+    import sys
+
+    agent = tmp_path / "slow_agree.py"
+    agent.write_text("import time\ntime.sleep(120)\n", encoding="utf-8")
+    command = f"{sys.executable} {agent} {{prompt}}"
+    started = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Inspect the repository.",
+        "agents": [{
+            "name": "builder", "runtime": "generic", "role": "primary_builder",
+            "command": command,
+        }, {
+            "name": "reviewer", "runtime": "generic", "role": "adversarial_reviewer",
+            "command": command,
+        }],
+    })
+    session_id = started["session"]["session_id"]
+    call(ui, "/api/managed/start", {"session": session_id})
+    for _ in range(300):
+        managed = call(ui, f"/api/managed?session={session_id}")["managed"]
+        if managed["phase"] == "agreeing":
+            break
+        time.sleep(0.03)
+    assert managed["phase"] == "agreeing", managed
+
+    call(ui, "/api/control", {"session": session_id, "action": "stop"})
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        managed = call(ui, f"/api/managed?session={session_id}")["managed"]
+        if managed["phase"] == "stopped" and not managed["alive"]:
+            break
+        time.sleep(0.05)
+    assert managed["phase"] == "stopped", managed
+    assert managed["reason"] == "cancelled"
+    assert call(ui, f"/api/session?session={session_id}")["status"] == "stopped"
+
+
 def test_managed_start_attaches_agrees_and_begins_without_pasted_prompts(ui, repo, tmp_path):
     """The local default must prove each real transition, not pretend it happened."""
     import sys

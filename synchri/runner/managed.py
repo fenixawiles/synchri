@@ -20,8 +20,12 @@ from ..broker import Broker, Credential
 from ..cli import session as session_files
 from ..errors import SynchriError, ValidationError
 from ..session.modes import managed_command, plan_launch_status
-from .agent_command import AgentCommand
+from .agent_command import AgentCommand, terminate_process_group
 from .conductor import Conductor
+
+
+class _SetupCancelled(Exception):
+    """The user stopped the session while agents were still being attached."""
 
 if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
     from ..config import Workspace
@@ -70,6 +74,7 @@ class ManagedRunnerRegistry:
         self._runs: dict[str, ManagedRun] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._cancel: dict[str, threading.Event] = {}
+        self._pgids: dict[str, set[int]] = {}
         self._lock = threading.Lock()
 
     def readiness(self, record: "SessionRecord") -> dict:
@@ -93,13 +98,33 @@ class ManagedRunnerRegistry:
             event = self._cancel.get(session_id)
             if event is not None:
                 event.set()
+            live_groups = set(self._pgids.get(session_id) or ())
             run = self._runs.setdefault(session_id, ManagedRun(session_id=session_id))
             run.phase = "stopping"
             run.detail = reason
             run.reason = "cancelled"
             run.updated_at = _now()
             run.alive = event is not None
-            return run.to_dict()
+            payload = run.to_dict()
+        # Outside the lock: signal any live process group directly, so Stop
+        # still ends provider processes when the worker thread is wedged or
+        # its cancel event has already been discarded. The supervising invoke
+        # escalates to SIGKILL itself when it is alive to do so.
+        for pid in live_groups:
+            terminate_process_group(pid)
+        return payload
+
+    def _track_pid(self, session_id: str, pid: int) -> None:
+        with self._lock:
+            self._pgids.setdefault(session_id, set()).add(pid)
+
+    def _untrack_pid(self, session_id: str, pid: int) -> None:
+        with self._lock:
+            pids = self._pgids.get(session_id)
+            if pids is not None:
+                pids.discard(pid)
+                if not pids:
+                    self._pgids.pop(session_id, None)
 
     def start(self, record: "SessionRecord") -> dict:
         readiness = self.readiness(record)
@@ -173,6 +198,8 @@ class ManagedRunnerRegistry:
                 manager.activate(session_id)
             self._set(session_id, "working", "The agents are working in the isolated workspace.")
             self._drive(broker, manager, manager.get(session_id))
+        except _SetupCancelled:
+            self._set(session_id, "stopped", "Session control applied.", reason="cancelled")
         except SynchriError as exc:
             self._set(session_id, "needs_attention", exc.message, reason=exc.code)
         except Exception as exc:  # pragma: no cover - defensive UI boundary
@@ -213,7 +240,12 @@ class ManagedRunnerRegistry:
         self._set(record.session_id, "agreeing", "Each agent is reading and agreeing to the session contract.")
         document = manager.current_contract(record.session_id)
         for plan in record.participants:
-            result = self._agent(record, plan).invoke(_agreement_prompt(document.for_participant(plan.name)))
+            result = self._agent(record, plan).invoke(
+                _agreement_prompt(document.for_participant(plan.name)),
+                cancel_event=self._cancel.get(record.session_id),
+            )
+            if result.cancelled:
+                raise _SetupCancelled()
             if not result.ok:
                 detail = (result.stderr or "no response").strip()
                 raise ValidationError(f"{plan.name} could not acknowledge the contract: {detail[:400]}")
@@ -281,6 +313,9 @@ class ManagedRunnerRegistry:
                 "SYNCHRI_CLI": self.cli_command,
             }
         )
+        session_id = record.session_id
+        agent.on_spawn = lambda pid: self._track_pid(session_id, pid)
+        agent.on_exit = lambda pid: self._untrack_pid(session_id, pid)
         return agent
 
 

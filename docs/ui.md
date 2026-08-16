@@ -52,27 +52,36 @@ up exactly where you were.
 The interface is mono-forward — an instrument panel, not a marketing page.
 Data (paths, branches, statuses, countdowns, logs) renders in monospace; prose
 stays prose. By default it follows the OS light/dark preference; the header's
-**theme picker** offers explicit palettes — Terminal (dark graphite, emerald),
-Midnight (dark slate, blue), Daylight (light instrument), and Sage (warm light,
-the original Synchri green) — stored in the browser, never on a server.
+**theme picker** offers ten explicit palettes spanning the spectrum — dark:
+Terminal (graphite, emerald), Midnight (slate, blue), Ember (warm, coral red),
+Copper (umber, burnt orange), Orchid (violet); light: Daylight (instrument
+green), Sage (warm paper, the original Synchri green), Solar (parchment,
+gold), Harbor (grey-blue), Iris (lavender, indigo) — stored in the browser,
+never on a server.
 
-**Home** — sessions first: a dense list of every collaboration in this
-workspace with a live status LED, repository and branch, and the first line of
-its brief. Beside it, a compact **workflows** panel: your saved defaults (agent
-team, permission ceiling, pacing), each with a one-click **Run**. Configuration
-is something you edit when you choose to, not a gauntlet you repeat per
-session.
+**Home** — workflows first: your saved defaults (agent team, permission
+ceiling, pacing) as cards, each with a one-click **Run**, under a page-level
+**+ New workflow** action. Recent sessions follow as a compact list — status
+LED, repository, branch — capped at six with a show-all toggle, and each row's
+**⋯** menu can rename or (once finished) delete the session.
 
-**New session** — a numbered form (workflow, repository, brief, pacing) beside
-a sticky **launch plan** that summarizes what will run and carries the page's
-single call to action. Repositories are discovered, not typed: existing git
-checkouts under the usual code directories, plus your GitHub repositories once
-access is granted. Gate IDs in the brief (like `AUTH-01`) become individually
-tracked acceptance gates.
+**New session** — a numbered form (workflow, repository, **workspace**, brief,
+pacing) beside a sticky **launch plan** that summarizes what will run and
+carries the page's single call to action. Repositories are discovered, not
+typed: existing git checkouts under the usual code directories, plus your
+GitHub repositories once access is granted. The workspace step is mandatory
+and explicit: a new isolated worktree and every existing worktree are
+presented as cards with nothing preselected, and the session cannot be
+created until one is deliberately chosen. As you write the brief, a live
+preview shows which acceptance gates it will produce — explicit IDs like
+`AUTH-01`, bullets under an "Acceptance criteria" heading or plain line, or
+the single generic gate when nothing is detected.
 
 Permissions are three-state toggles — **Allow / Ask / Deny** — with risk labels
 on anything high or destructive, and the description of what each one actually
-permits next to it.
+permits next to it. Profile cards highlight the one currently in effect;
+fine-tuning any capability clears the highlight, because the result is no
+longer any named profile.
 
 **Preflight** — one checklist: each agent's connection state (not connected →
 reading agreement → ready) with its setup prompt a disclosure away, and an
@@ -81,16 +90,25 @@ launch itself, or **Begin collaboration** once every agent has acknowledged the
 contract.
 
 **The session** — a fixed rail (status, timebox countdown, gate progress, team
-presence, controls) beside the conversation. Detail tabs open as a full working
-surface over the chat:
+presence with each agent's live runtime state, controls) beside the
+conversation. Messages are written in a wrapping composer — Enter sends,
+Shift+Enter starts a new line — and while Claude Code or Codex works, a live
+feed shows its actual stream: status lines, reasoning snippets, commands with
+exit codes, a notice when it compacts its context, and one collapsible diff
+card per file it touches, updating as the edit happens. Runtimes without a
+machine-readable stream keep the cooperative activity note. An agent that
+crashes, times out, or stops responding is flagged with a banner and a
+one-click **Restart**; two consecutive hard failures drop it and raise an
+escalation instead of burning further turns. Detail tabs open as a full
+working surface over the chat:
 
 | Tab | Shows |
 |---|---|
-| Conversation | Attributed, timestamped messages and a compose line — you always outrank the queue |
-| Gates | Every acceptance gate, its status, and the evidence behind it |
+| Conversation | Attributed, timestamped messages, the live work feed, and the composer — you always outrank the queue |
+| Gates | Every acceptance gate, its status, the evidence behind it, and an add-gate control |
 | Tests | Run the project's own suite in the worktree; real counts, real output |
-| Changes | The actual diff against the base branch, with added/removed line coloring |
-| Commits | What landed on the session branch |
+| Changes | One collapsible card per changed file — committed, uncommitted, and untracked — with added/removed coloring |
+| Commits | What landed on the session branch, dated, with ids linking to the commit on GitHub |
 | Worktree | Where agents are working, and confirmation it is not your primary tree |
 | Memory | The shared ledger, verbatim |
 | Raw | The event log: every state transition with actor and timestamp |
@@ -101,10 +119,21 @@ and Raw is exactly what happened.
 
 ## Controls
 
-Pause, resume, and stop are always available. Changing permissions, the spec, or
-the deadline from the UI issues a **new contract revision** and drops the session
-back to awaiting acknowledgment — the dashboard shows who has agreed and who has
-not. Nothing changes silently.
+Pause, resume, and stop are always available; stopping terminates the agents'
+whole process trees, including the tool processes their CLIs spawned.
+**Complete session** verifies the gates: when some are unmet it lists them and
+offers an explicit "complete anyway", which records a waiver on each remaining
+gate and in the final changelog rather than pretending they passed. Changing
+permissions, the spec, or the deadline from the UI issues a **new contract
+revision** and drops the session back to awaiting acknowledgment — the
+dashboard shows who has agreed and who has not. Nothing changes silently.
+
+Every finished session offers a **session package**: one zip with the rendered
+transcript (plus raw JSONL), the final changelog, the gates record, a usage
+summary (per-agent tokens, cache, cost, and time where the runtime reported
+them), the commit list, and the full diff. Deleting a session removes it from
+Synchri but never loses git history — the worktree is removed only when it is
+clean and fully pushed, and remote branches are never touched.
 
 ## Limitations
 

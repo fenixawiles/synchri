@@ -564,6 +564,10 @@ class Api:
         }
         acknowledgments = self.manager.acknowledgment_state(record.session_id)
         worktree = record.worktree
+        participant_states = self.manager.participant_states(record.session_id)
+        # Stored connection outcomes gate the paste-free presentation; the
+        # managed registry stays the mechanical authority when Start is hit.
+        connections = doctor_module.stored_connections(self.broker.conn)
         agents = []
         # The packaged macOS app is also a CLI helper.  Generated external
         # prompts must use that concrete executable, not assume the provider's
@@ -603,6 +607,7 @@ class Api:
                     ),
                 ]
             )
+            state = participant_states.get(plan.name) or {}
             agents.append(
                 {
                     "name": plan.name,
@@ -614,6 +619,9 @@ class Api:
                     "launch_mode": launch_status["mode"],
                     "managed_ready": launch_status["ready"],
                     "launch_detail": launch_status["detail"],
+                    "connected": connections.get(plan.runtime, {}).get("state") == "connected",
+                    "join_phase": state.get("join_phase"),
+                    "join_detail": state.get("join_detail"),
                     "join_command": join_command,
                     "setup_prompt": setup_prompt,
                 }

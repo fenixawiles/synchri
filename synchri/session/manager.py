@@ -864,7 +864,8 @@ class SessionManager:
         """Durable supervision state per agent (state is None until launched)."""
         rows = self.conn.execute(
             "SELECT name, runtime_status, runtime_detail, consecutive_failures, "
-            "runtime_updated_at FROM session_participants WHERE session_id = ?",
+            "runtime_updated_at, join_phase, join_detail, join_updated_at "
+            "FROM session_participants WHERE session_id = ?",
             (session_id,),
         ).fetchall()
         return {
@@ -873,9 +874,29 @@ class SessionManager:
                 "detail": row["runtime_detail"],
                 "failures": row["consecutive_failures"] or 0,
                 "updated_at": row["runtime_updated_at"],
+                "join_phase": row["join_phase"],
+                "join_detail": row["join_detail"],
+                "join_updated_at": row["join_updated_at"],
             }
             for row in rows
         }
+
+    def set_participant_join_phase(
+        self, session_id: str, name: str, phase: str, detail: str | None = None
+    ) -> None:
+        """Record what an agent is doing to join — real transitions, no spinner.
+
+        The launch UI renders these durable phases from Start until the room
+        is live: launching -> injecting_bootstrap -> awaiting_acknowledgment
+        -> ready, or failed with the reason. A retry targets only the failed
+        participant, so phases survive per agent rather than per team.
+        """
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET join_phase = ?, join_detail = ?, "
+                "join_updated_at = ? WHERE session_id = ? AND name = ?",
+                (phase, detail, utc_now(), session_id, name),
+            )
 
     def set_participant_state(
         self,

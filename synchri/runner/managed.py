@@ -295,65 +295,109 @@ class ManagedRunnerRegistry:
             broker.close()
 
     def _attach_and_agree(self, broker: Broker, manager, record: "SessionRecord") -> None:
+        """Assemble the team one agent at a time, with durable join phases.
+
+        Every participant is attempted even when an earlier one fails: the
+        room stays inactive on a partial join, agents that reached ``ready``
+        stay attached and receive no work, and a retry re-runs only the
+        participants that are not already acknowledged at the current
+        contract revision.
+        """
         invites = {
             invite["participant_name"]: invite for invite in (record.metadata or {}).get("invites", [])
         }
-        self._set(record.session_id, "attaching", "Giving each managed agent its local room identity.")
-        for plan in record.participants:
-            # A failed sign-in or a declined contract is retryable. The first
-            # attempt has already redeemed this name-bound invite and saved the
-            # local credential, so never try to mint a second identity or make
-            # the human recreate the room.
-            if session_files.load(self.workspace, record.room_id, plan.name):
-                continue
-            invite = invites.get(plan.name)
-            if invite is None:
-                raise ValidationError(f"no invite is available for {plan.name}")
-            joined = broker.join(invite["token"], plan.name, metadata={"managed": True, "runtime": plan.runtime})
-            session_files.save(
-                self.workspace,
-                session_files.SessionRecord(
-                    room_id=joined["room_id"],
-                    participant=joined["name"],
-                    participant_id=joined["participant_id"],
-                    secret=joined["secret"],
-                    kind=joined["kind"],
-                    room_name=joined.get("room_name", ""),
-                ),
-            )
-
-        self._set(record.session_id, "agreeing", "Each agent is reading and agreeing to the session contract.")
+        self._set(record.session_id, "attaching", "Connecting each agent to this room.")
         document = manager.current_contract(record.session_id)
+        already_ready = set(manager.acknowledgment_state(record.session_id)["accepted"])
+        failures: list[tuple[str, str]] = []
+
+        def phase(plan, value: str, detail: str | None = None) -> None:
+            try:
+                manager.set_participant_join_phase(record.session_id, plan.name, value, detail)
+            except Exception:  # pragma: no cover - supervision must not break setup
+                pass
+
         for plan in record.participants:
-            prompt = _agreement_prompt(document.for_participant(plan.name))
-            result = self._agent(record, plan).invoke(
-                prompt, cancel_event=self._cancel.get(record.session_id)
-            )
-            if result.cancelled:
-                raise _SetupCancelled()
-            if (
-                not result.ok
-                and stream_format_for(plan)
-                and plan.runtime not in self._plain_runtimes
-                and _looks_like_flag_rejection(result)
-            ):
-                # The installed CLI predates its streaming flags. Remember
-                # that for this runtime and retry once with the plain
-                # maintained command — behavior degrades to plain stdout.
-                self._plain_runtimes.add(plan.runtime)
+            if plan.name in already_ready:
+                phase(plan, "ready", "already acknowledged the current contract")
+                continue
+            try:
+                phase(plan, "launching", "Giving the agent its local room identity.")
+                # A failed sign-in or a declined contract is retryable. The
+                # first attempt has already redeemed this name-bound invite and
+                # saved the local credential, so never mint a second identity
+                # or make the human recreate the room.
+                if not session_files.load(self.workspace, record.room_id, plan.name):
+                    invite = invites.get(plan.name)
+                    if invite is None:
+                        raise ValidationError(f"no invite is available for {plan.name}")
+                    joined = broker.join(
+                        invite["token"], plan.name,
+                        metadata={"managed": True, "runtime": plan.runtime},
+                    )
+                    session_files.save(
+                        self.workspace,
+                        session_files.SessionRecord(
+                            room_id=joined["room_id"],
+                            participant=joined["name"],
+                            participant_id=joined["participant_id"],
+                            secret=joined["secret"],
+                            kind=joined["kind"],
+                            room_name=joined.get("room_name", ""),
+                        ),
+                    )
+
+                phase(plan, "injecting_bootstrap", "Injecting the session contract.")
+                self._set(
+                    record.session_id, "agreeing",
+                    f"{plan.name} is reading and agreeing to the session contract.",
+                )
+                prompt = _agreement_prompt(document.for_participant(plan.name))
                 result = self._agent(record, plan).invoke(
                     prompt, cancel_event=self._cancel.get(record.session_id)
                 )
                 if result.cancelled:
                     raise _SetupCancelled()
-            if not result.ok:
-                detail = (result.stderr or "no response").strip()
-                raise ValidationError(f"{plan.name} could not acknowledge the contract: {detail[:400]}")
-            acknowledgement = manager.acknowledge(record.session_id, plan.name, result.stdout)
-            if not acknowledgement["accepted"]:
-                raise ValidationError(
-                    f"{plan.name} did not accept the contract: {acknowledgement['conflict']}"
-                )
+                if (
+                    not result.ok
+                    and stream_format_for(plan)
+                    and plan.runtime not in self._plain_runtimes
+                    and _looks_like_flag_rejection(result)
+                ):
+                    # The installed CLI predates its streaming flags. Remember
+                    # that for this runtime and retry once with the plain
+                    # maintained command — behavior degrades to plain stdout.
+                    self._plain_runtimes.add(plan.runtime)
+                    result = self._agent(record, plan).invoke(
+                        prompt, cancel_event=self._cancel.get(record.session_id)
+                    )
+                    if result.cancelled:
+                        raise _SetupCancelled()
+                if not result.ok:
+                    detail = (result.stderr or "no response").strip()
+                    raise ValidationError(
+                        f"{plan.name} could not acknowledge the contract: {detail[:400]}"
+                    )
+                phase(plan, "awaiting_acknowledgment", "Verifying the agent's acknowledgment.")
+                acknowledgement = manager.acknowledge(record.session_id, plan.name, result.stdout)
+                if not acknowledgement["accepted"]:
+                    raise ValidationError(
+                        f"{plan.name} did not accept the contract: {acknowledgement['conflict']}"
+                    )
+                phase(plan, "ready", "Acknowledged. Waiting for the rest of the team.")
+            except _SetupCancelled:
+                phase(plan, None, None)
+                raise
+            except SynchriError as exc:
+                phase(plan, "failed", exc.message[:400])
+                failures.append((plan.name, exc.message))
+
+        if failures:
+            names = ", ".join(name for name, _ in failures)
+            raise ValidationError(
+                f"could not connect {names}; the room stays inactive and ready agents "
+                "receive no work — retry relaunches only the failed agent(s)"
+            )
 
         self._set(record.session_id, "starting", "Agreement confirmed. Starting the Primary Builder.")
 

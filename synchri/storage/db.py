@@ -91,11 +91,18 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "memory_note": "TEXT",
     },
     # v5: per-agent runtime supervision state (NULL = never launched).
+    # v6: durable join-assembly phases so the launch UI can show what each
+    # agent is actually doing to join (launching -> injecting_bootstrap ->
+    # awaiting_acknowledgment -> ready | failed), and retry only the failed
+    # participant.
     "session_participants": {
         "runtime_status": "TEXT",
         "runtime_detail": "TEXT",
         "consecutive_failures": "INTEGER NOT NULL DEFAULT 0",
         "runtime_updated_at": "TEXT",
+        "join_phase": "TEXT",
+        "join_detail": "TEXT",
+        "join_updated_at": "TEXT",
     },
 }
 

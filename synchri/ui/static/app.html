@@ -1205,7 +1205,95 @@ async function home() {
     empty.querySelector("#empty-run").onclick = () => quickStart();
     page.append(empty);
   }
+  renderAgentConnections(page);
   app().append(page);
+}
+
+function renderAgentConnections(page) {
+  const connectable = (S.boot.runtimes || []).filter(runtime => runtime.managed_command);
+  if (!connectable.length) return;
+  page.append($(`<div class="section-head" style="margin-top:2.1rem"><span class="kicker">Agent connections</span></div>`));
+  const box = $(`<div class="card stack" style="gap:.6rem"></div>`);
+  box.append($(`<div class="small muted">Connect a CLI once and every session starts without a paste step:
+    choose your agents, give your brief, hit Start. Sign-in stays inside each CLI —
+    Synchri owns no provider account, stores no credential or API key, and uses no cloud relay.</div>`));
+  for (const runtime of connectable) {
+    const stored = (S.boot.runtime_connections || {})[runtime.key];
+    const state = stored?.state === "connected" ? `<span class="pill">connected</span>`
+      : stored?.state === "failed" ? `<span class="pill bad">failed</span>`
+      : runtime.installed ? `<span class="pill dim">not connected</span>`
+      : `<span class="pill dim">not detected</span>`;
+    const summary = stored?.state === "connected"
+      ? `resume ${stored.resume.replaceAll("_", " ")}${stored.version ? ` · v${stored.version}` : ""}`
+      : (stored?.state === "failed" ? stored.detail : runtime.detail);
+    const row = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0;gap:.55rem">${state}
+      <b style="font-size:12.5px">${esc(runtime.label)}</b><span class="small muted">${esc(summary || "")}</span></div>
+      <button class="ghost" data-connect>${stored?.state === "connected" ? "Details" : "Connect"}</button></div>`);
+    row.querySelector("[data-connect]").onclick = () => showConnectDialog(runtime.key);
+    box.append(row);
+  }
+  page.append(box);
+}
+
+async function showConnectDialog(runtimeKey) {
+  document.getElementById("connect-dialog")?.remove();
+  const dialog = $(`<div class="dialog stack" id="connect-dialog" role="dialog" aria-modal="true">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="kicker">AGENT CONNECTION</div>
+    <h2 id="connect-title">Checking…</h2>
+    <p class="muted small" style="margin:.2rem 0 0">Sign in to this CLI once in your own terminal.
+    The connection test then proves the whole managed path — one real invocation (two where
+    resume is supported) in a fresh temporary folder outside every repository, with a
+    sentinel-only prompt and nothing of yours to read or change.</p>
+    <div id="connect-checks" class="stack" style="gap:.3rem"></div>
+    <div class="row" id="connect-actions"><button class="primary" data-connect>Run connection test</button><button data-close>Close</button></div>
+    <div class="small muted" id="connect-status"></div>
+  </div>`);
+  document.body.append(dialog);
+  const close = () => { dialog.remove(); if (S.view === "home") home().catch(() => {}); };
+  dialog.querySelector(".detail-close").onclick = close;
+  dialog.querySelector("[data-close]").onclick = close;
+
+  const stateChip = state => state === "pass" ? `<span class="pill">pass</span>`
+    : state === "fail" ? `<span class="pill bad">fail</span>` : `<span class="pill dim">unknown</span>`;
+  const renderChecks = checks => {
+    const box = dialog.querySelector("#connect-checks");
+    box.innerHTML = "";
+    for (const check of checks || []) {
+      box.append($(`<div class="row" style="gap:.5rem;align-items:baseline">${stateChip(check.state)}
+        <b class="mono small">${esc(check.key.replaceAll("_", " "))}</b><span class="small muted">${esc(check.detail || "")}</span></div>`));
+    }
+  };
+
+  const payload = await api("runtimes/doctor");
+  const entry = (payload.runtimes || []).find(runtime => runtime.key === runtimeKey);
+  if (entry) {
+    dialog.querySelector("#connect-title").textContent = entry.label;
+    renderChecks(entry.doctor);
+    dialog.querySelector("#connect-status").textContent = entry.connection?.detail || "";
+  }
+
+  dialog.querySelector("[data-connect]").onclick = guard(async () => {
+    const button = dialog.querySelector("[data-connect]");
+    button.disabled = true; button.textContent = "Testing…";
+    await api("runtimes/connect", {runtime: runtimeKey});
+    const poll = async () => {
+      if (!document.getElementById("connect-dialog")) return;
+      const status = await api("runtimes/connect?runtime=" + encodeURIComponent(runtimeKey));
+      const test = status.test || {};
+      if (test.alive || !["done", "failed", "cancelled", "idle"].includes(test.phase)) {
+        dialog.querySelector("#connect-status").textContent = test.detail || test.phase || "";
+        window.setTimeout(guard(poll), 700);
+        return;
+      }
+      if (test.result?.checks) renderChecks(test.result.checks);
+      dialog.querySelector("#connect-status").textContent = status.connection?.detail || test.detail || "";
+      button.disabled = false;
+      button.textContent = status.connection?.state === "connected" ? "Re-run connection test" : "Run connection test";
+      S.boot = await api("bootstrap");
+    };
+    await poll();
+  });
 }
 
 function showDeleteSessionDialog(s) {
@@ -1656,18 +1744,45 @@ function renderLaunch() {
 
   if (allManaged) {
     const list = document.getElementById("preflight-agents");
+    // Assembly indicators are real durable phase transitions, never a spinner
+    // on a timer. They live from Start until every agent is officially ready,
+    // then the room opens and they go away.
+    const phasePills = {
+      launching: ["launching", "warn"],
+      injecting_bootstrap: ["injecting bootstrap", "warn"],
+      awaiting_acknowledgment: ["awaiting acknowledgment", "warn"],
+      ready: ["ready", ""],
+      failed: ["failed", "bad"],
+    };
+    const failedAgents = l.agents.filter(agent => agent.join_phase === "failed");
+    const allConnected = l.agents.every(agent => agent.connected);
     for (const agent of l.agents) {
-      const status = agent.joined
-        ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">reading agreement</span>`)
-        : `<span class="pill dim">not connected</span>`;
+      let status;
+      if (agent.join_phase && phasePills[agent.join_phase]) {
+        const [label, cls] = phasePills[agent.join_phase];
+        status = `<span class="pill ${cls}">${esc(label)}</span>`;
+      } else {
+        status = agent.joined
+          ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">reading agreement</span>`)
+          : `<span class="pill dim">${agent.connected ? "ready to launch" : "not started"}</span>`;
+      }
+      const failure = agent.join_phase === "failed" && agent.join_detail
+        ? `<div class="small" style="margin-top:.3rem;color:var(--bad)">${esc(agent.join_detail)}</div>` : "";
       list.append($(`<div class="check-row"><div class="check-status">${status}</div>
-        <div class="check-main"><b class="mono">${esc(agent.name)}</b>
-        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div></div>`));
+        <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
+        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>${failure}</div></div>`));
     }
     const actions = document.getElementById("preflight-actions");
+    const note = failedAgents.length
+      ? `The room stays inactive. Ready agents stay attached and receive no work; retry relaunches only ${esc(failedAgents.map(a=>a.name).join(", "))}.`
+      : (allConnected
+        ? "No paste step — Synchri launches your agents, verifies their agreement, and begins the room."
+        : "Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.");
+    const startLabel = run.alive ? "Starting…"
+      : (failedAgents.length ? `Retry ${esc(failedAgents.map(a=>a.name).join(", "))}` : "Start my agents");
     const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0"><button class="ghost" id="external">Send prompts instead</button>
-      <span class="small faint">Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.</span></div>
-      <button class="primary" id="managed-start" ${run.alive?"disabled":""}>${run.alive ? "Starting…" : "Start my agents"}</button></div>`);
+      <span class="small faint">${note}</span></div>
+      <button class="primary" id="managed-start" ${run.alive?"disabled":""}>${startLabel}</button></div>`);
     bar.querySelector("#managed-start").onclick = guard(startManaged);
     bar.querySelector("#external").onclick = () => renderExternalSetup(l);
     actions.append(bar);
@@ -1686,7 +1801,14 @@ async function startManaged() {
 function pollManagedLaunch() {
   window.setTimeout(guard(async () => {
     if (S.view !== "launch" || !S.session) return;
-    const status = await api("managed?session=" + encodeURIComponent(S.session));
+    // Refresh the whole launch payload, not just the run: the per-agent join
+    // phases (launching → injecting bootstrap → awaiting acknowledgment →
+    // ready) are durable rows the indicators render from.
+    const [status, launch] = await Promise.all([
+      api("managed?session=" + encodeURIComponent(S.session)),
+      api("launch?session=" + encodeURIComponent(S.session)),
+    ]);
+    S.launch = launch.launch;
     S.launch.managed = {readiness:status.readiness, run:status.managed};
     if (status.managed.phase === "working") { await openSession(S.session); return; }
     renderLaunch();

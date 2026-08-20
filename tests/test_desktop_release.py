@@ -19,6 +19,19 @@ def _cargo_version() -> str:
     return match.group(1)
 
 
+def _cargo_lock_version() -> str:
+    lock = tomllib.loads(
+        (ROOT / "desktop" / "src-tauri" / "Cargo.lock").read_text(encoding="utf-8")
+    )
+    matches = [
+        package["version"]
+        for package in lock["package"]
+        if package["name"] == "synchri-desktop"
+    ]
+    assert len(matches) == 1, "Cargo.lock must contain exactly one synchri-desktop package"
+    return matches[0]
+
+
 def test_desktop_release_versions_are_kept_in_lockstep():
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     package = json.loads((ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
@@ -30,6 +43,7 @@ def test_desktop_release_versions_are_kept_in_lockstep():
     assert lock["version"] == version
     assert lock["packages"][""]["version"] == version
     assert _cargo_version() == version
+    assert _cargo_lock_version() == version
     assert tauri["version"] == version
     assert f'__version__ = "{version}"' in init
 

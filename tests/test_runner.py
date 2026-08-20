@@ -286,7 +286,7 @@ def test_registry_cancel_signals_tracked_groups_without_a_worker(workspace):
         [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
     )
     try:
-        registry._track_pid("sess", victim.pid)
+        registry._track_pid("sess", "agent", victim.pid)
         status = registry.cancel("sess", reason="Stopping the session.")
         assert status["phase"] == "stopping"
         victim.wait(timeout=10)
@@ -294,6 +294,36 @@ def test_registry_cancel_signals_tracked_groups_without_a_worker(workspace):
     finally:
         if victim.poll() is None:  # pragma: no cover - cleanup on failure
             victim.kill()
+
+
+@posix_only
+def test_restart_participant_kills_only_that_agents_process_group(workspace):
+    """The participant-scoped kill: one agent's group dies, the other survives."""
+    from synchri.runner.managed import ManagedRunnerRegistry
+
+    registry = ManagedRunnerRegistry(workspace)
+    victim = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
+    )
+    bystander = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
+    )
+    try:
+        registry._track_pid("sess", "builder", bystander.pid)
+        registry._track_pid("sess", "reviewer", victim.pid)
+
+        class _Record:
+            session_id = "sess"
+            status = "stopped"  # keeps restart from trying to respawn a worker
+
+        registry.restart_participant(_Record(), "reviewer")
+        victim.wait(timeout=10)
+        assert victim.returncode is not None
+        assert bystander.poll() is None, "the other agent's process must survive"
+    finally:
+        for process in (victim, bystander):
+            if process.poll() is None:
+                process.kill()
 
 
 # ----------------------------------------------------------------------

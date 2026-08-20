@@ -963,14 +963,17 @@ class Api:
                 session_id, participant, "active", "restarted by the user",
                 reset_failures=True,
             )
+            self.manager.bump_recovery_generation(session_id, participant, "restart")
             for escalation in self.manager.open_escalations(session_id):
-                if escalation["rule"] == "agent_failed":
+                if escalation["rule"] in {"agent_failed", "agent_auth_failed", "agent_refused"}:
                     self.manager.resolve_escalation(
                         escalation["escalation_id"], f"{participant} restarted by the user"
                     )
             refreshed = self.manager.get(session_id)
             if refreshed.status == "active":
-                self.managed.restart(refreshed)
+                # Participant-scoped: only this agent's invocation is touched;
+                # every other agent's process keeps running.
+                self.managed.restart_participant(refreshed, participant)
         elif action == "stop":
             # Durable state first: once the session row says stopped, the
             # cancel below is cleanup, not the thing the user is waiting on.

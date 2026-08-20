@@ -1287,8 +1287,10 @@ def test_restart_agent_resets_state_and_resolves_the_escalation(ui, repo):
         def __init__(self):
             self.restarted = []
 
-        def restart(self, record):
-            self.restarted.append(record.session_id)
+        def restart_participant(self, record, name):
+            # Participant-scoped: the restart names exactly one agent and
+            # never touches the rest of the team.
+            self.restarted.append((record.session_id, name))
             return {"phase": "resuming"}
 
     stub = _RestartStub()
@@ -1299,7 +1301,7 @@ def test_restart_agent_resets_state_and_resolves_the_escalation(ui, repo):
     assert dashboard["participant_states"]["claude"]["state"] == "active"
     assert dashboard["participant_states"]["claude"]["failures"] == 0
     assert dashboard["user_intervention_required"] is False
-    assert stub.restarted == [session_id]
+    assert stub.restarted == [(session_id, "claude")]
 
     with pytest.raises(urllib.error.HTTPError) as exc:
         call(ui, "/api/control", {"session": session_id, "action": "restart_agent",

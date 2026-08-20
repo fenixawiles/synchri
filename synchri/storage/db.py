@@ -103,6 +103,11 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "join_phase": "TEXT",
         "join_detail": "TEXT",
         "join_updated_at": "TEXT",
+        # v6: participant-scoped recovery — the provider's own resume id from
+        # the agent's last completed invocation, and a generation counter that
+        # increments on every recovery action (resume, replace, restart).
+        "resume_id": "TEXT",
+        "recovery_generation": "INTEGER NOT NULL DEFAULT 0",
     },
 }
 

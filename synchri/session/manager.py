@@ -881,6 +881,73 @@ class SessionManager:
             for row in rows
         }
 
+    def set_participant_resume_id(self, session_id: str, name: str, resume_id: str | None) -> None:
+        """Store (or clear) the provider's own session id for one agent.
+
+        Captured after every completed invocation that exposed one; recovery
+        reads it to resume the provider session instead of relaunching cold.
+        """
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET resume_id = ? WHERE session_id = ? AND name = ?",
+                (resume_id, session_id, name),
+            )
+
+    def participant_recovery(self, session_id: str, name: str) -> dict:
+        row = self.conn.execute(
+            "SELECT resume_id, recovery_generation, runtime_status, metadata "
+            "FROM session_participants WHERE session_id = ? AND name = ?",
+            (session_id, name),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"{name!r} is not a participant in this session")
+        return {
+            "resume_id": row["resume_id"],
+            "recovery_generation": row["recovery_generation"] or 0,
+            "runtime_status": row["runtime_status"],
+            "metadata": json.loads(row["metadata"] or "{}"),
+        }
+
+    def bump_recovery_generation(self, session_id: str, name: str, action: str) -> int:
+        """One recovery action happened (resume, replace, restart): count it.
+
+        The generation is provenance — an approval or a gate report recorded
+        by generation 2 of an agent is distinguishable from generation 0.
+        """
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET recovery_generation = recovery_generation + 1 "
+                "WHERE session_id = ? AND name = ?",
+                (session_id, name),
+            )
+            row = self.conn.execute(
+                "SELECT recovery_generation FROM session_participants "
+                "WHERE session_id = ? AND name = ?",
+                (session_id, name),
+            ).fetchone()
+        generation = row["recovery_generation"] if row else 0
+        self._log(
+            self.get(session_id),
+            "session.participant_recovery",
+            {"participant": name, "action": action, "generation": generation},
+        )
+        return generation
+
+    def mark_participant_replaced(self, session_id: str, name: str) -> None:
+        """Record the one automatic replacement incarnation durably.
+
+        Exactly one automatic replace per participant: a second breaker trip
+        goes to the human instead of looping fail → replace → fail forever.
+        """
+        recovery_state = self.participant_recovery(session_id, name)
+        metadata = {**recovery_state["metadata"], "auto_replaced": utc_now()}
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET metadata = ?, resume_id = NULL, "
+                "consecutive_failures = 0 WHERE session_id = ? AND name = ?",
+                (json.dumps(metadata), session_id, name),
+            )
+
     def set_participant_join_phase(
         self, session_id: str, name: str, phase: str, detail: str | None = None
     ) -> None:

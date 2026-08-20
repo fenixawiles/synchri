@@ -2322,10 +2322,10 @@ function renderSession() {
   const runtimeStates = d.participant_states || {};
   const team = s.participants.map(p => {
     const runtime = runtimeStates[p.name] || {};
-    const trouble = ["failed", "timed_out", "dropped"].includes(runtime.state);
+    const trouble = TROUBLE_STATES.includes(runtime.state);
     const active = p.name === d.current_actor;
     const dot = trouble ? (runtime.state === "dropped" ? "bad" : "warn") : (active ? "live" : "");
-    const label = trouble ? runtime.state.replace("_", " ")
+    const label = trouble ? runtime.state.replaceAll("_", " ")
       : (activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting"));
     return `<div class="team-line" data-member="${esc(p.name)}"${runtime.detail ? ` title="${esc(runtime.detail)}"` : ""}><span class="presence"><i class="${dot}"></i>${esc(p.name)}</span>
       <span class="muted small" data-team-state${trouble ? ' style="color:var(--bad)"' : ""}>${esc(label)}</span></div>`;
@@ -2572,13 +2572,26 @@ function composerHint(d) {
   return "Your message reaches the agent leading the work";
 }
 
+// Failure discrimination surfaces in the chat as distinct, honest states —
+// the "failed"/"timed_out" entries keep pre-classification rows readable.
+const TROUBLE_STATES = ["failed", "timed_out", "dropped",
+  "auth_failure", "provider_refusal", "crash", "unresponsive"];
+const TROUBLE_LABELS = {
+  dropped: "stopped responding and was dropped",
+  timed_out: "timed out",
+  failed: "failed",
+  auth_failure: "is signed out of its provider — sign in again in your terminal, then restart it",
+  provider_refusal: "was refused or rate-limited by its provider",
+  crash: "crashed",
+  unresponsive: "became unresponsive and its processes were ended",
+};
+
 function agentAlerts(d) {
   const states = d.participant_states || {};
   const blocks = Object.entries(states).map(([name, runtime]) => {
     if (!runtime || !runtime.state) return "";
-    if (["failed", "timed_out", "dropped"].includes(runtime.state)) {
-      const label = runtime.state === "dropped" ? "stopped responding and was dropped"
-        : (runtime.state === "timed_out" ? "timed out" : "failed");
+    if (TROUBLE_STATES.includes(runtime.state)) {
+      const label = TROUBLE_LABELS[runtime.state] || runtime.state.replaceAll("_", " ");
       return `<div class="agent-alert"><div><b>${esc(name)}</b> ${esc(label)}${runtime.detail ? ` — ${esc(runtime.detail)}` : ""}.</div>
         <button data-restart="${esc(name)}">Restart ${esc(name)}</button></div>`;
     }
@@ -2644,10 +2657,10 @@ function refreshSessionChrome() {
     const name = row.dataset.member;
     const active = name === d.current_actor;
     const runtime = runtimeStates[name] || {};
-    const trouble = ["failed", "timed_out", "dropped"].includes(runtime.state);
+    const trouble = TROUBLE_STATES.includes(runtime.state);
     const state = row.querySelector("[data-team-state]");
     if (state) {
-      state.textContent = trouble ? runtime.state.replace("_", " ")
+      state.textContent = trouble ? runtime.state.replaceAll("_", " ")
         : (activeNotes.has(name) ? "working" : (active ? "on point" : "waiting"));
       state.style.color = trouble ? "var(--bad)" : "";
     }

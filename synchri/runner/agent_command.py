@@ -196,6 +196,7 @@ class AgentCommand:
         stdout = stdout_buffer.text()
         stderr = stderr_buffer.text()
         tool_events = None
+        provider_session_id = None
         if parser is not None and getattr(parser, "saw_stream", False):
             # The stream was real JSONL: hand downstream code the agent's
             # reconstructed reply, not the event soup. When the stream never
@@ -208,17 +209,23 @@ class AgentCommand:
             if final:
                 stdout = final
             tool_events = getattr(parser, "tool_events", None)
+            provider_session_id = getattr(parser, "provider_session_id", None)
         if outcome == "cancelled":
             return AgentResult(
                 self.name, stdout, stderr, process.returncode,
                 cancelled=True, tool_events=tool_events,
+                provider_session_id=provider_session_id,
             )
         if outcome == "timed_out":
             return AgentResult(
                 self.name, stdout, stderr or f"timed out after {self.timeout:g}s",
                 process.returncode, timed_out=True, tool_events=tool_events,
+                provider_session_id=provider_session_id,
             )
-        return AgentResult(self.name, stdout, stderr, process.returncode, tool_events=tool_events)
+        return AgentResult(
+            self.name, stdout, stderr, process.returncode,
+            tool_events=tool_events, provider_session_id=provider_session_id,
+        )
 
 
 @dataclass
@@ -234,6 +241,10 @@ class AgentResult:
     #: How many tool/command/file events the stream carried; ``None`` when the
     #: runtime does not stream. ``0`` on a clean exit is the low-signal marker.
     tool_events: int | None = None
+    #: The provider's own session/thread id when the stream exposed one —
+    #: stored durably per participant so recovery can resume instead of
+    #: relaunching cold.
+    provider_session_id: str | None = None
 
     @property
     def ok(self) -> bool:

@@ -24,6 +24,7 @@ from ..errors import SynchriError, ValidationError
 from ..models.enums import MessageType, ResponseStatus, RoomStatus, TurnState
 from ..models.envelope import MessageDraft
 from ..session.manager import SessionManager
+from . import recovery
 from .agent_command import AgentCommand, parse_directives
 
 #: Why the conductor handed control back.
@@ -47,6 +48,10 @@ class ConductorReport:
     warnings: list[str] = field(default_factory=list)
     #: Set when ``reason == "agent_failed"``: who tripped the breaker.
     failed_participant: str | None = None
+    #: How the failed participant failed (see :mod:`recovery`), so supervision
+    #: can pick the right rung: ladder kinds get a replacement chance, auth
+    #: failures and provider refusals go straight to the human.
+    failure_kind: str | None = None
 
     @property
     def turn_count(self) -> int:
@@ -78,8 +83,10 @@ class Conductor:
         role_guidance: dict[str, str] | None = None,
         session_id: str | None = None,
         cancel_event=None,
+        cancel_events: dict[str, object] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
         max_consecutive_failures: int = 2,
+        initial_failures: dict[str, int] | None = None,
     ) -> None:
         if not agents:
             raise ValidationError("at least one --agent is required")
@@ -99,10 +106,20 @@ class Conductor:
         self.role_guidance = dict(role_guidance or {})
         self.session_id = session_id
         self.cancel_event = cancel_event
+        #: Optional per-participant cancel signals (composed with the session
+        #: event by the caller) so restarting one agent never touches another
+        #: agent's invocation.
+        self.cancel_events = dict(cancel_events or {})
         self.on_event = on_event or (lambda event, payload: None)
         self.max_consecutive_failures = max(1, int(max_consecutive_failures))
-        self._failures: dict[str, int] = {}
+        #: Seeded from durable per-agent counts so the breaker composes across
+        #: idle/resume boundaries: a crash before an idle stop still counts
+        #: against the same agent when supervision picks the room back up.
+        self._failures: dict[str, int] = {
+            name: int(count) for name, count in (initial_failures or {}).items() if count
+        }
         self._low_signal: dict[str, int] = {}
+        self._failure_kinds: dict[str, str] = {}
 
     # ------------------------------------------------------------------
 
@@ -155,21 +172,39 @@ class Conductor:
 
             # Circuit breaker: an agent failing turn after turn must not keep
             # receiving the floor forever — after the limit, hand the problem
-            # to the human instead of burning further invocations.
+            # to the human instead of burning further invocations. Auth
+            # failures and provider refusals break immediately: retrying an
+            # expired sign-in or a refusal only burns invocations.
             if outcome.get("status") == "failed":
+                kind = outcome.get("failure_kind") or recovery.CRASH
+                self._failure_kinds[speaker] = kind
                 count = self._failures.get(speaker, 0) + 1
                 self._failures[speaker] = count
-                if count >= self.max_consecutive_failures:
+                if kind not in recovery.LADDER_KINDS or count >= self.max_consecutive_failures:
                     report.reason = STOP_AGENT_FAILED
                     report.failed_participant = speaker
+                    report.failure_kind = kind
                     report.warnings.append(
-                        f"{speaker} failed {count} consecutive turn(s); supervision stopped"
+                        f"{speaker} failed {count} consecutive turn(s) ({kind}); "
+                        "supervision stopped"
                     )
                     return report
             elif outcome.get("status") in {"spoke", "passed"}:
                 self._failures[speaker] = 0
+                self._failure_kinds.pop(speaker, None)
 
     # ------------------------------------------------------------------
+
+    def _resolve_agent(self, name: str) -> AgentCommand:
+        """Resolve one participant's command for this turn.
+
+        A plain :class:`AgentCommand` behaves as before. A callable is a
+        factory the supervising registry provides so per-turn decisions —
+        like resuming a provider session after a failure — read durable state
+        at the moment the turn starts, not at conductor construction.
+        """
+        agent = self.agents[name]
+        return agent() if callable(agent) else agent
 
     def _take_turn(self, name: str) -> dict:
         credential = self.credentials[name]
@@ -193,10 +228,16 @@ class Conductor:
             # post path will re-check room state and report the actual outcome.
             pass
 
-        prompt = self.build_prompt(name, status)
+        agent = self._resolve_agent(name)
+        prompt = self.build_prompt(name, status, agent=agent)
         self.on_event("agent.invoking", {"participant": name, "prompt_chars": len(prompt)})
 
-        result = self.agents[name].invoke(prompt, cancel_event=self.cancel_event)
+        result = agent.invoke(
+            prompt, cancel_event=self.cancel_events.get(name) or self.cancel_event
+        )
+        classification = None
+        if not result.ok:
+            classification = recovery.classify_failure(result)
         self.on_event(
             "agent.returned",
             {
@@ -205,9 +246,19 @@ class Conductor:
                 "timed_out": result.timed_out,
                 "cancelled": result.cancelled,
                 "output_chars": len(result.stdout),
+                "classification": classification,
+                "failure_detail": (
+                    recovery.failure_detail(classification, result)
+                    if classification and classification != recovery.NORMAL_STOP
+                    else None
+                ),
+                "provider_session_id": result.provider_session_id,
             },
         )
-        return self._post(name, result)
+        outcome = self._post(name, result)
+        if outcome.get("status") == "failed" and classification:
+            outcome["failure_kind"] = classification
+        return outcome
 
     def _note_low_signal(self, name: str, result, body: str, directives) -> bool:
         """Warn-only heuristic for clean exits that did no visible work.
@@ -388,8 +439,10 @@ class Conductor:
 
     # ------------------------------------------------------------------
 
-    def build_prompt(self, name: str, status: dict) -> str:
+    def build_prompt(self, name: str, status: dict, agent: AgentCommand | None = None) -> str:
         """Assemble what a managed agent is told when it gets the floor."""
+        if agent is None:
+            agent = self._resolve_agent(name)
         room = self.broker.room_status(self.room_id, credential=self.observer)
         others = [
             p["name"]
@@ -453,7 +506,7 @@ class Conductor:
         # ``SYNCHRI_CLI`` is a shell fragment constructed by the managed
         # launcher (and may be ``'/Applications/…/Synchri'``).  It is only
         # rendered into an instructional prompt; it is never executed here.
-        activity_command = self.agents[name].env.get("SYNCHRI_CLI", "synchri")
+        activity_command = agent.env.get("SYNCHRI_CLI", "synchri")
 
         parts.extend(
             [

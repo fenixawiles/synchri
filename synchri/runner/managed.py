@@ -12,6 +12,7 @@ from __future__ import annotations
 import shlex
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -19,7 +20,9 @@ from typing import TYPE_CHECKING
 from ..broker import Broker, Credential
 from ..cli import session as session_files
 from ..errors import SynchriError, ValidationError
-from ..session.modes import managed_command, plan_launch_status, stream_format_for
+from ..models.envelope import MessageDraft
+from ..session.modes import KNOWN_RUNTIMES, managed_command, plan_launch_status, stream_format_for
+from . import recovery
 from .agent_command import AgentCommand, terminate_process_group
 from .conductor import Conductor
 from .stream_events import StreamRecorder, parser_for
@@ -71,18 +74,21 @@ class _ParticipantStateBridge:
             elif event == "agent.returned":
                 if payload.get("cancelled"):
                     return  # the session-level stop writes the terminal states
-                if payload.get("timed_out"):
-                    self.manager.record_participant_failure(
-                        self.session_id, name, "timed_out", "the last turn timed out"
-                    )
-                elif payload.get("returncode") not in (0, None):
-                    self.manager.record_participant_failure(
-                        self.session_id, name, "failed",
-                        f"the last turn exited with code {payload.get('returncode')}",
-                    )
-                elif payload.get("returncode") == 0:
+                classification = payload.get("classification")
+                if payload.get("returncode") == 0 and not payload.get("timed_out"):
                     self.manager.set_participant_state(
                         self.session_id, name, "active", None, reset_failures=True
+                    )
+                    resume_id = payload.get("provider_session_id")
+                    if resume_id:
+                        # The provider's own session id, captured while it is
+                        # fresh: this is what recovery resumes instead of
+                        # relaunching cold.
+                        self.manager.set_participant_resume_id(self.session_id, name, resume_id)
+                elif classification and classification != recovery.NORMAL_STOP:
+                    self.manager.record_participant_failure(
+                        self.session_id, name, classification,
+                        payload.get("failure_detail") or "the last turn failed",
                     )
             elif event == "agent.low_signal":
                 self.manager.set_participant_state(
@@ -140,6 +146,14 @@ class ManagedRunnerRegistry:
         self._threads: dict[str, threading.Thread] = {}
         self._cancel: dict[str, threading.Event] = {}
         self._pgids: dict[str, set[int]] = {}
+        #: Participant-scoped supervision: each agent gets its own cancel
+        #: signal and its own live process groups, so restarting one agent
+        #: never touches another agent's invocation.
+        self._participant_cancels: dict[str, dict[str, threading.Event]] = {}
+        self._participant_pgids: dict[tuple[str, str], set[int]] = {}
+        #: Invocations launched as a provider-session resume, so a completed
+        #: one can upgrade the runtime's "supported_unverified" resume proof.
+        self._pending_resume: set[tuple[str, str]] = set()
         #: Runtimes whose installed CLI rejected the streaming flags; they run
         #: the plain maintained command for the rest of this process.
         self._plain_runtimes: set[str] = set()
@@ -182,17 +196,29 @@ class ManagedRunnerRegistry:
             terminate_process_group(pid)
         return payload
 
-    def _track_pid(self, session_id: str, pid: int) -> None:
+    def _track_pid(self, session_id: str, participant: str, pid: int) -> None:
         with self._lock:
             self._pgids.setdefault(session_id, set()).add(pid)
+            self._participant_pgids.setdefault((session_id, participant), set()).add(pid)
 
-    def _untrack_pid(self, session_id: str, pid: int) -> None:
+    def _untrack_pid(self, session_id: str, participant: str, pid: int) -> None:
         with self._lock:
             pids = self._pgids.get(session_id)
             if pids is not None:
                 pids.discard(pid)
                 if not pids:
                     self._pgids.pop(session_id, None)
+            scoped = self._participant_pgids.get((session_id, participant))
+            if scoped is not None:
+                scoped.discard(pid)
+                if not scoped:
+                    self._participant_pgids.pop((session_id, participant), None)
+
+    def _participant_cancel(self, session_id: str, name: str) -> threading.Event:
+        with self._lock:
+            return self._participant_cancels.setdefault(session_id, {}).setdefault(
+                name, threading.Event()
+            )
 
     def start(self, record: "SessionRecord") -> dict:
         readiness = self.readiness(record)
@@ -235,6 +261,43 @@ class ManagedRunnerRegistry:
                 event.set()
             thread.join(timeout=4)
         return self._spawn(record.session_id, "resuming", "Restarting the agent team.")
+
+    def restart_participant(self, record: "SessionRecord", name: str) -> dict:
+        """Restart exactly one agent, leaving every other agent's process alone.
+
+        The participant's own cancel signal ends only its in-flight
+        invocation (and its process group); the supervising loop then gives
+        it a fresh invocation. When no worker is alive — the agent was
+        dropped and supervision stopped — supervision is respawned, which
+        touches no other process because none is running.
+        """
+        session_id = record.session_id
+        event = self._participant_cancel(session_id, name)
+        event.set()
+        with self._lock:
+            live = set(self._participant_pgids.get((session_id, name)) or ())
+        for pid in live:
+            terminate_process_group(pid)
+        # Wait for the invocation to unwind before clearing the signal, so the
+        # fresh invocation cannot race into an already-set cancel.
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self._participant_pgids.get((session_id, name)):
+                    break
+            time.sleep(0.05)
+        time.sleep(0.2)
+        event.clear()
+        if record.status != "active" or not self.readiness(record)["available"]:
+            return self.status(session_id)
+        with self._lock:
+            thread = self._threads.get(session_id)
+            alive = thread is not None and thread.is_alive()
+        if not alive:
+            return self._spawn(session_id, "resuming", f"Restarting {name}.")
+        run = self.status(session_id)
+        self._set(session_id, run["phase"], f"{name} was restarted; the rest of the team was untouched.")
+        return self.status(session_id)
 
     def _spawn(self, session_id: str, phase: str, detail: str) -> dict:
         with self._lock:
@@ -282,7 +345,14 @@ class ManagedRunnerRegistry:
                 record = manager.get(session_id)
                 manager.activate(session_id)
             self._set(session_id, "working", "The agents are working in the isolated workspace.")
-            self._drive(broker, manager, manager.get(session_id))
+            # The replace rung of the recovery ladder continues supervision in
+            # this same worker: a replaced participant gets its fresh turn
+            # immediately instead of waiting for a human to press anything.
+            while self._drive(broker, manager, manager.get(session_id)) == "replaced":
+                self._set(
+                    session_id, "working",
+                    "A replaced agent rejoined; the team is working again.",
+                )
         except _SetupCancelled:
             self._set(session_id, "stopped", "Session control applied.", reason="cancelled")
         except SynchriError as exc:
@@ -401,8 +471,18 @@ class ManagedRunnerRegistry:
 
         self._set(record.session_id, "starting", "Agreement confirmed. Starting the Primary Builder.")
 
-    def _drive(self, broker: Broker, manager, record: "SessionRecord") -> None:
-        agents = {plan.name: self._agent(record, plan) for plan in record.participants}
+    def _drive(self, broker: Broker, manager, record: "SessionRecord") -> str | None:
+        session_event = self._cancel.get(record.session_id)
+        agents = {
+            plan.name: (lambda p=plan: self._turn_agent(manager, record, p))
+            for plan in record.participants
+        }
+        cancel_events = {
+            plan.name: recovery.CompositeCancel(
+                session_event, self._participant_cancel(record.session_id, plan.name)
+            )
+            for plan in record.participants
+        }
         credentials = {
             name: session_files.resolve_credential(self.workspace, record.room_id, name)
             for name in agents
@@ -416,6 +496,12 @@ class ManagedRunnerRegistry:
         }
 
         states = _ParticipantStateBridge(manager, record.session_id)
+
+        def on_event(event: str, payload: dict) -> None:
+            states.handle(event, payload)
+            self._observe_turn(manager, record, event, payload)
+
+        durable_states = manager.participant_states(record.session_id)
         conductor = Conductor(
             broker,
             record.room_id,
@@ -424,33 +510,25 @@ class ManagedRunnerRegistry:
             observer,
             role_guidance=role_guidance,
             session_id=record.session_id,
-            cancel_event=self._cancel.get(record.session_id),
-            on_event=states.handle,
+            cancel_event=session_event,
+            cancel_events=cancel_events,
+            on_event=on_event,
+            # The breaker composes across idle/resume boundaries: strikes are
+            # durable, so a crash before an idle stop still counts.
+            initial_failures={
+                name: state["failures"] for name, state in durable_states.items()
+            },
         )
         report = conductor.run()
         if report.reason == "agent_failed" and report.failed_participant:
-            name = report.failed_participant
-            try:
-                manager.set_participant_state(
-                    record.session_id, name, "dropped",
-                    f"dropped after {conductor.max_consecutive_failures} consecutive failed turns",
-                )
-                manager.escalate(
-                    record.session_id,
-                    "agent_failed",
-                    f"{name} failed {conductor.max_consecutive_failures} turns in a row and was "
-                    "dropped. Restart it from the conversation, or stop the session.",
-                    raised_by=name,
-                )
-            except SynchriError:  # pragma: no cover - session may have ended underneath
-                pass
-            self._set(
-                record.session_id,
-                "needs_attention",
-                f"{name} stopped and needs your attention.",
-                reason="agent_failed",
+            return self._handle_agent_failure(
+                broker,
+                manager,
+                record,
+                report.failed_participant,
+                report.failure_kind or recovery.CRASH,
+                conductor.max_consecutive_failures,
             )
-            return
         phrases = {
             "awaiting_human": "The agents need your decision before they can continue.",
             "room_paused": "The session is paused.",
@@ -465,12 +543,206 @@ class ManagedRunnerRegistry:
             phrases.get(report.reason, f"Managed run ended: {report.reason}."),
             reason=report.reason,
         )
+        return None
+
+    def _handle_agent_failure(
+        self, broker: Broker, manager, record: "SessionRecord", name: str, kind: str, strikes: int
+    ) -> str | None:
+        """One supervisor decision per breaker trip.
+
+        Auth failures and provider refusals go straight to the human — those
+        recoveries genuinely require them. Ladder kinds (crash, unresponsive)
+        get exactly one automatic replacement incarnation, reconstructed from
+        the durable room; a second trip is dropped and escalated.
+        """
+        session_id = record.session_id
+        try:
+            if kind == recovery.AUTH_FAILURE:
+                manager.set_participant_state(
+                    session_id, name, kind, recovery.FAILURE_DETAILS[kind]
+                )
+                manager.escalate(
+                    session_id, "agent_auth_failed",
+                    f"{name}'s provider sign-in failed. Sign in to the CLI again in your "
+                    f"terminal, then Restart {name} from the conversation.",
+                    raised_by=name,
+                )
+                self._set(
+                    session_id, "needs_attention",
+                    f"{name} is signed out of its provider and needs you.",
+                    reason="agent_auth_failed",
+                )
+                return None
+            if kind == recovery.PROVIDER_REFUSAL:
+                manager.set_participant_state(
+                    session_id, name, kind, recovery.FAILURE_DETAILS[kind]
+                )
+                manager.escalate(
+                    session_id, "agent_refused",
+                    f"{name}'s provider refused or rate-limited the request. Decide how to "
+                    f"proceed, then Restart {name} or stop the session.",
+                    raised_by=name,
+                )
+                self._set(
+                    session_id, "needs_attention",
+                    f"{name}'s provider refused the request and needs your decision.",
+                    reason="agent_refused",
+                )
+                return None
+
+            already_replaced = bool(
+                manager.participant_recovery(session_id, name)["metadata"].get("auto_replaced")
+            )
+            if not already_replaced:
+                manager.mark_participant_replaced(session_id, name)
+                generation = manager.bump_recovery_generation(session_id, name, "replace")
+                manager.set_participant_state(
+                    session_id, name, "active",
+                    f"replaced with a fresh incarnation (generation {generation}); "
+                    "state reconstructed from the durable room",
+                    reset_failures=True,
+                )
+                # Give the replacement its turn: the room idled when the old
+                # incarnation broke, and a replaced agent that never gets the
+                # floor is not a recovery. The task is sent with the human
+                # credential so the lead-then-review discipline still applies.
+                human = (record.metadata or {}).get("human") or {}
+                other = next(
+                    (p.name for p in record.participants if p.name != name), None
+                )
+                metadata: dict = {"source": "agent_replacement"}
+                if other:
+                    metadata["human_direction"] = {"lead": name, "reviewer": other}
+                try:
+                    broker.send(
+                        record.room_id,
+                        credential=Credential(
+                            participant=human.get("name"), secret=human.get("secret")
+                        ),
+                        draft=MessageDraft(
+                            message_type="task",
+                            target=name,
+                            content=(
+                                "Your previous process stopped responding and was replaced. "
+                                "Rebuild your working state from the durable room above — the "
+                                "contract, the specification, and the recent conversation — "
+                                "then continue the work from where it actually stands."
+                            ),
+                            metadata=metadata,
+                        ),
+                    )
+                except SynchriError:  # pragma: no cover - room may be closing
+                    pass
+                self._set(
+                    session_id, "working",
+                    f"{name} stopped responding and was replaced; continuing the session.",
+                )
+                return "replaced"
+
+            manager.set_participant_state(
+                session_id, name, "dropped",
+                f"dropped after {strikes} consecutive failed turns ({kind}), "
+                "including one automatic replacement",
+            )
+            manager.escalate(
+                session_id, "agent_failed",
+                f"{name} kept failing ({kind}) even after an automatic replacement and was "
+                "dropped. Restart it from the conversation, or stop the session.",
+                raised_by=name,
+            )
+        except SynchriError:  # pragma: no cover - session may have ended underneath
+            pass
+        self._set(
+            session_id, "needs_attention",
+            f"{name} stopped and needs your attention.",
+            reason="agent_failed",
+        )
+        return None
+
+    def _observe_turn(self, manager, record: "SessionRecord", event: str, payload: dict) -> None:
+        """Registry-side turn observation: prove resume at first real recovery."""
+        if event != "agent.returned":
+            return
+        key = (record.session_id, payload.get("participant"))
+        if key not in self._pending_resume:
+            return
+        self._pending_resume.discard(key)
+        if payload.get("returncode") == 0 and not payload.get("timed_out") and not payload.get("cancelled"):
+            plan = next((p for p in record.participants if p.name == key[1]), None)
+            if plan is None:
+                return
+            try:
+                # "supported_unverified" was an honest maybe; a real recovery
+                # that resumed and completed is the proof the doctor could not
+                # manufacture.
+                manager.conn.execute(
+                    "UPDATE runtime_connections SET resume = 'verified' "
+                    "WHERE runtime = ? AND resume = 'supported_unverified'",
+                    (plan.runtime,),
+                )
+            except Exception:  # pragma: no cover - proof upgrade is best-effort
+                pass
+
+    def _turn_agent(self, manager, record: "SessionRecord", plan) -> AgentCommand:
+        """Build this participant's command for the turn that is starting.
+
+        The resume rung: after a crash or an unresponsive kill, when the
+        maintained adapter defines resume, the runtime's connection record
+        does not say ``unsupported``, and a provider session id was captured,
+        the next invocation resumes that session instead of relaunching cold.
+        The stored id is consumed either way, so a failed resume can never
+        loop.
+        """
+        use_plain = plan.runtime in self._plain_runtimes
+        user_command = bool(plan.command and plan.command.strip())
+        if not use_plain and not user_command:
+            try:
+                state = manager.participant_recovery(record.session_id, plan.name)
+            except SynchriError:
+                state = {"resume_id": None, "runtime_status": None}
+            needs_recovery = state.get("runtime_status") in recovery.LADDER_KINDS
+            resume_id = state.get("resume_id")
+            template = (KNOWN_RUNTIMES.get(plan.runtime) or {}).get("resume_command")
+            if needs_recovery and resume_id and template and self._resume_allowed(manager, plan.runtime):
+                command = template.replace("{resume_id}", shlex.quote(resume_id))
+                agent = self._build_agent(record, plan, command)
+                try:
+                    manager.set_participant_resume_id(record.session_id, plan.name, None)
+                    generation = manager.bump_recovery_generation(
+                        record.session_id, plan.name, "resume"
+                    )
+                    manager.set_participant_state(
+                        record.session_id, plan.name, "active",
+                        f"recovering — resuming the provider session (generation {generation})",
+                    )
+                except SynchriError:  # pragma: no cover - session may be ending
+                    pass
+                self._pending_resume.add((record.session_id, plan.name))
+                return agent
+        return self._agent(record, plan)
+
+    @staticmethod
+    def _resume_allowed(manager, runtime: str) -> bool:
+        try:
+            row = manager.conn.execute(
+                "SELECT resume FROM runtime_connections WHERE runtime = ?", (runtime,)
+            ).fetchone()
+        except Exception:  # pragma: no cover - defensive
+            return False
+        # No record yet: the adapter defines resume, so attempt it — the
+        # attempt itself becomes the verification.
+        return row is None or row["resume"] != "unsupported"
 
     def _agent(self, record: "SessionRecord", plan) -> AgentCommand:
         use_plain = plan.runtime in self._plain_runtimes
         command = managed_command(plan, plain=use_plain)
         if not command:
             raise ValidationError(f"no managed command is configured for {plan.name}")
+        return self._build_agent(record, plan, command, plain=use_plain)
+
+    def _build_agent(
+        self, record: "SessionRecord", plan, command: str, *, plain: bool = False
+    ) -> AgentCommand:
         agent = AgentCommand.parse(
             f"{plan.name}={command}",
             cwd=record.worktree.path if record.worktree else None,
@@ -484,9 +756,10 @@ class ManagedRunnerRegistry:
             }
         )
         session_id = record.session_id
-        agent.on_spawn = lambda pid: self._track_pid(session_id, pid)
-        agent.on_exit = lambda pid: self._untrack_pid(session_id, pid)
-        stream_format = None if use_plain else stream_format_for(plan)
+        participant = plan.name
+        agent.on_spawn = lambda pid: self._track_pid(session_id, participant, pid)
+        agent.on_exit = lambda pid: self._untrack_pid(session_id, participant, pid)
+        stream_format = None if plain else stream_format_for(plan)
         if stream_format and record.room_id:
             agent.parser_factory = lambda fmt=stream_format: parser_for(fmt)
             agent.recorder = StreamRecorder(

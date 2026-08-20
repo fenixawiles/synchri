@@ -109,6 +109,23 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "resume_id": "TEXT",
         "recovery_generation": "INTEGER NOT NULL DEFAULT 0",
     },
+    # v6: the durable session phase (original_work -> appendix_evaluation ->
+    # extension_work -> closing).
+    "sessions": {
+        "phase": "TEXT NOT NULL DEFAULT 'original_work'",
+    },
+    # v6: gate provenance — main-spec gates vs. extension gates materialized
+    # from approved dropbox items.
+    "session_gates": {
+        "origin_kind": "TEXT NOT NULL DEFAULT 'main'",
+        "drop_id": "TEXT",
+        "extension_id": "TEXT",
+    },
+    # v6: ancillary usage reports separately from ordinary participants.
+    "agent_turn_usage": {
+        "origin_kind": "TEXT NOT NULL DEFAULT 'main'",
+        "drop_id": "TEXT",
+    },
 }
 
 

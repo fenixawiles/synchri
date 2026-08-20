@@ -44,6 +44,12 @@ class Gate:
     reviewer_assessment: str | None = None
     updated_at: str | None = None
     updated_by: str | None = None
+    #: Provenance: 'main' gates come from the original specification;
+    #: 'extension' gates were materialized from an approved dropbox item.
+    #: You can always tell what was part of the original job.
+    origin_kind: str = "main"
+    drop_id: str | None = None
+    extension_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.gate_id or not str(self.gate_id).strip():

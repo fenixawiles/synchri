@@ -109,6 +109,9 @@ class SessionRecord:
     metadata: dict = field(default_factory=dict)
     contract_revision: int = 0
     participants: list[ParticipantPlan] = field(default_factory=list)
+    #: The durable phase: original_work -> appendix_evaluation ->
+    #: extension_work -> closing. Only closing invokes terminal room-closing.
+    phase: str = "original_work"
 
     @property
     def policy(self) -> ModePolicy:
@@ -155,6 +158,7 @@ class SessionRecord:
             "deadline": self.deadline.to_dict() if self.deadline else None,
             "escalation": self.escalation.to_dict(),
             "contract_revision": self.contract_revision,
+            "phase": self.phase,
             "participants": [p.to_dict() for p in self.participants],
             "metadata": dict(self.metadata),
         }
@@ -852,6 +856,9 @@ class SessionManager:
                 reviewer_assessment=row["reviewer_assessment"],
                 updated_at=row["updated_at"],
                 updated_by=row["updated_by"],
+                origin_kind=(row["origin_kind"] if "origin_kind" in row.keys() else None) or "main",
+                drop_id=row["drop_id"] if "drop_id" in row.keys() else None,
+                extension_id=row["extension_id"] if "extension_id" in row.keys() else None,
             )
             for row in rows
         ]
@@ -1641,18 +1648,20 @@ class SessionManager:
         self.conn.execute(
             "INSERT INTO session_gates (session_id, gate_id, description, status, required, "
             "evidence, tests, commits, builder_assessment, reviewer_assessment, updated_at, "
-            "updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+            "updated_by, origin_kind, drop_id, extension_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(session_id, gate_id) DO UPDATE SET description=excluded.description, "
             "status=excluded.status, required=excluded.required, evidence=excluded.evidence, "
             "tests=excluded.tests, commits=excluded.commits, "
             "builder_assessment=excluded.builder_assessment, "
             "reviewer_assessment=excluded.reviewer_assessment, updated_at=excluded.updated_at, "
-            "updated_by=excluded.updated_by",
+            "updated_by=excluded.updated_by, origin_kind=excluded.origin_kind, "
+            "drop_id=excluded.drop_id, extension_id=excluded.extension_id",
             (
                 session_id, gate.gate_id, gate.description, gate.status, int(gate.required),
                 json.dumps(gate.evidence), json.dumps(gate.tests), json.dumps(gate.commits),
                 gate.builder_assessment, gate.reviewer_assessment, gate.updated_at,
-                gate.updated_by,
+                gate.updated_by, gate.origin_kind or "main", gate.drop_id, gate.extension_id,
             ),
         )
 
@@ -1704,4 +1713,5 @@ class SessionManager:
             metadata=json.loads(data["metadata"] or "{}"),
             contract_revision=data["contract_revision"],
             participants=participants,
+            phase=data["phase"] if "phase" in data.keys() and data["phase"] else "original_work",
         )

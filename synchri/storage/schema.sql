@@ -254,7 +254,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     deadline          TEXT,
     escalation        TEXT NOT NULL DEFAULT '{}',
     metadata          TEXT NOT NULL DEFAULT '{}',
-    contract_revision INTEGER NOT NULL DEFAULT 0
+    contract_revision INTEGER NOT NULL DEFAULT 0,
+    -- v6: the durable session phase. A valid completion request in
+    -- original_work advances to appendix_evaluation (it does not close the
+    -- session); only closing may invoke the terminal room-closing behavior.
+    phase             TEXT NOT NULL DEFAULT 'original_work'
 );
 
 CREATE INDEX IF NOT EXISTS sessions_repo ON sessions(repo_root, status);
@@ -309,6 +313,11 @@ CREATE TABLE IF NOT EXISTS session_gates (
     reviewer_assessment TEXT,
     updated_at          TEXT,
     updated_by          TEXT,
+    -- v6: provenance. 'main' gates come from the original spec; 'extension'
+    -- gates were materialized from an approved dropbox item.
+    origin_kind         TEXT NOT NULL DEFAULT 'main',
+    drop_id             TEXT,
+    extension_id        TEXT,
     PRIMARY KEY (session_id, gate_id)
 );
 
@@ -373,11 +382,65 @@ CREATE TABLE IF NOT EXISTS agent_turn_usage (
     cached_input_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd            REAL,
     duration_seconds    REAL,
-    created_at          TEXT NOT NULL
+    created_at          TEXT NOT NULL,
+    -- v6: ancillary (dropbox) work reports separately — it is never merged
+    -- into an ordinary participant's totals.
+    origin_kind         TEXT NOT NULL DEFAULT 'main',
+    drop_id             TEXT
 );
 
 CREATE INDEX IF NOT EXISTS agent_turn_usage_session
     ON agent_turn_usage(session_id, usage_id);
+
+-- v6: the side-task dropbox. During a live session the user captures side
+-- ideas as items; an ancillary scout investigates each one off the critical
+-- path and an ancillary adversarial reviewer attacks the proposal. Items are
+-- non-authoritative by default: they cannot alter the main contract or merge
+-- into the canonical branch. The spec created at room creation stays the
+-- source of truth; items land in an append-only appendix and every one is
+-- explicitly evaluated by both main roles after the original task completes.
+CREATE TABLE IF NOT EXISTS session_drops (
+    session_id      TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    drop_id         TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    prompt          TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'captured'
+                        CHECK (status IN ('captured', 'investigating', 'reviewing',
+                                          'proposed', 'evaluated', 'failed', 'timed_out')),
+    skip_review     INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    -- ancillary execution bookkeeping (scratch trees are ephemeral by
+    -- contract; the durable proposal is the artifact of record)
+    base_sha        TEXT,
+    scratch_branch  TEXT,
+    scratch_path    TEXT,
+    failure_report  TEXT,
+    -- the structured proposal: an immutable digest over evidence, rationale,
+    -- recommendation, patch info, and the scout's base_sha
+    proposal        TEXT,
+    proposal_digest TEXT,
+    review          TEXT,
+    -- evaluation: both main roles, recorded individually; both approving
+    -- means approved, any non-approval means declined with both rationales
+    evaluations     TEXT NOT NULL DEFAULT '{}',
+    disposition     TEXT CHECK (disposition IN (NULL, 'approved', 'declined')),
+    extension_id    TEXT,
+    PRIMARY KEY (session_id, drop_id)
+);
+
+-- Exactly-once membership in the append-only appendix: reconciliation may
+-- run any number of times, but an item is appended exactly once, in order.
+CREATE TABLE IF NOT EXISTS session_appendix (
+    session_id  TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    drop_id     TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    appended_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, drop_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS session_appendix_position
+    ON session_appendix(session_id, position);
 
 -- v6: the durable outcome of a runtime's user-initiated connection test — the
 -- proof that Synchri can launch this CLI unattended, inject a prompt, read its

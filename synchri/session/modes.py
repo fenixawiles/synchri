@@ -344,11 +344,20 @@ def collaboration_pair(
 
 #: Runtimes Synchri knows how to find on the local machine.  A managed command
 #: is intentionally an opt-in convenience over the same CLI protocol used by
-#: every other agent: there is no provider account, API key, or cloud relay.
+#: every other agent. Synchri owns no provider account, stores no provider
+#: credential or API key, and uses no cloud relay; authentication remains
+#: inside each provider CLI.
 #:
 #: These commands are the providers' documented non-interactive modes.  They
 #: do not widen provider permissions; a provider that needs sign-in or asks for
 #: approval still reports that truthfully during Synchri's contract step.
+#:
+#: The doctor metadata (``min_version``, ``auth_indicators``,
+#: ``resume_command``) feeds the two-tier connection doctor in
+#: ``runner/doctor.py``: ``auth_indicators`` are cached sign-in *indications*
+#: only (an absent file is unknown, never "signed out" — several CLIs keep
+#: auth in a keychain), and ``resume_command`` is defined only where the
+#: maintained adapter actually knows the CLI's resume invocation.
 KNOWN_RUNTIMES: dict[str, dict] = {
     "claude_code": {
         "label": "Claude Code",
@@ -361,6 +370,9 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "plain_managed_command": "claude -p {prompt}",
         "suggested_command": "claude -p {prompt}",
         "stream_format": "claude",
+        "min_version": (1, 0, 0),
+        "auth_indicators": ["~/.claude/.credentials.json", "~/.claude/credentials.json"],
+        "resume_command": "claude -p --verbose --output-format stream-json --resume {resume_id} {prompt}",
     },
     "codex": {
         "label": "Codex",
@@ -370,6 +382,9 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "plain_managed_command": "codex exec {prompt}",
         "suggested_command": "codex exec {prompt}",
         "stream_format": "codex",
+        "min_version": (0, 20, 0),
+        "auth_indicators": ["~/.codex/auth.json"],
+        "resume_command": None,
     },
     "copilot": {
         "label": "GitHub Copilot CLI",
@@ -377,6 +392,12 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "executable": "copilot",
         "managed_command": "copilot -sp {prompt}",
         "suggested_command": "copilot -sp {prompt}",
+        "min_version": (0, 1, 0),
+        "auth_indicators": [
+            "~/.config/github-copilot/hosts.json",
+            "~/.config/github-copilot/apps.json",
+        ],
+        "resume_command": None,
     },
     "gemini": {
         "label": "Gemini CLI",

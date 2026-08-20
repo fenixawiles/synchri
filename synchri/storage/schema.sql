@@ -378,3 +378,25 @@ CREATE TABLE IF NOT EXISTS agent_turn_usage (
 
 CREATE INDEX IF NOT EXISTS agent_turn_usage_session
     ON agent_turn_usage(session_id, usage_id);
+
+-- v6: the durable outcome of a runtime's user-initiated connection test — the
+-- proof that Synchri can launch this CLI unattended, inject a prompt, read its
+-- output, and (where the adapter defines it) resume a provider session.  One
+-- row per runtime.  The row is never guessed stale: invalidation happens by
+-- comparing these stored facts against a fresh passive probe.
+CREATE TABLE IF NOT EXISTS runtime_connections (
+    runtime          TEXT PRIMARY KEY,
+    state            TEXT NOT NULL CHECK (state IN ('connected', 'failed')),
+    executable_path  TEXT,
+    version          TEXT,
+    adapter_revision TEXT NOT NULL DEFAULT '',
+    -- 1 = a cached sign-in file was present at test time, 0 = indicators are
+    -- defined but none was found, NULL = this adapter has no indicators.
+    auth_indication  INTEGER,
+    resume           TEXT NOT NULL DEFAULT 'unsupported'
+                         CHECK (resume IN ('verified', 'supported_unverified', 'unsupported')),
+    checks           TEXT NOT NULL DEFAULT '[]',
+    detail           TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);

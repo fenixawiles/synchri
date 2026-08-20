@@ -34,6 +34,7 @@ from ..session.modes import (
 from ..session.permissions import PermissionSet, permission_profile, permission_profiles
 from ..session.spec import ProductSpec
 from ..storage import dao
+from ..runner import doctor as doctor_module
 from ..runner.managed import ManagedRunnerRegistry
 
 Route = Callable[[dict, dict], dict]
@@ -53,6 +54,7 @@ class Api:
         self.broker = broker
         self.manager = manager
         self.managed = managed or ManagedRunnerRegistry(broker.workspace)
+        self.connections = doctor_module.ConnectionTester(broker.workspace)
         # ``synchri ui`` is normally launched from the repository being worked
         # on.  Keeping that small piece of context makes the default path a
         # room launch, not a repository-discovery exercise.  The draft still
@@ -82,6 +84,10 @@ class Api:
             ("GET", "launch"): self.launch,
             ("POST", "managed/start"): self.start_managed,
             ("GET", "managed"): self.managed_status,
+            ("GET", "runtimes/doctor"): self.runtimes_doctor,
+            ("POST", "runtimes/connect"): self.connect_runtime,
+            ("GET", "runtimes/connect"): self.connect_runtime_status,
+            ("POST", "runtimes/connect/cancel"): self.cancel_connect_runtime,
             ("GET", "sessions"): self.sessions,
             ("GET", "session"): self.session,
             ("POST", "session/rename"): self.rename_session,
@@ -135,6 +141,9 @@ class Api:
             # never makes the session database cloud-hosted; it simply lets the
             # person see who is signed in before choosing repository grants.
             "github": discovery.github_status(self.broker.workspace),
+            # Stored connection outcomes only — no probes on first paint. The
+            # doctor endpoint refreshes these with live invalidation checks.
+            "runtime_connections": doctor_module.stored_connections(self.broker.conn),
             "default_repo": self.default_repo,
             "desktop_clone_root": str(discovery.desktop_clone_root()),
             "open_drafts": drafts_module.versions(self.broker.conn),
@@ -469,6 +478,51 @@ class Api:
             "managed": self.managed.status(record.session_id),
             "readiness": self.managed.readiness(record),
         }
+
+    # -- runtime connections -------------------------------------------
+
+    def runtimes_doctor(self, query: dict, body: dict) -> dict:
+        """The two-tier doctor view: passive checks plus live connection state.
+
+        This endpoint runs the passive probes (cheap, local, timeout-bounded);
+        it never invokes a provider. The consented connection test lives
+        behind ``runtimes/connect``.
+        """
+        runtimes = []
+        for entry in runtime_catalog():
+            runtime = entry["key"]
+            report = doctor_module.passive_report(runtime)
+            runtimes.append(
+                {
+                    **entry,
+                    "doctor": report["checks"],
+                    "connection": doctor_module.connection_state(self.broker.conn, runtime),
+                    "test": self.connections.status(runtime),
+                }
+            )
+        return {"runtimes": runtimes}
+
+    def connect_runtime(self, query: dict, body: dict) -> dict:
+        """Start the user-initiated connection test for one runtime."""
+        runtime = (body.get("runtime") or "").strip()
+        if not runtime:
+            raise ValidationError("choose which runtime to connect")
+        return {"test": self.connections.start(runtime)}
+
+    def connect_runtime_status(self, query: dict, body: dict) -> dict:
+        runtime = (query.get("runtime") or "").strip()
+        if not runtime:
+            raise ValidationError("name the runtime to check")
+        return {
+            "test": self.connections.status(runtime),
+            "connection": doctor_module.connection_state(self.broker.conn, runtime),
+        }
+
+    def cancel_connect_runtime(self, query: dict, body: dict) -> dict:
+        runtime = (body.get("runtime") or "").strip()
+        if not runtime:
+            raise ValidationError("name the runtime to cancel")
+        return {"test": self.connections.cancel(runtime)}
 
     def _plans(self, values: list[dict] | None) -> list[ParticipantPlan]:
         if not isinstance(values, list):

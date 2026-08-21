@@ -197,6 +197,7 @@ class SessionManager:
         worktree_parent: str | None = None,
         worktree_name: str | None = None,
         existing_worktree_path: str | None = None,
+        worktree_start_point: str | None = None,
         metadata: dict | None = None,
     ) -> SessionRecord:
         """Validate the configuration, cut the worktree, and create the room.
@@ -285,6 +286,7 @@ class SessionManager:
                     mode=policy.mode.value,
                     name=worktree_name,
                     parent_dir=worktree_parent,
+                    start_point=worktree_start_point,
                 )
 
         try:

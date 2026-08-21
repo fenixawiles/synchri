@@ -531,3 +531,280 @@ def test_dashboard_and_plan_controls(manager, repo):
         {}, {"session": record.session_id, "action": "reopen", "note": "tighten scope"}
     )
     assert payload["status"] == "under_revision"
+
+
+# ----------------------------------------------------------------------
+# approval and promotion
+# ----------------------------------------------------------------------
+
+
+def _ready(manager, repo, body=PLAN_BODY):
+    record, credentials = _activated(manager, repo)
+    _write_plan(record, body)
+    _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: draft")
+    _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
+    return manager.get(record.session_id), credentials
+
+
+def _repo_commit(repo, filename="more.txt"):
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.com",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.com",
+           "PATH": __import__("os").environ.get("PATH", ""), "HOME": str(repo)}
+    (repo / filename).write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "move the tip"],
+                   check=True, env=env)
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def test_approval_promotes_into_exactly_one_linked_coordination_session(manager, repo):
+    record, _ = _ready(manager, repo)
+    inspection = planning.get_plan(manager, record.session_id)["inspection_sha"]
+
+    result = planning.approve(manager, record.session_id)
+    assert result["promoted"] is True and result["already_promoted"] is False
+    coordination = manager.get(result["coordination_session_id"])
+
+    # The plan became the executable contract: mode, spec, gates, worktree.
+    assert coordination.mode == "long_horizon"
+    assert coordination.spec.text.startswith("# Approved implementation plan PLAN-001")
+    assert "## Plan provenance" in coordination.spec.text
+    roles = {p.name: p.role for p in coordination.participants}
+    assert roles == {"claude": "primary_builder", "codex": "adversarial_reviewer"}
+    runtimes = {p.name: p.runtime for p in coordination.participants}
+    assert runtimes == {"claude": "claude_code", "codex": "codex"}
+    gates = manager.gates(coordination.session_id)
+    assert [g.gate_id for g in gates] == ["CACHE-01", "CACHE-02"], "no SPEC-01 collapse"
+    assert gates[0].description == (
+        "repeated identical GETs within the window are served from memory"
+    )
+    assert coordination.contract_revision == 1
+    assert coordination.metadata["promoted_from"] == record.session_id
+    assert coordination.metadata["plan_id"] == "PLAN-001"
+    assert coordination.metadata["inspection_sha"] == inspection
+    worktree_head = subprocess.run(
+        ["git", "-C", coordination.worktree_path, "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert worktree_head == inspection
+
+    # The planning session and its plan are immutable now.
+    planning_record = manager.get(record.session_id)
+    assert planning_record.status == "complete"
+    assert "PLAN-001" in planning_record.ended_reason
+    assert planning_record.metadata["promoted_to"] == coordination.session_id
+    assert planning.get_plan(manager, record.session_id)["status"] == "approved"
+
+    # Duplicate approval is idempotent — never a second session.
+    again = planning.approve(manager, record.session_id)
+    assert again["already_promoted"] is True
+    assert again["coordination_session_id"] == coordination.session_id
+    linked = [
+        s for s in manager.list_sessions()
+        if (s.metadata or {}).get("promoted_from") == record.session_id
+    ]
+    assert len(linked) == 1
+
+
+def test_post_approval_captures_route_to_the_coordination_session(manager, repo):
+    from synchri.ui.api import Api
+
+    record, _ = _ready(manager, repo)
+    result = planning.approve(manager, record.session_id)
+    coordination_id = result["coordination_session_id"]
+
+    api = Api(manager.broker, manager)
+
+    class _Recorder:
+        def investigate(self, session_id, drop_id):
+            raise AssertionError("no scout should start here")
+
+    api.ancillary = _Recorder()
+    payload = api.capture_drop({}, {"session": record.session_id, "prompt": "late idea"})
+    assert payload["item"]["drop_id"] == "DROP-001"
+    assert [e["drop_id"] for e in dropbox.items(manager, coordination_id)] == ["DROP-001"]
+    assert dropbox.items(manager, record.session_id) == []
+
+
+def test_approval_requires_explicit_collision_free_criteria(manager, repo):
+    record, _ = _ready(manager, repo, body="# Plan\n\n1. do it\n")
+    with pytest.raises(StateError) as exc:
+        planning.approve(manager, record.session_id)
+    assert exc.value.code == "plan_criteria_missing"
+    assert planning.get_plan(manager, record.session_id)["status"] == "ready", (
+        "a refused approval reserves nothing"
+    )
+    assert planning.promotion(manager, record.session_id) is None
+
+    colliding = PLAN_BODY.replace("CACHE-02", "CACHE-01")
+    record2, _ = _ready(manager, repo, body=colliding)
+    with pytest.raises(StateError) as exc:
+        planning.approve(manager, record2.session_id)
+    assert exc.value.code == "plan_gate_collision"
+
+
+def test_blocking_decisions_cannot_cross_approval(manager, repo):
+    record, _ = _ready(manager, repo)
+    # A late blocking objection lands while the plan shows ready.
+    _turn(manager, record, "codex", "SYNCHRI-OBJECTION: blocking|second thoughts")
+    with pytest.raises(StateError) as exc:
+        planning.approve(manager, record.session_id)
+    assert exc.value.code == "plan_blocking_open"
+    assert "OBJ-001" in exc.value.message
+
+
+def test_baseline_drift_returns_the_plan_to_review_and_reanchors(manager, repo):
+    record, _ = _ready(manager, repo)
+    old_inspection = planning.get_plan(manager, record.session_id)["inspection_sha"]
+    new_tip = _repo_commit(repo)
+    assert new_tip != old_inspection
+
+    with pytest.raises(StateError) as exc:
+        planning.approve(manager, record.session_id)
+    assert exc.value.code == "baseline_drift"
+
+    plan = planning.get_plan(manager, record.session_id)
+    assert plan["status"] == "under_revision"
+    assert plan["inspection_sha"] == new_tip, "the workspace was re-anchored"
+    workspace_head = subprocess.run(
+        ["git", "-C", plan["workspace_path"], "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert workspace_head == new_tip
+    drift = [o for o in planning.objections(manager, record.session_id)
+             if o["raised_by"] == "synchri"]
+    assert drift and drift[0]["classification"] == "blocking"
+    assert _wake_messages(manager, record, "plan_drift")
+
+    # Re-verify against the new baseline, re-review, approve — now it lands.
+    record = manager.get(record.session_id)
+    _turn(manager, record, "claude",
+          f"SYNCHRI-OBJECTION-RESOLVED: {drift[0]['objection_id']}|re-verified on the new tip\n"
+          "SYNCHRI-PLAN-SUBMIT: re-verified")
+    _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|holds on the new baseline")
+    result = planning.approve(manager, record.session_id)
+    coordination = manager.get(result["coordination_session_id"])
+    worktree_head = subprocess.run(
+        ["git", "-C", coordination.worktree_path, "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert worktree_head == new_tip
+
+
+def test_a_retry_resumes_the_reserved_promotion_never_a_second_session(manager, repo):
+    record, _ = _ready(manager, repo)
+    # Provisioning fails mid-way (an invalid staffing choice) AFTER the
+    # reservation transaction committed.
+    with pytest.raises(ValidationError):
+        planning.approve(
+            manager, record.session_id,
+            staffing=[{"name": "solo", "runtime": "claude_code", "role": "primary_builder"}],
+        )
+    promo = planning.promotion(manager, record.session_id)
+    assert promo["status"] == "reserved" and promo["coordination_session_id"] is None
+    assert planning.get_plan(manager, record.session_id)["status"] == "approved"
+
+    # The source branch moves while the promotion sits reserved. The retry
+    # must reuse the recorded SHA, not the moved tip.
+    moved_tip = _repo_commit(repo, "after-reserve.txt")
+    result = planning.approve(manager, record.session_id)
+    coordination = manager.get(result["coordination_session_id"])
+    worktree_head = subprocess.run(
+        ["git", "-C", coordination.worktree_path, "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert worktree_head == promo["inspection_sha"]
+    assert worktree_head != moved_tip
+    linked = [
+        s for s in manager.list_sessions()
+        if (s.metadata or {}).get("promoted_from") == record.session_id
+    ]
+    assert len(linked) == 1
+
+
+def test_a_crash_between_provision_and_finalize_is_adopted_on_retry(manager, repo):
+    record, _ = _ready(manager, repo)
+    with pytest.raises(ValidationError):
+        planning.approve(
+            manager, record.session_id,
+            staffing=[{"name": "solo", "runtime": "claude_code", "role": "primary_builder"}],
+        )
+    promo = planning.promotion(manager, record.session_id)
+    # Simulate the crash window: the coordination session was created but the
+    # finalize transaction never ran.
+    orphan = planning._provision(manager, manager.get(record.session_id), promo, None)
+    assert planning.promotion(manager, record.session_id)["coordination_session_id"] is None
+
+    result = planning.approve(manager, record.session_id)
+    assert result["coordination_session_id"] == orphan.session_id
+    assert planning.promotion(manager, record.session_id)["status"] == "provisioned"
+    linked = [
+        s for s in manager.list_sessions()
+        if (s.metadata or {}).get("promoted_from") == record.session_id
+    ]
+    assert len(linked) == 1
+
+
+def test_worktrees_can_branch_from_an_exact_start_point(repo):
+    from synchri.session import worktree as worktree_module
+
+    first = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    _repo_commit(repo, "second.txt")
+    tree = worktree_module.create(str(repo), "main", start_point=first)
+    head = subprocess.run(
+        ["git", "-C", tree.path, "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == first
+
+
+def test_the_app_ships_the_planning_flow():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '"plan","gates"' in source, "the plan panel is a first-class session tab"
+    assert 'api("plan" + q)' in source
+    assert "plan/approve" in source and "plan/control" in source
+    assert "Approve &amp; Start Coordination" in source
+    assert "Articulate the idea" in source
+    assert "no planning support" in source, "unsupported runtimes are shown unavailable"
+    assert "Resume the budget (once)" in source
+
+
+def test_the_approve_endpoint_returns_the_coordination_launch(manager, repo):
+    from synchri.ui.api import Api
+
+    record, _ = _ready(manager, repo)
+    api = Api(manager.broker, manager)
+
+    class _Recorder:
+        cli_command = "synchri"
+
+        def __init__(self):
+            self.cancelled = []
+
+        def cancel(self, session_id, reason=""):
+            self.cancelled.append(session_id)
+
+        def readiness(self, record):
+            return {"available": False, "agents": []}
+
+        def status(self, session_id):
+            return {"phase": "not_started"}
+
+    api.managed = _Recorder()
+    result = api.approve_plan({}, {"session": record.session_id})
+    assert result["promoted"] is True
+    assert api.managed.cancelled == [record.session_id]
+    launch = result["coordination"]["launch"]
+    assert launch["worktree_path"]
+    assert {agent["role"] for agent in launch["agents"]} == {
+        "primary_builder", "adversarial_reviewer",
+    }
+    assert result["coordination"]["session"]["mode"] == "long_horizon"

@@ -2049,11 +2049,17 @@ function stepTree() {
 }
 
 function stepAgents() {
+  const planningMode = S.draft.draft.mode === "planning";
   const agents = S.draft.draft.agents.length ? [...S.draft.draft.agents]
-    : [{name:"claude",runtime:"claude_code",role:"primary_builder"},
-       {name:"codex",runtime:"codex",role:"adversarial_reviewer"}];
+    : planningMode
+      ? [{name:"claude",runtime:"claude_code",role:"planner"},
+         {name:"codex",runtime:"codex",role:"plan_reviewer"}]
+      : [{name:"claude",runtime:"claude_code",role:"primary_builder"},
+         {name:"codex",runtime:"codex",role:"adversarial_reviewer"}];
   S.agentDraft = agents;
-  const box = $(`<div class="stack"><h2>Which agents, doing what?</h2></div>`);
+  const box = $(`<div class="stack"><h2>Which agents, doing what?</h2>${planningMode
+    ? `<div class="muted small">Planning runs in a read-only planning workspace. Runtimes without
+       that capability are unavailable here — never silently downgraded.</div>` : ""}</div>`);
   app().append(box);
   const list = $(`<div class="stack"></div>`); box.append(list);
   const draw = () => {
@@ -2061,7 +2067,10 @@ function stepAgents() {
     agents.forEach((a, i) => {
       const card = $(`<div class="card grid" style="grid-template-columns:1fr 1fr 1fr auto;align-items:center">
         <input value="${esc(a.name)}" placeholder="name">
-        <select>${S.boot.runtimes.map(r=>`<option value="${r.key}" ${r.key===a.runtime?"selected":""}>${esc(r.label)}</option>`).join("")}</select>
+        <select>${S.boot.runtimes.map(r=>{
+          const unavailable = planningMode && !r.planning_supported;
+          return `<option value="${r.key}" ${r.key===a.runtime?"selected":""} ${unavailable?"disabled":""}>${esc(r.label)}${unavailable?" — no planning support":""}</option>`;
+        }).join("")}</select>
         <select>${S.boot.roles.map(r=>`<option value="${r.key}" ${r.key===a.role?"selected":""}>${esc(r.label)}</option>`).join("")}</select>
         <button class="ghost">Remove</button></div>`);
       const [nameEl, rtEl, roleEl] = card.querySelectorAll("input,select");
@@ -2117,7 +2126,16 @@ function stepPerms() {
 
 function stepSpec() {
   const req = S.draft.steps.find(s => s.key === "spec")?.label || "";
-  const box = $(`<div class="stack"><h2>What should the agents build?</h2>
+  const planningMode = S.draft.draft.mode === "planning";
+  const box = planningMode
+    ? $(`<div class="stack"><h2>Articulate the idea</h2>
+      <div class="muted small">In as much or as little detail as you want — it is stored verbatim.
+        The planner turns it, plus real repository inspection, into the first plan draft; an
+        adversarial reviewer then attacks the plan until it is ready to approve. You never write
+        a product specification on this path.</div>
+      <textarea id="spec" placeholder="What do you want built or changed? Rough thoughts are fine — constraints, hopes, things that must not break…">${esc(S.draft.draft.spec||"")}</textarea>
+      <div class="row"><button class="primary" id="save">Save the idea</button></div></div>`)
+    : $(`<div class="stack"><h2>What should the agents build?</h2>
     <div class="muted small">Paste any text. This is stored unchanged and becomes the
       contract's source of truth for what "done" means — agents may not rewrite it.</div>
     <textarea id="spec" placeholder="# Product\n\n## Acceptance\n- AUTH-01 users can log in\n- API-01 tasks support CRUD">${esc(S.draft.draft.spec||"")}</textarea>
@@ -2127,7 +2145,7 @@ function stepSpec() {
   document.getElementById("save").onclick = guard(async () => {
     await patch({ spec: document.getElementById("spec").value });
   });
-  if (S.draft.detected_gates?.length) {
+  if (!planningMode && S.draft.detected_gates?.length) {
     const t = $(`<div class="card"><h3 class="small muted">DETECTED ACCEPTANCE GATES</h3>
       <table><tbody>${S.draft.detected_gates.map(g =>
         `<tr><td class="mono">${esc(g.gate_id)}</td><td>${esc(g.description)}</td></tr>`).join("")}
@@ -2252,7 +2270,7 @@ function listen() {
   es.onerror = () => { /* EventSource retries on its own */ };
 }
 
-const DETAIL_TABS = ["gates","dropbox","tests","changes","commits","worktree","memory","raw","contract","changelog"];
+const DETAIL_TABS = ["plan","gates","dropbox","tests","changes","commits","worktree","memory","raw","contract","changelog"];
 
 function timeboxText(deadline) {
   if (!deadline?.ends_at) return "Open-ended";
@@ -2330,7 +2348,9 @@ function renderSession() {
     return `<div class="team-line" data-member="${esc(p.name)}"${runtime.detail ? ` title="${esc(runtime.detail)}"` : ""}><span class="presence"><i class="${dot}"></i>${esc(p.name)}</span>
       <span class="muted small" data-team-state${trouble ? ' style="color:var(--bad)"' : ""}>${esc(label)}</span></div>`;
   }).join("");
-  const nav = ["conversation", ...DETAIL_TABS.filter(tab => tab !== "changelog" || s.status === "complete")];
+  const nav = ["conversation", ...DETAIL_TABS.filter(tab =>
+    (tab !== "changelog" || s.status === "complete")
+    && (tab !== "plan" || s.mode === "planning"))];
   const layout = $(`<div class="session-layout"><aside class="session-rail">
       <div><div class="kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
       <div class="rail-status"><i id="rail-current-dot" class="led ${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
@@ -2786,6 +2806,79 @@ async function paint(tab, el) {
     const r = await api("changelog" + q);
     el.innerHTML = `<div class="between" style="margin-bottom:.9rem"><span class="small muted">The verified delivery record for this session.</span><button class="primary" id="package-download">Download session package</button></div><div class="rich">${rich(r.markdown)}</div>`;
     el.querySelector("#package-download").onclick = event => downloadSessionPackage(event.target);
+  } else if (tab === "plan") {
+    const p = await api("plan" + q);
+    const statusPill = p.status === "ready" ? `<span class="pill">PLAN-READY</span>`
+      : p.status === "approved" ? `<span class="pill">approved</span>`
+      : p.status === "needs_human_resolution" ? `<span class="pill warn">needs you</span>`
+      : `<span class="pill dim">${esc(p.status.replace(/_/g," "))}</span>`;
+    const b = p.budgets;
+    const chip = o => o.classification === "blocking" || o.classification === "fork"
+      ? `<span class="pill bad">${esc(o.classification)}</span>`
+      : `<span class="pill dim">${esc(o.classification)}</span>`;
+    const openRows = p.open_objections.map(o => `<div class="card" data-objection="${esc(o.objection_id)}">
+        <div class="between"><div><b class="mono">${esc(o.objection_id)}</b> ${chip(o)}
+          <span class="small muted">r${o.raised_revision} · ${esc(o.raised_by)}</span></div>
+          ${(o.classification === "blocking" || o.classification === "fork") && ["ready","awaiting_review","under_revision","drafting","needs_human_resolution"].includes(p.status)
+            ? `<button class="ghost objection-waive">Waive…</button>` : ""}</div>
+        <div class="small" style="margin-top:.35rem">${esc(o.text)}</div></div>`).join("");
+    const settledRows = p.resolved_objections.map(o => `<div class="small muted" style="margin-top:.3rem">
+        <b class="mono">${esc(o.objection_id)}</b> ${esc(o.classification)} · ${esc(o.status)}${o.resolved_by==="human"?" by you":""}
+        — ${esc(o.disposition || o.text)}</div>`).join("");
+    el.innerHTML = `
+      <div class="between"><div><b class="mono">${esc(p.plan_id)}</b> ${statusPill}
+        <span class="small muted">revision ${p.revision} · baseline ${esc((p.inspection_sha||"").slice(0,12))}</span>
+        <div class="small muted" style="margin-top:.25rem">budgets: ${b.turns_used}/${b.turn_budget} turns ·
+          ${b.revisions_used}/${b.revision_budget} revisions · ${b.minutes_budget} min${b.resumes_used?" (resumed once)":""}</div></div>
+        <div class="row">
+          ${p.status === "ready" ? `<button class="primary" id="plan-approve">Approve &amp; Start Coordination</button>` : ""}
+          ${p.status === "needs_human_resolution" && b.resume_available ? `<button class="primary" id="plan-resume">Resume the budget (once)</button>` : ""}
+          ${p.status === "approved" && p.promotion?.coordination_session_id ? `<button class="primary" id="plan-open-coordination">Open the coordination session</button>` : ""}
+          ${["ready","awaiting_review","under_revision","drafting","needs_human_resolution"].includes(p.status) ? `<button id="plan-reopen">Request changes…</button>` : ""}
+        </div></div>
+      ${p.status === "ready" ? `<div class="note small" style="margin-top:.8rem">Review closure reached: no blocking objections or open forks remain.
+        Approval creates a new linked coordination session branched from the inspected baseline — the plan and this session stay immutable.</div>` : ""}
+      ${p.status === "needs_human_resolution" ? `<div class="note warn small" style="margin-top:.8rem">The planning budget is exhausted. The latest draft and its open objections are preserved below.</div>` : ""}
+      <details style="margin-top:.9rem"><summary class="small muted" style="cursor:pointer">Your idea, verbatim</summary>
+        <pre style="margin-top:.5rem;max-height:14rem;overflow:auto">${esc(p.idea)}</pre></details>
+      ${p.open_objections.length ? `<h3 class="small muted" style="margin-top:1rem">OPEN OBJECTIONS &amp; FORKS</h3><div class="stack" style="margin-top:.5rem">${openRows}</div>` : ""}
+      ${settledRows ? `<h3 class="small muted" style="margin-top:1rem">RESOLVED &amp; WAIVED</h3>${settledRows}` : ""}
+      ${p.acceptance_criteria.length ? `<h3 class="small muted" style="margin-top:1rem">ACCEPTANCE CRITERIA → GATES</h3>
+        <table style="margin-top:.4rem"><tbody>${p.acceptance_criteria.map(c =>
+          `<tr><td class="mono">${esc(c.gate_id)}</td><td class="small">${esc(c.description)}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${p.latest_body ? `<h3 class="small muted" style="margin-top:1rem">PLAN — REVISION ${p.revision}</h3>
+        <div class="rich" style="margin-top:.5rem;max-height:32rem;overflow:auto">${rich(p.latest_body)}</div>`
+        : `<div class="muted" style="margin-top:1rem">No revision submitted yet — the planner drafts first.</div>`}`;
+    const approve = el.querySelector("#plan-approve");
+    if (approve) approve.onclick = guard(async () => {
+      approve.disabled = true; approve.textContent = "Provisioning…";
+      const result = await api("plan/approve", { session: S.session });
+      confirmNotice(`${p.plan_id} approved — coordination session created.`);
+      await openSession(result.coordination_session_id);
+    });
+    const resume = el.querySelector("#plan-resume");
+    if (resume) resume.onclick = guard(async () => {
+      await api("plan/control", { session: S.session, action: "resume_budget" });
+      S.dash = await api("dashboard" + q); await paint("plan", el);
+    });
+    const openCoordination = el.querySelector("#plan-open-coordination");
+    if (openCoordination) openCoordination.onclick = guard(async () => {
+      await openSession(p.promotion.coordination_session_id);
+    });
+    const reopen = el.querySelector("#plan-reopen");
+    if (reopen) reopen.onclick = guard(async () => {
+      const note = prompt("What should change in the plan?");
+      if (!note || !note.trim()) return;
+      await api("plan/control", { session: S.session, action: "reopen", note });
+      S.dash = await api("dashboard" + q); await paint("plan", el);
+    });
+    el.querySelectorAll(".objection-waive").forEach(button => button.onclick = guard(async () => {
+      const objectionId = button.closest("[data-objection]").dataset.objection;
+      const note = prompt(`Waive ${objectionId} — your reason goes on the record, and the plan returns to review:`);
+      if (!note || !note.trim()) return;
+      await api("plan/control", { session: S.session, action: "waive_objection", objection_id: objectionId, note });
+      S.dash = await api("dashboard" + q); await paint("plan", el);
+    }));
   } else if (tab === "gates") {
     const r = await api("gates" + q);
     const editable = !["complete", "stopped", "failed", "timed_out"].includes(d.session.status);

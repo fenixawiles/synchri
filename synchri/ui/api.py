@@ -109,6 +109,7 @@ class Api:
             ("POST", "dropbox/capture"): self.capture_drop,
             ("GET", "plan"): self.plan,
             ("POST", "plan/control"): self.plan_control,
+            ("POST", "plan/approve"): self.approve_plan,
             ("POST", "gates/preview"): self.preview_gates,
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
@@ -942,6 +943,12 @@ class Api:
         from ..session import dropbox as dropbox_module
 
         session_id = self._session_id(query, body)
+        record = self.manager.get(session_id)
+        promoted_to = (record.metadata or {}).get("promoted_to")
+        if promoted_to and record.is_terminal:
+            # Capture froze at plan approval; an item captured after it enters
+            # the new coordination session's dropbox instead of being lost.
+            session_id = promoted_to
         item = dropbox_module.capture(
             self.manager,
             session_id,
@@ -1007,6 +1014,25 @@ class Api:
         if record.status == "active":
             self.managed.resume(record)
         return payload
+
+    def approve_plan(self, query: dict, body: dict) -> dict:
+        """Approve & Start Coordination: a state transition, not an acknowledgment.
+
+        Approval reserves the promotion, converts the frozen plan revision
+        into ProductSpec v1 with its gates materialized deterministically,
+        and provisions the new linked coordination session — resumably, and
+        exactly one per approved plan. The planning session's agents stop;
+        Stream A's paste-free start then launches the coordination team.
+        """
+        from ..session import planning as planning_module
+
+        session_id = self._session_id(query, body)
+        result = planning_module.approve(
+            self.manager, session_id, staffing=body.get("staffing")
+        )
+        self.managed.cancel(session_id, reason="Plan approved; planning has concluded.")
+        coordination = self.manager.get(result["coordination_session_id"])
+        return {**result, "coordination": self._launch_payload(coordination)}
 
     def run_tests(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)

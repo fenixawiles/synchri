@@ -207,11 +207,17 @@ def create(
     name: str | None = None,
     parent_dir: str | Path | None = None,
     attempts: int = 5,
+    start_point: str | None = None,
 ) -> Worktree:
     """Create the session's isolated worktree on a fresh branch.
 
     Retries on name collision, then gives up rather than silently reusing an
     existing tree — reuse would break the isolation guarantee.
+
+    ``start_point`` pins the new branch to an exact commit instead of the
+    base branch's current tip — plan promotion branches from the frozen
+    ``inspection_sha`` the plan was reviewed against, not from wherever the
+    source branch has moved since.
     """
     root = Path(repo_root).resolve()
     status = inspect_repository(root)
@@ -219,6 +225,8 @@ def create(
         raise StateError("; ".join(status.problems), code="repo_unusable")
     if base_branch not in status.branches and not _rev_exists(root, base_branch):
         raise ValidationError(f"base branch {base_branch!r} does not exist in this repository")
+    if start_point and not _rev_exists(root, start_point):
+        raise ValidationError(f"start point {start_point!r} does not exist in this repository")
 
     parent = Path(parent_dir).expanduser() if parent_dir else default_worktree_parent(root)
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -237,7 +245,7 @@ def create(
                 raise ValidationError(f"a worktree or branch named {candidate!r} already exists")
             continue
         try:
-            git(root, "worktree", "add", "-b", candidate, str(path), base_branch)
+            git(root, "worktree", "add", "-b", candidate, str(path), start_point or base_branch)
         except StateError as exc:
             last_error = exc
             if name:

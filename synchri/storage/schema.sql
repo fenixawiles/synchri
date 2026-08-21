@@ -524,3 +524,22 @@ CREATE TABLE IF NOT EXISTS session_plan_objections (
     updated_at        TEXT NOT NULL,
     PRIMARY KEY (session_id, objection_id)
 );
+
+-- v6: plan promotion. Approval is a state transition, not an acknowledgment:
+-- one transaction reserves this record — freezing the plan digest, revision,
+-- and inspected SHA — and then the coordination session is provisioned
+-- resumably against it. The primary key is the topology: exactly one
+-- coordination session per approved plan, and a retry resumes the record
+-- instead of creating a second session.
+CREATE TABLE IF NOT EXISTS session_promotions (
+    planning_session_id     TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+    plan_id                 TEXT NOT NULL,
+    plan_revision           INTEGER NOT NULL,
+    plan_digest             TEXT NOT NULL,
+    inspection_sha          TEXT NOT NULL,
+    status                  TEXT NOT NULL DEFAULT 'reserved'
+                                CHECK (status IN ('reserved', 'provisioned')),
+    coordination_session_id TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);

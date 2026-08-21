@@ -36,6 +36,7 @@ from ..protocol import events as ev
 from ..storage import db
 from . import contract as contract_module
 from . import changelog as changelog_module
+from . import dropbox as dropbox_module
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
@@ -1015,14 +1016,217 @@ class SessionManager:
         )
 
     def complete(self, session_id: str, *, force: bool = False) -> SessionRecord:
-        """Close a verified session and preserve its final changelog.
+        """Drive the completion phase machine; only ``closing`` ends the room.
 
-        Completion is deliberately unlike ``stop``: it proves every required
-        gate, closes the room so no more work can be accepted, and writes a
-        permanent human-readable delivery record. ``force`` is the human
-        override: every gate still blocking is waived, and the waiver is
-        recorded on the gate itself and in the session's ended reason — the
-        changelog stays honest about what was verified versus waived.
+        Completion is deliberately unlike ``stop``, and it is no longer one
+        transition. A valid completion request in ``original_work`` does not
+        close a session whose dropbox holds side tasks: it atomically freezes
+        capture, snapshots the appendix, and advances to
+        ``appendix_evaluation``, where both main roles owe every item an
+        explicit evaluation. Approvals materialize extension gates, and
+        completion advances to ``extension_work`` until they pass. Only then
+        does the terminal transition run, exactly as it always has: every
+        required gate proven with evidence and both sign-offs, the room
+        closed, a permanent delivery record written.
+
+        ``force`` stays the human override at any phase: blocking gates are
+        waived and every open appendix item is recorded ``waived`` — explicit
+        dispositions on the record, never a silent drop.
+        """
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(f"session is already {record.status}", code="session_finished")
+        if not record.room_id:
+            raise StateError("cannot complete a session without a room", code="no_room")
+        if not self.gates(session_id):
+            raise StateError(
+                "cannot complete a session with no acceptance gates defined",
+                code="no_gates",
+            )
+        if record.phase == dropbox_module.PHASE_ORIGINAL:
+            return self._complete_original_work(record, force=force)
+        if record.phase == dropbox_module.PHASE_EVALUATION:
+            return self._complete_appendix_evaluation(record, force=force)
+        return self._close_completed(record, force=force)
+
+    def _complete_original_work(self, record: SessionRecord, *, force: bool) -> SessionRecord:
+        """A valid completion in ``original_work`` advances the phase, not the end.
+
+        The phase flip, the capture freeze, and the appendix snapshot happen
+        in one ``BEGIN IMMEDIATE`` transaction — the capture/completion race
+        point. A racing capture either lands inside the snapshot or is
+        refused as frozen; it is never lost in between.
+        """
+        session_id = record.session_id
+        if force:
+            # The human override closes now: the terminal transition waives
+            # the blocking gates and records a waiver on every open item.
+            return self._close_completed(record, force=True)
+        report = summarize(self.gates(session_id))
+        if not report["complete"]:
+            raise StateError(
+                "cannot complete: " + "; ".join(report["blockers"]),
+                code="gates_unsatisfied",
+            )
+        if not dropbox_module.items(self, session_id):
+            # No side tasks were ever captured: completion behaves exactly as
+            # it always has.
+            return self._close_completed(record, force=False)
+        with db.transaction(self.conn):
+            record = self.get(session_id)
+            if record.is_terminal:
+                raise StateError(f"session is already {record.status}", code="session_finished")
+            if record.phase != dropbox_module.PHASE_ORIGINAL:
+                raise StateError(
+                    f"completion is already underway: the session moved to {record.phase}",
+                    code="phase_advanced",
+                )
+            report = summarize(self.gates(session_id))
+            if not report["complete"]:
+                raise StateError(
+                    "cannot complete: " + "; ".join(report["blockers"]),
+                    code="gates_unsatisfied",
+                )
+            # Anything captured but not yet reconciled joins the appendix now,
+            # inside the freeze transaction, so the snapshot is total; the
+            # cutoff then ends investigation — an item whose scout or review
+            # never finished gets a timed-out failure report the pair can
+            # decline on, so evaluation never waits on work that won't arrive.
+            dropbox_module._reconcile_locked(self.conn, session_id)
+            cutoff = dropbox_module.freeze_incomplete_locked(self.conn, session_id)
+            snapshot = [
+                row["drop_id"]
+                for row in self.conn.execute(
+                    "SELECT drop_id FROM session_appendix WHERE session_id = ? "
+                    "ORDER BY position",
+                    (session_id,),
+                )
+            ]
+            metadata = {
+                **record.metadata,
+                "dropbox_snapshot": {"items": snapshot, "frozen_at": utc_now()},
+            }
+            self._update(
+                session_id,
+                phase=dropbox_module.PHASE_EVALUATION,
+                metadata=json.dumps(metadata),
+            )
+            self._log(
+                record,
+                ev.SESSION_PHASE_ADVANCED,
+                {
+                    "phase": dropbox_module.PHASE_EVALUATION,
+                    "snapshot": snapshot,
+                    "cutoff_timed_out": cutoff,
+                },
+            )
+            # The conductor exits on idle, so the transition itself enqueues
+            # the turn that restarts the loop — atomically with the flip.
+            self._send_phase_task(
+                record,
+                source="appendix_evaluation",
+                content=(
+                    "The original specification is complete — every required gate "
+                    "passed with evidence and both sign-offs. Before the session can "
+                    "close, the side-task appendix needs its explicit evaluations: "
+                    + ", ".join(snapshot)
+                    + ". Read the appendix section of your prompt, judge each item on "
+                    "its recorded proposal or failure report, and record your verdict "
+                    "with a SYNCHRI-DROP control line. Both of you must evaluate every "
+                    "item. When every item has both evaluations, the Primary Builder "
+                    "requests completion again with SYNCHRI-COMPLETE."
+                ),
+            )
+        return self.get(session_id)
+
+    def _complete_appendix_evaluation(self, record: SessionRecord, *, force: bool) -> SessionRecord:
+        """All snapshot items terminal → extension work, or straight to closing."""
+        session_id = record.session_id
+        if force:
+            return self._close_completed(record, force=True)
+        open_items = dropbox_module.pending(self, record)
+        if open_items:
+            raise StateError(
+                "cannot complete: appendix items still need both evaluations: "
+                + ", ".join(open_items),
+                code="appendix_unevaluated",
+            )
+        gates = {gate.gate_id: gate for gate in self.gates(session_id)}
+        outstanding = [
+            entry
+            for entry in dropbox_module.approved_extensions(self, session_id)
+            if entry["extension_id"] in gates
+            and gates[entry["extension_id"]].blocks_completion()
+        ]
+        if not outstanding:
+            return self._close_completed(record, force=False)
+        with db.transaction(self.conn):
+            record = self.get(session_id)
+            if record.is_terminal:
+                raise StateError(f"session is already {record.status}", code="session_finished")
+            if record.phase != dropbox_module.PHASE_EVALUATION:
+                raise StateError(
+                    f"the session already moved to {record.phase}",
+                    code="phase_advanced",
+                )
+            ordered = ", ".join(
+                f"{entry['extension_id']} (from {entry['drop_id']})" for entry in outstanding
+            )
+            self._update(session_id, phase=dropbox_module.PHASE_EXTENSION)
+            self._log(
+                record,
+                ev.SESSION_PHASE_ADVANCED,
+                {
+                    "phase": dropbox_module.PHASE_EXTENSION,
+                    "extensions": [entry["extension_id"] for entry in outstanding],
+                },
+            )
+            self._send_phase_task(
+                record,
+                source="extension_work",
+                content=(
+                    "Every appendix item has its disposition. The approved extensions "
+                    f"are now part of the work, in appendix order: {ordered}. Implement "
+                    "each one in the authorized worktree and record evidence on its "
+                    "extension gate exactly as you did for the main gates; the session "
+                    "closes when every gate passes."
+                ),
+            )
+        return self.get(session_id)
+
+    def _send_phase_task(self, record: SessionRecord, *, source: str, content: str) -> None:
+        """Wake the main pair for a phase's work.
+
+        Sent with the human credential and a durable ``human_direction``
+        marker, so the lead acts first and the reviewer is guaranteed the
+        following turn — the same discipline a human message enforces.
+        """
+        lead, reviewer = collaboration_pair(record.participants)
+        if lead is None or not record.room_id:
+            return
+        metadata: dict = {"source": source}
+        if reviewer is not None:
+            metadata["human_direction"] = {"lead": lead.name, "reviewer": reviewer.name}
+        self.broker.send(
+            record.room_id,
+            credential=self._human_credential(record),
+            draft=MessageDraft(
+                message_type="task",
+                target=lead.name,
+                metadata=metadata,
+                content=content,
+            ),
+        )
+
+    def _close_completed(self, record: SessionRecord, *, force: bool) -> SessionRecord:
+        """The terminal transition: close a verified session, preserve its record.
+
+        This is the only code path that ends a completed room — the
+        ``closing`` phase. It proves every required gate (main and
+        extension), refuses while any appendix item still owes its
+        disposition, closes the room so no more work can be accepted, and
+        writes a permanent human-readable delivery record. ``force`` waives
+        blocking gates and open appendix items, recorded on each.
 
         Validation and git work (change summary) run before the write
         transaction so the database lock is never held across subprocess
@@ -1030,18 +1234,8 @@ class SessionManager:
         transaction, so a racing ``stop`` and ``complete`` can never both
         finish the session and a forced waiver cannot outlive a failed finish.
         """
-        record = self.get(session_id)
-        if record.is_terminal:
-            raise StateError(f"session is already {record.status}", code="session_finished")
-        if not record.room_id:
-            raise StateError("cannot complete a session without a room", code="no_room")
-        gates = self.gates(session_id)
-        if not gates:
-            raise StateError(
-                "cannot complete a session with no acceptance gates defined",
-                code="no_gates",
-            )
-        report = summarize(gates)
+        session_id = record.session_id
+        report = summarize(self.gates(session_id))
         if not report["complete"]:
             if not force:
                 raise StateError(
@@ -1089,6 +1283,34 @@ class SessionManager:
                             "cannot complete: " + "; ".join(report["blockers"]),
                             code="gates_unsatisfied",
                         )
+                # Every appendix item owes an explicit disposition before the
+                # room may close — a capture that raced this close is caught
+                # here, under the same write lock capture takes.
+                open_items = [
+                    row["drop_id"]
+                    for row in self.conn.execute(
+                        "SELECT drop_id FROM session_drops WHERE session_id = ? "
+                        "AND disposition IS NULL ORDER BY rowid",
+                        (session_id,),
+                    )
+                ]
+                waived_items: list[str] = []
+                if open_items:
+                    if not force:
+                        hint = (
+                            " — complete again to begin the appendix evaluation"
+                            if record.phase == dropbox_module.PHASE_ORIGINAL
+                            else ""
+                        )
+                        raise StateError(
+                            "cannot complete: appendix items still need evaluation: "
+                            + ", ".join(open_items)
+                            + hint,
+                            code="appendix_unevaluated",
+                        )
+                    waived_items = dropbox_module.waive_pending_locked(
+                        self.conn, session_id, "Waived by the user at forced completion"
+                    )
                 markdown = changelog_module.render(
                     record,
                     gates,
@@ -1103,6 +1325,10 @@ class SessionManager:
                 )
                 write_private(changelog_path, markdown)
                 wrote_changelog = True
+
+                # Only ``closing`` invokes the terminal room-closing behavior;
+                # the flip and the close commit together.
+                self._update(session_id, phase=dropbox_module.PHASE_CLOSING)
 
                 # The broker owns terminal room state. Because it shares this
                 # connection, its stop is part of this same BEGIN IMMEDIATE
@@ -1136,6 +1362,7 @@ class SessionManager:
                         "final_changelog": str(changelog_path),
                         "commits": changes.get("commits", 0),
                         "waived_gates": waived,
+                        "waived_items": waived_items,
                     },
                 )
         except Exception:
@@ -1503,6 +1730,11 @@ class SessionManager:
             "activities": (room_status or {}).get("activities", []),
             "activity_entries": (room_status or {}).get("activity_entries", []),
             "gates": {"summary": report, "items": [g.to_dict() for g in gates]},
+            "dropbox": {
+                "phase": record.phase,
+                "summary": dropbox_module.summarize(self, session_id),
+                "items": dropbox_module.items(self, session_id),
+            },
             "participant_states": self.participant_states(session_id),
             "tests": (record.metadata or {}).get("last_test_run"),
             "test_command": self.detected_test_command(session_id),

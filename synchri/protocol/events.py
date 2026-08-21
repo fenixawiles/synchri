@@ -53,5 +53,9 @@ SESSION_ESCALATED = "session.escalated"
 SESSION_PERMISSION_DENIED = "session.permission_denied"
 SESSION_PERMISSION_APPROVED = "session.permission_approved"
 SESSION_TIMEBOX_EXTENDED = "session.timebox_extended"
+SESSION_PHASE_ADVANCED = "session.phase_advanced"
+SESSION_DROP_CAPTURED = "session.drop_captured"
+SESSION_DROP_UPDATED = "session.drop_updated"
+SESSION_DROP_EVALUATED = "session.drop_evaluated"
 
 ALL = [value for name, value in list(globals().items()) if name.isupper() and name != "ALL"]

@@ -103,6 +103,8 @@ class Api:
             ("POST", "approval"): self.approval,
             ("GET", "gates"): self.gates,
             ("POST", "gate"): self.update_gate,
+            ("GET", "dropbox"): self.dropbox,
+            ("POST", "dropbox/capture"): self.capture_drop,
             ("POST", "gates/preview"): self.preview_gates,
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
@@ -907,6 +909,37 @@ class Api:
         )
         return gate.to_dict()
 
+    def dropbox(self, query: dict, body: dict) -> dict:
+        """The side-task inbox: every item's lifecycle, in appendix order."""
+        from ..session import dropbox as dropbox_module
+
+        session_id = self._session_id(query)
+        record = self.manager.get(session_id)
+        return {
+            "phase": record.phase,
+            "frozen": record.phase != dropbox_module.PHASE_ORIGINAL,
+            "items": dropbox_module.items(self.manager, session_id),
+            "summary": dropbox_module.summarize(self.manager, session_id),
+        }
+
+    def capture_drop(self, query: dict, body: dict) -> dict:
+        """Capture a side task. The main agents are never interrupted.
+
+        Reconciliation happens inside the capture, so an idle room still gets
+        the item into the appendix exactly once.
+        """
+        from ..session import dropbox as dropbox_module
+
+        session_id = self._session_id(query, body)
+        item = dropbox_module.capture(
+            self.manager,
+            session_id,
+            body.get("prompt", ""),
+            title=body.get("title"),
+            skip_review=bool(body.get("skip_review")),
+        )
+        return {"item": item, **self.dropbox({"session": session_id}, {})}
+
     def run_tests(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)
         if body.get("command"):
@@ -980,10 +1013,16 @@ class Api:
             self.manager.stop(session_id, body.get("reason") or "stopped by the user")
             self.managed.cancel(session_id, reason="Stopping the session.")
         elif action == "complete":
-            # Validate and complete BEFORE touching the agents: a refused
-            # completion (unsatisfied gates) must leave the team running.
-            self.manager.complete(session_id, force=bool(body.get("force")))
-            self.managed.cancel(session_id, reason="Completing the session.")
+            # Validate and drive the phase machine BEFORE touching the agents:
+            # a refused completion (unsatisfied gates, unevaluated appendix
+            # items) must leave the team running. A non-terminal outcome is a
+            # phase transition — appendix evaluation or extension work — whose
+            # wake task the agents must be running to receive.
+            completed = self.manager.complete(session_id, force=bool(body.get("force")))
+            if completed.is_terminal:
+                self.managed.cancel(session_id, reason="Completing the session.")
+            else:
+                self.managed.resume(completed)
         elif action == "remove":
             self.broker.remove_participant(
                 record.room_id, body["participant"], credential=credential

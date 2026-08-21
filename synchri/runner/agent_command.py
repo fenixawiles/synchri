@@ -30,7 +30,7 @@ DEFAULT_TIMEOUT_SECONDS = 900.0
 #: Trailing control lines an agent may emit to steer the room.  Documented in
 #: docs/single-terminal.md and included in every generated prompt.
 _DIRECTIVE = re.compile(
-    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT|COMPLETE|APPROVAL)\s*:?\s*(?P<value>.*?)\s*$",
+    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT|COMPLETE|APPROVAL|DROP)\s*:?\s*(?P<value>.*?)\s*$",
     re.IGNORECASE,
 )
 
@@ -261,6 +261,7 @@ class Directives:
     status: str | None = None
     confidence: float | None = None
     gate_updates: list["GateUpdate"] = field(default_factory=list)
+    drop_evaluations: list["DropEvaluation"] = field(default_factory=list)
     complete_requested: bool = False
     approval_capability: str | None = None
     approval_request: str | None = None
@@ -277,6 +278,24 @@ class GateUpdate:
     evidence: list[str] = field(default_factory=list)
     tests: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
+
+
+#: Verdict spellings accepted from an agent; anything else is a warning, not a
+#: guess — an evaluation must never be recorded as the wrong verdict.
+_DROP_VERDICTS = {
+    "approve": "approve", "approved": "approve",
+    "decline": "decline", "declined": "decline",
+    "reject": "decline", "rejected": "decline",
+}
+
+
+@dataclass
+class DropEvaluation:
+    """One main role's judgment of a dropbox appendix item, from its turn."""
+
+    drop_id: str
+    verdict: str
+    rationale: str
 
 
 def parse_directives(text: str) -> tuple[str, Directives]:
@@ -338,6 +357,23 @@ def parse_directives(text: str) -> tuple[str, Directives]:
             if value:
                 field_name = {"EVIDENCE": "evidence", "TEST": "tests", "COMMIT": "commits"}[key]
                 getattr(directives.gate_updates[-1], field_name).append(value)
+        elif key == "DROP":
+            drop_id, separator, remainder = value.partition("|")
+            drop_id = drop_id.strip().upper()
+            verdict_text, _, rationale = remainder.partition("|") if separator else ("", "", "")
+            verdict = _DROP_VERDICTS.get(verdict_text.strip().lower())
+            if not drop_id:
+                directives.warnings.append("ignored a drop evaluation with no item id")
+                continue
+            if verdict is None:
+                directives.warnings.append(
+                    f"ignored the evaluation of {drop_id}: the verdict must be "
+                    f"approve or decline, got {verdict_text.strip()!r}"
+                )
+                continue
+            directives.drop_evaluations.append(
+                DropEvaluation(drop_id=drop_id, verdict=verdict, rationale=rationale.strip())
+            )
         elif key == "COMPLETE":
             directives.complete_requested = True
         elif key == "APPROVAL":

@@ -23,6 +23,7 @@ from ..broker import Broker, Credential
 from ..errors import SynchriError, ValidationError
 from ..models.enums import MessageType, ResponseStatus, RoomStatus, TurnState
 from ..models.envelope import MessageDraft
+from ..session import dropbox as dropbox_module
 from ..session.manager import SessionManager
 from . import recovery
 from .agent_command import AgentCommand, parse_directives
@@ -274,6 +275,7 @@ class Conductor:
             result.tool_events == 0
             and len(body.strip()) < 200
             and not directives.gate_updates
+            and not directives.drop_evaluations
             and not directives.to
             and not directives.handoff
             and not directives.complete_requested
@@ -327,6 +329,7 @@ class Conductor:
             # a pass.  Recording it first keeps a terse evidence report from
             # disappearing just because the agent had no prose to add.
             gate_updates = self._record_gate_updates(name, directives, warnings)
+            drop_evaluations = self._record_drop_evaluations(name, directives, warnings)
             low_signal = self._note_low_signal(name, result, body, directives)
 
             if directives.passed or not body.strip():
@@ -346,6 +349,8 @@ class Conductor:
                     outcome["low_signal"] = True
                 if gate_updates:
                     outcome["gate_updates"] = gate_updates
+                if drop_evaluations:
+                    outcome["drop_evaluations"] = drop_evaluations
                 if directives.complete_requested:
                     outcome["completion_requested"] = self._try_complete(name, warnings)
                 return outcome
@@ -387,6 +392,8 @@ class Conductor:
                 outcome["low_signal"] = True
             if gate_updates:
                 outcome["gate_updates"] = gate_updates
+            if drop_evaluations:
+                outcome["drop_evaluations"] = drop_evaluations
             if directives.complete_requested:
                 outcome["completion_requested"] = self._try_complete(name, warnings)
             return outcome
@@ -417,6 +424,41 @@ class Conductor:
                 saved.append(gate.to_dict())
             except SynchriError as exc:
                 warnings.append(f"{name}: could not update gate {update.gate_id}: {exc.message}")
+        return saved
+
+    def _record_drop_evaluations(self, name: str, directives, warnings: list[str]) -> list[dict]:
+        """Persist appendix evaluations the agent recorded in its reply.
+
+        The manager stays the authority: an evaluation outside the
+        ``appendix_evaluation`` phase, from an agent without a main role, or
+        approving an item that only carries a failure report is refused there
+        and surfaces here as a warning, never as silently recorded state.
+        """
+        if not directives.drop_evaluations or not self.session_id:
+            if directives.drop_evaluations:
+                warnings.append(
+                    "drop evaluations ignored: this room is not attached to a session"
+                )
+            return []
+        manager = SessionManager(self.broker)
+        saved = []
+        for evaluation in directives.drop_evaluations:
+            try:
+                saved.append(
+                    dropbox_module.evaluate(
+                        manager,
+                        self.session_id,
+                        evaluation.drop_id,
+                        actor=name,
+                        verdict=evaluation.verdict,
+                        rationale=evaluation.rationale,
+                    )
+                )
+            except SynchriError as exc:
+                warnings.append(
+                    f"{name}: could not record the evaluation of "
+                    f"{evaluation.drop_id}: {exc.message}"
+                )
         return saved
 
     def _try_complete(self, name: str, warnings: list[str]) -> bool:
@@ -503,6 +545,13 @@ class Conductor:
         if guidance:
             parts.extend(["--- session agreement and your role ---", guidance.rstrip(), ""])
 
+        # The side-task appendix renders after the contract and specification,
+        # never inside them: the canonical spec's bytes and digest stay
+        # untouched, so appendix items can never silently become spec text.
+        appendix = self._appendix_section()
+        if appendix:
+            parts.extend([appendix, ""])
+
         # ``SYNCHRI_CLI`` is a shell fragment constructed by the managed
         # launcher (and may be ``'/Applications/…/Synchri'``).  It is only
         # rendered into an instructional prompt; it is never executed here.
@@ -540,6 +589,20 @@ class Conductor:
             ]
         )
         return "\n".join(parts)
+
+    def _appendix_section(self) -> str | None:
+        """The dropbox appendix for this room's session, phase-appropriate.
+
+        Best-effort: a prompt must still build for a room that has no session
+        or whose session vanished mid-run.
+        """
+        if not self.session_id:
+            return None
+        try:
+            manager = SessionManager(self.broker)
+            return dropbox_module.render_appendix(manager, manager.get(self.session_id))
+        except SynchriError:
+            return None
 
 
 def _response_status(requested: str | None, is_task: bool) -> str | None:

@@ -21,6 +21,7 @@ from ..broker import Broker, Credential
 from ..cli import session as session_files
 from ..errors import SynchriError, ValidationError
 from ..models.envelope import MessageDraft
+from ..session import dropbox
 from ..session.modes import KNOWN_RUNTIMES, managed_command, plan_launch_status, stream_format_for
 from . import recovery
 from .agent_command import AgentCommand, terminate_process_group
@@ -660,9 +661,20 @@ class ManagedRunnerRegistry:
         return None
 
     def _observe_turn(self, manager, record: "SessionRecord", event: str, payload: dict) -> None:
-        """Registry-side turn observation: prove resume at first real recovery."""
+        """Registry-side turn observation: reconcile the dropbox, prove resume.
+
+        Dropbox reconciliation runs after each completed main-agent turn and
+        before the conductor activates the next one — with the on-capture
+        hook, that is the coordinator the scheduler deliberately does not
+        provide. The appendix constraint makes re-running it free.
+        """
         if event != "agent.returned":
             return
+        if payload.get("returncode") == 0 and not payload.get("timed_out") and not payload.get("cancelled"):
+            try:
+                dropbox.reconcile(manager, record.session_id)
+            except Exception:  # pragma: no cover - supervision must not break the run
+                pass
         key = (record.session_id, payload.get("participant"))
         if key not in self._pending_resume:
             return

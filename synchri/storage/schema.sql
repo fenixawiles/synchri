@@ -422,9 +422,12 @@ CREATE TABLE IF NOT EXISTS session_drops (
     proposal_digest TEXT,
     review          TEXT,
     -- evaluation: both main roles, recorded individually; both approving
-    -- means approved, any non-approval means declined with both rationales
+    -- means approved, any non-approval means declined with both rationales.
+    -- 'waived' is the human override at a forced completion — an explicit
+    -- recorded disposition, never a silent drop.
     evaluations     TEXT NOT NULL DEFAULT '{}',
-    disposition     TEXT CHECK (disposition IN (NULL, 'approved', 'declined')),
+    disposition     TEXT CHECK (disposition IS NULL
+                                OR disposition IN ('approved', 'declined', 'waived')),
     extension_id    TEXT,
     PRIMARY KEY (session_id, drop_id)
 );

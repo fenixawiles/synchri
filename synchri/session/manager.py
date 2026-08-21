@@ -37,6 +37,7 @@ from ..storage import db
 from . import contract as contract_module
 from . import changelog as changelog_module
 from . import dropbox as dropbox_module
+from . import planning as planning_module
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
@@ -129,6 +130,11 @@ class SessionRecord:
             base_branch=self.base_branch,
             repo_root=self.repo_root,
         )
+
+    @property
+    def planning_workspace(self) -> dict:
+        """The disposable planning workspace entry, for planning sessions."""
+        return (self.metadata or {}).get("planning_workspace") or {}
 
     @property
     def is_terminal(self) -> bool:
@@ -225,41 +231,81 @@ class SessionManager:
         if deadline and not policy.supports_deadline:
             raise ValidationError(f"{policy.label} does not use deadlines")
 
+        idea = ((metadata or {}).get("idea") or "").strip()
+        if policy.planning:
+            if spec is not None:
+                raise ValidationError(
+                    "Planning Mode takes no product specification — articulate the "
+                    "idea instead; the approved plan becomes the specification"
+                )
+            if not idea:
+                raise ValidationError(
+                    "articulate the idea; the planner turns it into the first plan draft"
+                )
+            # Capability-based isolation, never contract-only: Planning Mode is
+            # offered only on runtimes whose adapter declares the read-only
+            # planning workspace. Others are unavailable, not downgraded.
+            from .modes import planning_workspace_supported
+
+            for plan in plans:
+                if not planning_workspace_supported(plan.runtime):
+                    raise ValidationError(
+                        f"{plan.name} ({plan.runtime}) does not support the read-only "
+                        "planning workspace; choose a supported runtime"
+                    )
+
         grants = policy.apply_forced_denials(permissions or PermissionSet.defaults())
         rules = escalation or EscalationPolicy()
 
-        # A fresh isolated worktree is the default. A user may deliberately
-        # select an existing non-primary worktree for a follow-up session.
-        # Both paths use the same validation; neither can target the primary
-        # checkout.
-        created_worktree = not bool(existing_worktree_path)
-        if existing_worktree_path:
-            selected = Path(existing_worktree_path).expanduser().resolve()
-            tree = worktree_module.validate(status.root, selected, selected.name, branch)
-        else:
-            tree = worktree_module.create(
-                status.root,
-                branch,
-                mode=policy.mode.value,
-                name=worktree_name,
-                parent_dir=worktree_parent,
-            )
-
         session_id = new_id("sess")
+        tree = None
+        created_worktree = False
+        workspace_entry = None
+        if policy.planning:
+            # A disposable planning workspace instead of a worktree: a local
+            # clone anchored to the branch tip, remotes removed. It is never
+            # reused for coordination.
+            workspace_path, inspection_sha = planning_module.create_workspace(
+                self.broker.workspace.home, status.root, branch, session_id
+            )
+            workspace_entry = {"path": workspace_path, "inspection_sha": inspection_sha}
+        else:
+            # A fresh isolated worktree is the default. A user may deliberately
+            # select an existing non-primary worktree for a follow-up session.
+            # Both paths use the same validation; neither can target the primary
+            # checkout.
+            created_worktree = not bool(existing_worktree_path)
+            if existing_worktree_path:
+                selected = Path(existing_worktree_path).expanduser().resolve()
+                tree = worktree_module.validate(status.root, selected, selected.name, branch)
+            else:
+                tree = worktree_module.create(
+                    status.root,
+                    branch,
+                    mode=policy.mode.value,
+                    name=worktree_name,
+                    parent_dir=worktree_parent,
+                )
+
         try:
             room = self.broker.create_room(
                 name,
                 agents=[p.name for p in plans],
-                goal=(spec.text.strip().splitlines()[0][:200] if spec else None),
+                goal=(
+                    idea.splitlines()[0][:200] if policy.planning
+                    else (spec.text.strip().splitlines()[0][:200] if spec else None)
+                ),
                 max_consecutive_agent_turns=policy.max_consecutive_agent_turns,
-                workspace_root=tree.path,
+                workspace_root=workspace_entry["path"] if workspace_entry else tree.path,
                 invite_ttl_seconds=0,  # invites live as long as the session room
             )
         except Exception:
             # Only a brand-new tree is ours to clean up. A selected existing
             # worktree remains exactly where the user left it.
-            if created_worktree:
+            if created_worktree and tree is not None:
                 worktree_module.remove(tree, force=True, delete_branch=True)
+            if workspace_entry:
+                planning_module.remove_workspace(workspace_entry["path"])
             raise
 
         now = utc_now()
@@ -275,24 +321,33 @@ class SessionManager:
             repo_name=status.name,
             repo_remote=status.remote,
             base_branch=branch,
-            worktree_name=tree.name,
-            worktree_path=tree.path,
-            worktree_branch=tree.branch,
+            worktree_name=tree.name if tree else None,
+            worktree_path=tree.path if tree else None,
+            worktree_branch=tree.branch if tree else None,
             permissions=grants,
             spec=spec,
             deadline=deadline,
             escalation=rules,
             metadata={
-                **(metadata or {}),
+                **{k: v for k, v in (metadata or {}).items() if k != "idea"},
                 "invites": room["invites"],
                 "observer_token": room["observer_token"],
                 "human": room["human"],
                 "primary_tree_dirty": status.is_dirty,
                 "worktree_strategy": "new" if created_worktree else "existing",
+                **({"planning_workspace": workspace_entry} if workspace_entry else {}),
             },
             participants=plans,
         )
         self._insert(record)
+        if workspace_entry:
+            # The durable plan: the idea verbatim, the inspected baseline, and
+            # the loop state the review will drive.
+            planning_module.initialize(
+                self, record, idea=idea,
+                workspace_path=workspace_entry["path"],
+                inspection_sha=workspace_entry["inspection_sha"],
+            )
         # Propose gates from the spec so the user does not restate their own
         # acceptance criteria. They land PENDING with no evidence -- a proposal,
         # not an authority.
@@ -303,7 +358,8 @@ class SessionManager:
         self._log(
             record,
             ev.SESSION_CREATED,
-            {"mode": record.mode, "worktree": tree.name,
+            {"mode": record.mode,
+             "worktree": tree.name if tree else "planning-workspace",
              "gates_detected": len(self.gates(session_id))},
         )
         return record
@@ -317,13 +373,30 @@ class SessionManager:
         record = self.get(session_id)
         if record.is_terminal:
             raise StateError(f"session is {record.status}", code="session_finished")
-        if not record.worktree:
-            raise StateError("a session needs its worktree before a contract", code="no_worktree")
-        if not worktree_module.exists(record.worktree):
-            raise StateError(
-                f"the authorized worktree is missing: {record.worktree_path}",
-                code="worktree_missing",
+        if record.policy.planning:
+            workspace = record.planning_workspace
+            if not workspace.get("path") or not Path(workspace["path"]).exists():
+                raise StateError(
+                    "the planning workspace is missing", code="planning_workspace_missing"
+                )
+            # The contract's authorized-workspace section points at the
+            # disposable clone; the Worktree here is descriptive fields only.
+            contract_tree = Worktree(
+                name="planning-workspace",
+                path=workspace["path"],
+                branch=f"(read-only planning at {(workspace.get('inspection_sha') or '')[:12]})",
+                base_branch=record.base_branch,
+                repo_root=record.repo_root,
             )
+        else:
+            if not record.worktree:
+                raise StateError("a session needs its worktree before a contract", code="no_worktree")
+            if not worktree_module.exists(record.worktree):
+                raise StateError(
+                    f"the authorized worktree is missing: {record.worktree_path}",
+                    code="worktree_missing",
+                )
+            contract_tree = record.worktree
 
         revision = record.contract_revision + 1
         created_at = utc_now()
@@ -335,7 +408,7 @@ class SessionManager:
             repo_root=record.repo_root,
             repo_remote=record.repo_remote,
             base_branch=record.base_branch,
-            worktree=record.worktree,
+            worktree=contract_tree,
             participants=record.participants,
             permissions=record.permissions,
             spec=record.spec,
@@ -484,12 +557,20 @@ class SessionManager:
         if record.is_terminal:
             raise StateError(f"session is {record.status}", code="session_finished")
 
-        # 1. worktree exists and is not the primary tree
-        if not record.worktree:
-            raise StateError("no authorized worktree for this session", code="no_worktree")
-        worktree_module.validate(
-            record.repo_root, record.worktree_path, record.worktree_name, record.base_branch
-        )
+        # 1. the authorized workspace exists — a validated non-primary worktree,
+        # or the disposable planning workspace for a planning session
+        if record.policy.planning:
+            workspace = record.planning_workspace
+            if not workspace.get("path") or not Path(workspace["path"]).exists():
+                raise StateError(
+                    "the planning workspace is missing", code="planning_workspace_missing"
+                )
+        else:
+            if not record.worktree:
+                raise StateError("no authorized worktree for this session", code="no_worktree")
+            worktree_module.validate(
+                record.repo_root, record.worktree_path, record.worktree_name, record.base_branch
+            )
         # 2. contract issued and unanimously acknowledged at the current revision
         if record.contract_revision < 1:
             raise StateError("no contract has been issued yet", code="no_contract")
@@ -559,7 +640,21 @@ class SessionManager:
             if reviewer
             else "Then continue with the first evidence checkpoint."
         )
-        if record.mode == "review_audit":
+        if record.policy.planning:
+            plan = planning_module.get_plan(self, record.session_id) or {}
+            opening = (
+                "Begin Planning Mode. Read the human's idea articulation below and "
+                "inspect the repository copy in the planning workspace. Produce "
+                "PLAN-DRAFT revision 1 before the reviewer sees anything: write the "
+                "complete ordered implementation plan to PLAN.md at the workspace "
+                "root, include an '## Acceptance criteria' section with explicit "
+                "gate ids, then record the revision by ending your reply with "
+                "SYNCHRI-PLAN-SUBMIT: <one-line summary>. The review loop and its "
+                "budgets are described in your contract.\n\n"
+                "--- the idea, verbatim ---\n"
+                + (plan.get("idea") or "")
+            )
+        elif record.mode == "review_audit":
             opening = (
                 "Begin the audit. Read the target, the canonical criteria, and the authorized "
                 "worktree. Publish the first evidence-backed review approach: scope, likely risks, "
@@ -1488,6 +1583,8 @@ class SessionManager:
         # Post-commit, best-effort disk cleanup; the durable rows are gone.
         for scratch_path, scratch_branch in scratch_trees:
             worktree_module.remove_scratch(record.repo_root, scratch_path, scratch_branch)
+        # A planning workspace is disposable by definition: no push check.
+        planning_module.remove_workspace(record.planning_workspace.get("path"))
         worktree_removed = False
         if remove_tree:
             try:
@@ -1749,6 +1846,11 @@ class SessionManager:
                 "summary": dropbox_module.summarize(self, session_id),
                 "items": dropbox_module.items(self, session_id),
             },
+            "plan": (
+                planning_module.payload(self, session_id)
+                if record.policy.planning and planning_module.get_plan(self, session_id)
+                else None
+            ),
             "participant_states": self.participant_states(session_id),
             "tests": (record.metadata or {}).get("last_test_run"),
             "test_command": self.detected_test_command(session_id),

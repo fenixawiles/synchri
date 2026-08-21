@@ -107,6 +107,8 @@ class Api:
             ("POST", "gate"): self.update_gate,
             ("GET", "dropbox"): self.dropbox,
             ("POST", "dropbox/capture"): self.capture_drop,
+            ("GET", "plan"): self.plan,
+            ("POST", "plan/control"): self.plan_control,
             ("POST", "gates/preview"): self.preview_gates,
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
@@ -368,6 +370,9 @@ class Api:
         draft = self._draft(key)
         if not draft.is_ready:
             raise ValidationError("; ".join(draft.blocking_problems()))
+        # Planning Mode's spec on-ramp: the wizard's text is the user's idea
+        # articulation, stored verbatim on the plan — not a ProductSpec.
+        planning = bool(draft.policy and draft.policy.planning)
         record = self.manager.create(
             name=draft.name or "Synchri session",
             mode=draft.mode,
@@ -375,12 +380,13 @@ class Api:
             base_branch=draft.base_branch,
             participants=draft.participants,
             permissions=draft.permissions,
-            spec=draft.spec,
+            spec=None if planning else draft.spec,
             deadline=draft.deadline,
             escalation=draft.escalation,
             worktree_parent=draft.worktree_parent,
             worktree_name=draft.worktree_name,
             existing_worktree_path=draft.existing_worktree_path,
+            metadata={"idea": draft.spec.text} if planning and draft.spec else None,
         )
         document = self.manager.issue_contract(record.session_id, reason="initial contract")
         if body.get("save_preset"):
@@ -568,6 +574,9 @@ class Api:
         }
         acknowledgments = self.manager.acknowledgment_state(record.session_id)
         worktree = record.worktree
+        workdir = worktree.path if worktree else (
+            record.planning_workspace.get("path") or record.repo_root
+        )
         participant_states = self.manager.participant_states(record.session_id)
         # Stored connection outcomes gate the paste-free presentation; the
         # managed registry stays the mechanical authority when Start is hit.
@@ -584,7 +593,7 @@ class Api:
             plan_view = plan.to_dict()
             launch_status = plan_launch_status(plan)
             join_command = (
-                f"cd {shlex.quote(worktree.path)} && {cli} join {invite['token']} "
+                f"cd {shlex.quote(workdir)} && {cli} join {invite['token']} "
                 f"--name {shlex.quote(plan.name)}"
             )
             setup_prompt = "\n".join(
@@ -635,7 +644,7 @@ class Api:
             "contract": document.to_dict(),
             "launch": {
                 "room_id": record.room_id,
-                "worktree_path": worktree.path if worktree else None,
+                "worktree_path": workdir,
                 "agents": agents,
                 "joined_count": sum(agent["joined"] for agent in agents),
                 "acknowledgments": acknowledgments,
@@ -964,6 +973,40 @@ class Api:
             "investigating": investigating,
             **self.dropbox({"session": session_id}, {}),
         }
+
+    def plan(self, query: dict, body: dict) -> dict:
+        """The PLAN-NNN artifact and loop state for a planning session."""
+        from ..session import planning as planning_module
+
+        session_id = self._session_id(query)
+        payload = planning_module.payload(self.manager, session_id)
+        if query.get("revision"):
+            payload["revision_body"] = planning_module.revision_body(
+                self.manager, session_id, int(query["revision"])
+            )
+        return payload
+
+    def plan_control(self, query: dict, body: dict) -> dict:
+        """The human's planning controls: reopen, waive, resume the budget."""
+        from ..session import planning as planning_module
+
+        session_id = self._session_id(query, body)
+        action = body.get("action")
+        if action == "reopen":
+            payload = planning_module.reopen(self.manager, session_id, body.get("note", ""))
+        elif action == "waive_objection":
+            payload = planning_module.waive_objection(
+                self.manager, session_id, body.get("objection_id", ""), body.get("note", "")
+            )
+        elif action == "resume_budget":
+            payload = planning_module.resume_budget(self.manager, session_id)
+        else:
+            raise ValidationError(f"unknown plan control {action!r}")
+        # Every control queues work for the agents; pick the room back up.
+        record = self.manager.get(session_id)
+        if record.status == "active":
+            self.managed.resume(record)
+        return payload
 
     def run_tests(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)

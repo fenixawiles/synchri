@@ -30,7 +30,9 @@ DEFAULT_TIMEOUT_SECONDS = 900.0
 #: Trailing control lines an agent may emit to steer the room.  Documented in
 #: docs/single-terminal.md and included in every generated prompt.
 _DIRECTIVE = re.compile(
-    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT|COMPLETE|APPROVAL|DROP)\s*:?\s*(?P<value>.*?)\s*$",
+    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT"
+    r"|COMPLETE|APPROVAL|DROP|PLAN[-_]SUBMIT|PLAN[-_]REVIEW|OBJECTION[-_]RESOLVED"
+    r"|OBJECTION|FORK)\s*:?\s*(?P<value>.*?)\s*$",
     re.IGNORECASE,
 )
 
@@ -265,6 +267,15 @@ class Directives:
     complete_requested: bool = False
     approval_capability: str | None = None
     approval_request: str | None = None
+    #: Planning Mode: a submitted revision's one-line summary (the body is
+    #: read from PLAN.md in the planning workspace), reviewer objections as
+    #: (classification, text), planner dispositions as (objection_id, text),
+    #: recorded forks, and the reviewer's closing (verdict, note).
+    plan_submitted: str | None = None
+    objections: list[tuple[str, str]] = field(default_factory=list)
+    objection_resolutions: list[tuple[str, str]] = field(default_factory=list)
+    forks: list[str] = field(default_factory=list)
+    plan_review: tuple[str, str] | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -374,6 +385,44 @@ def parse_directives(text: str) -> tuple[str, Directives]:
             directives.drop_evaluations.append(
                 DropEvaluation(drop_id=drop_id, verdict=verdict, rationale=rationale.strip())
             )
+        elif key in {"PLAN-SUBMIT", "PLAN_SUBMIT"}:
+            directives.plan_submitted = value
+        elif key in {"PLAN-REVIEW", "PLAN_REVIEW"}:
+            verdict_text, _, note = value.partition("|")
+            verdict = verdict_text.strip().lower()
+            if verdict in {"approve", "approved"}:
+                directives.plan_review = ("approve", note.strip())
+            elif verdict in {"revise", "reject", "rejected", "revision"}:
+                directives.plan_review = ("revise", note.strip())
+            else:
+                directives.warnings.append(
+                    f"ignored the plan review: the verdict must be approve or revise, "
+                    f"got {verdict_text.strip()!r}"
+                )
+        elif key == "OBJECTION":
+            classification_text, separator, text = value.partition("|")
+            classification = classification_text.strip().lower()
+            if not separator or classification not in {"blocking", "nonblocking", "advisory"}:
+                directives.warnings.append(
+                    "ignored an objection: use SYNCHRI-OBJECTION: "
+                    f"blocking|nonblocking|advisory | <text>, got {value[:80]!r}"
+                )
+            elif not text.strip():
+                directives.warnings.append("ignored an objection with no text")
+            else:
+                directives.objections.append((classification, text.strip()))
+        elif key in {"OBJECTION-RESOLVED", "OBJECTION_RESOLVED"}:
+            objection_id, separator, disposition = value.partition("|")
+            objection_id = objection_id.strip().upper()
+            if not objection_id:
+                directives.warnings.append("ignored a resolution with no objection id")
+            else:
+                directives.objection_resolutions.append((objection_id, disposition.strip()))
+        elif key == "FORK":
+            if value.strip():
+                directives.forks.append(value.strip())
+            else:
+                directives.warnings.append("ignored a fork with no description")
         elif key == "COMPLETE":
             directives.complete_requested = True
         elif key == "APPROVAL":

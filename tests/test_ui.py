@@ -186,7 +186,7 @@ def test_broker_errors_come_back_as_structured_json(ui):
 
 def test_bootstrap_gives_the_app_everything_it_needs(ui):
     boot = call(ui, "/api/bootstrap")
-    assert [m["mode"] for m in boot["modes"]] == ["long_horizon"]
+    assert [m["mode"] for m in boot["modes"]] == ["long_horizon", "planning"]
     assert any(c["key"] == "git.push" for g in boot["permissions"] for c in g["capabilities"])
     assert boot["sessions"] == [] and "workspace" in boot
     assert boot["github"]["authenticated"] is False

@@ -168,6 +168,13 @@ def capture(
         "session.drop_captured",
         {"drop_id": drop_id, "title": heading, "skip_review": bool(skip_review)},
     )
+    if record.policy.planning:
+        # Composition with Planning Mode: an item captured during planning is
+        # an additional reviewed planning consideration — and it invalidates
+        # PLAN-READY, forcing a new revision and re-review.
+        from . import planning as planning_module
+
+        planning_module.note_capture(manager, manager.get(session_id), drop_id)
     return item(manager, session_id, drop_id)
 
 
@@ -738,7 +745,16 @@ def render_appendix(manager: "SessionManager", record: "SessionRecord") -> str |
     if not entries:
         return None
     lines: list[str] = ["--- appendix: side-task dropbox (additional, not optional) ---"]
-    if record.phase == PHASE_ORIGINAL:
+    if record.phase == PHASE_ORIGINAL and record.policy.planning:
+        lines.append(
+            "The human captured additional considerations for the plan. Each is a "
+            "reviewed planning consideration: fold it into PLAN.md — or record "
+            "explicitly why it does not change the plan — before PLAN-READY."
+        )
+        for entry in entries:
+            lines.append(f"  {entry['drop_id']} [{entry['status']}] {entry['title']}")
+            lines.append(f"    {_excerpt(entry['prompt'], 300)}")
+    elif record.phase == PHASE_ORIGINAL:
         lines.append(
             "The human captured side tasks. Each will be explicitly evaluated after the "
             "original specification is complete. They are NOT part of the canonical "

@@ -21,7 +21,7 @@ from ..broker import Broker, Credential
 from ..cli import session as session_files
 from ..errors import SynchriError, ValidationError
 from ..models.envelope import MessageDraft
-from ..session import dropbox
+from ..session import dropbox, planning
 from ..session.modes import KNOWN_RUNTIMES, managed_command, plan_launch_status, stream_format_for
 from . import recovery
 from .agent_command import AgentCommand, terminate_process_group
@@ -670,9 +670,24 @@ class ManagedRunnerRegistry:
         """
         if event != "agent.returned":
             return
-        if payload.get("returncode") == 0 and not payload.get("timed_out") and not payload.get("cancelled"):
+        completed = (
+            payload.get("returncode") == 0
+            and not payload.get("timed_out")
+            and not payload.get("cancelled")
+        )
+        if completed:
             try:
                 dropbox.reconcile(manager, record.session_id)
+            except Exception:  # pragma: no cover - supervision must not break the run
+                pass
+        if record.mode == "planning":
+            # Defense-in-depth after every turn: the planning workspace's Git
+            # state is verified (and restored) regardless of how the turn
+            # ended; only completed invocations spend the turn budget.
+            try:
+                planning.verify_workspace(manager, record)
+                if completed:
+                    planning.count_turn(manager, record)
             except Exception:  # pragma: no cover - supervision must not break the run
                 pass
         key = (record.session_id, payload.get("participant"))
@@ -755,10 +770,13 @@ class ManagedRunnerRegistry:
     def _build_agent(
         self, record: "SessionRecord", plan, command: str, *, plain: bool = False
     ) -> AgentCommand:
-        agent = AgentCommand.parse(
-            f"{plan.name}={command}",
-            cwd=record.worktree.path if record.worktree else None,
+        # A planning session's agents run inside the disposable planning
+        # workspace — the working directory is part of the isolation.
+        workdir = (
+            record.worktree.path if record.worktree
+            else record.planning_workspace.get("path")
         )
+        agent = AgentCommand.parse(f"{plan.name}={command}", cwd=workdir)
         agent.env.update(
             {
                 "SYNCHRI_HOME": str(self.workspace.home),

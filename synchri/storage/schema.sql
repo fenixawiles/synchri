@@ -466,3 +466,61 @@ CREATE TABLE IF NOT EXISTS runtime_connections (
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
+
+-- v6: Planning Mode. One plan per planning session, produced by a planner and
+-- an adversarial plan reviewer working in a disposable read-only planning
+-- workspace anchored to inspection_sha. The plan is durable, revisioned, and
+-- immutable once approved; approval promotes it into a new coordination
+-- session and never rewrites it retroactively.
+CREATE TABLE IF NOT EXISTS session_plans (
+    session_id     TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+    plan_id        TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'drafting'
+                       CHECK (status IN ('drafting', 'awaiting_review', 'under_revision',
+                                         'ready', 'needs_human_resolution', 'approved')),
+    -- the human's idea articulation, verbatim — the spec on-ramp
+    idea           TEXT NOT NULL,
+    revision       INTEGER NOT NULL DEFAULT 0,
+    inspection_sha TEXT NOT NULL,
+    source_branch  TEXT NOT NULL,
+    workspace_path TEXT NOT NULL,
+    -- budgets: 24 agent turns, 6 revisions, 60 minutes — whichever first —
+    -- with one user-authorized resume; exhaustion goes to the human.
+    turns_used     INTEGER NOT NULL DEFAULT 0,
+    resumes_used   INTEGER NOT NULL DEFAULT 0,
+    ready_at       TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+-- Every submitted plan revision, verbatim. The final artifact distinguishes
+-- the original proposed plan from changes introduced through review.
+CREATE TABLE IF NOT EXISTS session_plan_revisions (
+    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    revision   INTEGER NOT NULL,
+    summary    TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL,
+    author     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, revision)
+);
+
+-- Reviewer objections and planner-recorded forks, with their dispositions.
+-- Open blocking objections and open forks prevent PLAN-READY and approval.
+CREATE TABLE IF NOT EXISTS session_plan_objections (
+    session_id        TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    objection_id      TEXT NOT NULL,
+    classification    TEXT NOT NULL
+                          CHECK (classification IN ('blocking', 'nonblocking', 'advisory', 'fork')),
+    text              TEXT NOT NULL,
+    raised_by         TEXT NOT NULL,
+    raised_revision   INTEGER NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'open'
+                          CHECK (status IN ('open', 'resolved', 'waived')),
+    disposition       TEXT,
+    resolved_by       TEXT,
+    resolved_revision INTEGER,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (session_id, objection_id)
+);

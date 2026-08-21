@@ -24,6 +24,7 @@ from ..errors import SynchriError, ValidationError
 from ..models.enums import MessageType, ResponseStatus, RoomStatus, TurnState
 from ..models.envelope import MessageDraft
 from ..session import dropbox as dropbox_module
+from ..session import planning as planning_module
 from ..session.manager import SessionManager
 from . import recovery
 from .agent_command import AgentCommand, parse_directives
@@ -330,6 +331,7 @@ class Conductor:
             # disappearing just because the agent had no prose to add.
             gate_updates = self._record_gate_updates(name, directives, warnings)
             drop_evaluations = self._record_drop_evaluations(name, directives, warnings)
+            plan_actions = self._record_planning(name, directives, warnings)
             low_signal = self._note_low_signal(name, result, body, directives)
 
             if directives.passed or not body.strip():
@@ -351,6 +353,8 @@ class Conductor:
                     outcome["gate_updates"] = gate_updates
                 if drop_evaluations:
                     outcome["drop_evaluations"] = drop_evaluations
+                if plan_actions:
+                    outcome["planning"] = plan_actions
                 if directives.complete_requested:
                     outcome["completion_requested"] = self._try_complete(name, warnings)
                 return outcome
@@ -394,6 +398,8 @@ class Conductor:
                 outcome["gate_updates"] = gate_updates
             if drop_evaluations:
                 outcome["drop_evaluations"] = drop_evaluations
+            if plan_actions:
+                outcome["planning"] = plan_actions
             if directives.complete_requested:
                 outcome["completion_requested"] = self._try_complete(name, warnings)
             return outcome
@@ -460,6 +466,33 @@ class Conductor:
                     f"{evaluation.drop_id}: {exc.message}"
                 )
         return saved
+
+    def _record_planning(self, name: str, directives, warnings: list[str]) -> list[dict]:
+        """Apply planning directives; the planning module stays the authority."""
+        has_any = bool(
+            directives.plan_submitted is not None
+            or directives.plan_review is not None
+            or directives.objections
+            or directives.objection_resolutions
+            or directives.forks
+        )
+        if not has_any:
+            return []
+        if not self.session_id:
+            warnings.append("planning directives ignored: this room is not attached to a session")
+            return []
+        manager = SessionManager(self.broker)
+        try:
+            record = manager.get(self.session_id)
+            if not record.policy.planning:
+                warnings.append(
+                    f"{name}: planning directives ignored — this is not a planning session"
+                )
+                return []
+            return planning_module.handle_turn(manager, record, name, directives, warnings)
+        except SynchriError as exc:
+            warnings.append(f"{name}: could not record planning state: {exc.message}")
+            return []
 
     def _try_complete(self, name: str, warnings: list[str]) -> bool:
         """A Primary Builder may request completion; manager remains the authority."""
@@ -545,6 +578,13 @@ class Conductor:
         if guidance:
             parts.extend(["--- session agreement and your role ---", guidance.rstrip(), ""])
 
+        # The live planning state — plan status, open objections, the verbatim
+        # idea, budgets — so a planning turn always sees the durable loop, not
+        # its own memory of it.
+        planning = self._planning_section()
+        if planning:
+            parts.extend([planning, ""])
+
         # The side-task appendix renders after the contract and specification,
         # never inside them: the canonical spec's bytes and digest stay
         # untouched, so appendix items can never silently become spec text.
@@ -601,6 +641,19 @@ class Conductor:
         try:
             manager = SessionManager(self.broker)
             return dropbox_module.render_appendix(manager, manager.get(self.session_id))
+        except SynchriError:
+            return None
+
+    def _planning_section(self) -> str | None:
+        """The planning loop's durable state, for planning sessions only."""
+        if not self.session_id:
+            return None
+        try:
+            manager = SessionManager(self.broker)
+            record = manager.get(self.session_id)
+            if not record.policy.planning:
+                return None
+            return planning_module.render_status(manager, record)
         except SynchriError:
             return None
 

@@ -15,7 +15,6 @@ The invariants under test, in code terms:
 from __future__ import annotations
 
 import subprocess
-import sys
 
 import pytest
 
@@ -24,7 +23,6 @@ from synchri.runner.agent_command import AgentCommand, parse_directives
 from synchri.runner.conductor import Conductor
 from synchri.session import dropbox, planning
 from synchri.session.contract import ACK_TOKEN
-from synchri.session.manager import SessionManager
 from synchri.session.modes import (
     ParticipantPlan,
     list_modes,

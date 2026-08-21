@@ -45,7 +45,7 @@ from ..models.envelope import MessageDraft
 from ..storage import db
 from . import worktree as worktree_module
 from .gates import Gate
-from .modes import ParticipantPlan, Role, collaboration_pair, planning_workspace_supported
+from .modes import ParticipantPlan, Role, collaboration_pair
 from .spec import ProductSpec
 
 if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only

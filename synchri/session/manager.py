@@ -1465,6 +1465,18 @@ class SessionManager:
         else:
             worktree_note = "no worktree on disk"
 
+        # Ancillary scratch trees and branches are ephemeral by contract:
+        # session deletion always releases them, wherever retention stood.
+        scratch_trees = [
+            (row["scratch_path"], row["scratch_branch"])
+            for row in self.conn.execute(
+                "SELECT scratch_path, scratch_branch FROM session_drops "
+                "WHERE session_id = ? AND (scratch_path IS NOT NULL "
+                "OR scratch_branch IS NOT NULL)",
+                (session_id,),
+            )
+        ]
+
         with db.transaction(self.conn):
             self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             if record.room_id:
@@ -1474,6 +1486,8 @@ class SessionManager:
             )
 
         # Post-commit, best-effort disk cleanup; the durable rows are gone.
+        for scratch_path, scratch_branch in scratch_trees:
+            worktree_module.remove_scratch(record.repo_root, scratch_path, scratch_branch)
         worktree_removed = False
         if remove_tree:
             try:

@@ -34,6 +34,7 @@ from ..session.modes import (
 from ..session.permissions import PermissionSet, permission_profile, permission_profiles
 from ..session.spec import ProductSpec
 from ..storage import dao
+from ..runner import ancillary as ancillary_module
 from ..runner import doctor as doctor_module
 from ..runner.managed import ManagedRunnerRegistry
 
@@ -55,6 +56,7 @@ class Api:
         self.manager = manager
         self.managed = managed or ManagedRunnerRegistry(broker.workspace)
         self.connections = doctor_module.ConnectionTester(broker.workspace)
+        self.ancillary = ancillary_module.AncillaryRunner(broker.workspace)
         # ``synchri ui`` is normally launched from the repository being worked
         # on.  Keeping that small piece of context makes the default path a
         # room launch, not a repository-discovery exercise.  The draft still
@@ -938,7 +940,30 @@ class Api:
             title=body.get("title"),
             skip_review=bool(body.get("skip_review")),
         )
-        return {"item": item, **self.dropbox({"session": session_id}, {})}
+        # The scout starts in parallel, off the critical path — but only for
+        # an agent the user actually wired up: an explicit command, or a
+        # runtime whose consented connection test passed. A merely-installed
+        # CLI is never invoked implicitly. Otherwise the item waits honestly
+        # as captured; the completion cutoff has a terminal route for it, and
+        # the human can retry once an agent is connected.
+        record = self.manager.get(session_id)
+        lead, _reviewer = collaboration_pair(record.participants)
+        investigating = False
+        if lead is not None:
+            if lead.command and lead.command.strip():
+                investigating = True
+            elif plan_launch_status(lead)["ready"]:
+                connections = doctor_module.stored_connections(self.broker.conn)
+                investigating = (
+                    connections.get(lead.runtime, {}).get("state") == "connected"
+                )
+        if investigating:
+            self.ancillary.investigate(session_id, item["drop_id"])
+        return {
+            "item": item,
+            "investigating": investigating,
+            **self.dropbox({"session": session_id}, {}),
+        }
 
     def run_tests(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)
@@ -1012,15 +1037,20 @@ class Api:
             # cancel below is cleanup, not the thing the user is waiting on.
             self.manager.stop(session_id, body.get("reason") or "stopped by the user")
             self.managed.cancel(session_id, reason="Stopping the session.")
+            self.ancillary.cancel(session_id)
         elif action == "complete":
             # Validate and drive the phase machine BEFORE touching the agents:
             # a refused completion (unsatisfied gates, unevaluated appendix
             # items) must leave the team running. A non-terminal outcome is a
             # phase transition — appendix evaluation or extension work — whose
-            # wake task the agents must be running to receive.
+            # wake task the agents must be running to receive. Either way the
+            # capture freeze has ended investigation, so in-flight ancillary
+            # work stops now.
             completed = self.manager.complete(session_id, force=bool(body.get("force")))
+            self.ancillary.cancel(session_id)
             if completed.is_terminal:
                 self.managed.cancel(session_id, reason="Completing the session.")
+                ancillary_module.sweep(self.manager, completed)
             else:
                 self.managed.resume(completed)
         elif action == "remove":

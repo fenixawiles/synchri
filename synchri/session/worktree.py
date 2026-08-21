@@ -383,3 +383,32 @@ def _rev_exists(repo_root: str | Path, ref: str) -> bool:
     except StateError:
         return False
     return True
+
+
+def remove_scratch(
+    repo_root: str | Path, scratch_path: str | None, scratch_branch: str | None
+) -> None:
+    """Remove an ancillary scratch worktree and its branch, best-effort.
+
+    Scratch trees are ephemeral by contract: the durable dropbox proposal is
+    the artifact of record, so — unlike session worktrees, which are only
+    removed when provably pushed — these are deliberately exempt from that
+    protection. Nothing here ever touches a remote ref.
+    """
+    import shutil
+
+    if scratch_path:
+        try:
+            git(repo_root, "worktree", "remove", "--force", str(scratch_path), check=False)
+        except StateError:
+            pass
+        shutil.rmtree(scratch_path, ignore_errors=True)
+    if scratch_branch:
+        try:
+            git(repo_root, "branch", "-D", scratch_branch, check=False)
+        except StateError:
+            pass
+    try:
+        git(repo_root, "worktree", "prune", check=False)
+    except StateError:
+        pass

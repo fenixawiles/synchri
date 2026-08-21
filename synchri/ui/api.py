@@ -942,13 +942,30 @@ class Api:
         """
         from ..session import dropbox as dropbox_module
 
+        from ..errors import StateError
+        from ..session import planning as planning_module
+
         session_id = self._session_id(query, body)
         record = self.manager.get(session_id)
-        promoted_to = (record.metadata or {}).get("promoted_to")
-        if promoted_to and record.is_terminal:
+        promotion = planning_module.promotion(self.manager, session_id)
+        if promotion is not None:
             # Capture froze at plan approval; an item captured after it enters
             # the new coordination session's dropbox instead of being lost.
-            session_id = promoted_to
+            target = promotion.get("coordination_session_id") or next(
+                (
+                    candidate.session_id
+                    for candidate in self.manager.list_sessions()
+                    if (candidate.metadata or {}).get("promoted_from") == session_id
+                ),
+                None,
+            )
+            if target is None:
+                raise StateError(
+                    "the plan was just approved and its coordination session is "
+                    "still being provisioned — capture again in a moment",
+                    code="promotion_in_progress",
+                )
+            session_id = target
         item = dropbox_module.capture(
             self.manager,
             session_id,
@@ -965,7 +982,9 @@ class Api:
         record = self.manager.get(session_id)
         lead, _reviewer = collaboration_pair(record.participants)
         investigating = False
-        if lead is not None:
+        # Planning considerations are folded into the plan by the planner —
+        # they are never scouted.
+        if lead is not None and not record.policy.planning:
             if lead.command and lead.command.strip():
                 investigating = True
             elif plan_launch_status(lead)["ready"]:

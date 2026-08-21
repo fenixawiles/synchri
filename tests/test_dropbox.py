@@ -114,7 +114,7 @@ def _wake_messages(manager, record, source):
 # ----------------------------------------------------------------------
 
 
-def test_capture_assigns_ids_appendix_positions_and_never_touches_the_room(manager, repo, agents):
+def test_capture_assigns_ids_and_never_touches_the_room_or_the_appendix(manager, repo, agents):
     record = _activated(manager, repo, agents)
     before = manager.broker.room_status(
         record.room_id, credential=manager._human_credential(record)
@@ -124,10 +124,12 @@ def test_capture_assigns_ids_appendix_positions_and_never_touches_the_room(manag
     second = dropbox.capture(
         manager, record.session_id, "The retry logger double-prints", title="Retry log noise"
     )
-    assert (first["drop_id"], first["appendix_position"]) == ("DROP-001", 1)
-    assert (second["drop_id"], second["appendix_position"]) == ("DROP-002", 2)
+    assert (first["drop_id"], second["drop_id"]) == ("DROP-001", "DROP-002")
     assert second["title"] == "Retry log noise"
     assert first["status"] == "captured" and first["disposition"] is None
+    # A raw capture is not yet ready: the appendix holds investigated items.
+    assert first["appendix_position"] is None
+    assert second["appendix_position"] is None
 
     after = manager.broker.room_status(
         record.room_id, credential=manager._human_credential(record)
@@ -150,18 +152,24 @@ def test_capture_is_bounded_and_requires_text(manager, repo, agents):
     assert "capped" in str(exc.value)
 
 
-def test_reconciliation_appends_exactly_once_in_capture_order(manager, repo, agents):
+def test_reconciliation_appends_only_ready_items_exactly_once(manager, repo, agents):
     record = _activated(manager, repo, agents)
-    # A row that arrived without the capture path (e.g. a crash between the
-    # insert and the reconcile) still lands in the appendix exactly once.
+    # A ready row whose readiness transition raced a crash (proposal stored,
+    # append never committed) still lands in the appendix exactly once; an
+    # item still under capture never does.
     manager.conn.execute(
         "INSERT INTO session_drops (session_id, drop_id, title, prompt, status, "
         "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-        (record.session_id, "DROP-001", "Orphan", "Orphaned capture", "captured", "t", "t"),
+        (record.session_id, "DROP-001", "Ready", "Investigated already", "proposed", "t", "t"),
     )
-    assert dropbox.reconcile(manager, record.session_id) == ["DROP-001"]
+    dropbox.capture(manager, record.session_id, "A raw second idea")
+    assert dropbox.item(manager, record.session_id, "DROP-001")["appendix_position"] == 1
     assert dropbox.reconcile(manager, record.session_id) == []
-    dropbox.capture(manager, record.session_id, "A second idea")
+    assert dropbox.item(manager, record.session_id, "DROP-002")["appendix_position"] is None
+
+    # The second item becomes ready via its failure report and joins next.
+    dropbox.begin_investigation(manager, record.session_id, "DROP-002", base_sha="e" * 40)
+    dropbox.mark_failed(manager, record.session_id, "DROP-002", report="scout died")
     rows = manager.conn.execute(
         "SELECT drop_id, position FROM session_appendix WHERE session_id = ? ORDER BY position",
         (record.session_id,),
@@ -177,7 +185,7 @@ def test_observe_turn_reconciles_after_each_completed_turn(manager, repo, agents
     manager.conn.execute(
         "INSERT INTO session_drops (session_id, drop_id, title, prompt, status, "
         "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-        (record.session_id, "DROP-001", "Orphan", "Orphaned capture", "captured", "t", "t"),
+        (record.session_id, "DROP-001", "Orphan", "Ready but unreconciled", "proposed", "t", "t"),
     )
     # A failed turn reconciles nothing; a completed one appends the item.
     registry._observe_turn(
@@ -432,6 +440,38 @@ def test_a_detected_secret_quarantines_the_patch_and_is_never_persisted(manager,
     assert token not in json.dumps({key: row[key] for key in row.keys()}, default=str)
 
 
+def test_failure_reports_and_critiques_are_screened_fail_closed(manager, repo, agents):
+    """Raw CLI output tails and reviewer critiques land in the completion
+    package — a secret in either is withheld at the storage boundary."""
+    record = _activated(manager, repo, agents)
+    token = "ghp_" + "z9Y8" * 8
+
+    leaky = dropbox.capture(manager, record.session_id, "leaky failure")
+    dropbox.begin_investigation(manager, record.session_id, leaky["drop_id"], base_sha="f" * 40)
+    failed = dropbox.mark_failed(
+        manager, record.session_id, leaky["drop_id"],
+        report=f"the scout printed: export TOKEN={token}",
+    )
+    assert token not in (failed["failure_report"] or "")
+    assert "withheld" in failed["failure_report"]
+
+    chatty = dropbox.capture(manager, record.session_id, "leaky review")
+    dropbox.begin_investigation(manager, record.session_id, chatty["drop_id"], base_sha="f" * 40)
+    dropbox.deposit_proposal(
+        manager, record.session_id, chatty["drop_id"],
+        evidence="e", rationale="r", recommendation="adopt",
+    )
+    reviewed = dropbox.record_review(
+        manager, record.session_id, chatty["drop_id"],
+        verdict="unsound", critique=f"the diff hardcodes {token} in config.py",
+    )
+    assert token not in json.dumps(reviewed["review"])
+    row = manager.conn.execute(
+        "SELECT * FROM session_drops WHERE session_id = ?", (record.session_id,)
+    ).fetchall()
+    assert token not in json.dumps([dict(r) for r in row], default=str)
+
+
 def test_oversized_text_artifacts_are_truncated_with_a_visible_mark(manager, repo, agents):
     record = _activated(manager, repo, agents)
     item = _proposed_item(
@@ -620,7 +660,9 @@ def test_api_capture_and_inbox(ui, repo):
     payload = call(ui, "/api/dropbox/capture",
                    {"session": session_id, "prompt": "Try caching the token refresh"})
     assert payload["item"]["drop_id"] == "DROP-001"
-    assert payload["item"]["appendix_position"] == 1
+    assert payload["item"]["appendix_position"] is None, (
+        "an item joins the appendix when its investigation is ready, not at capture"
+    )
 
     inbox = call(ui, f"/api/dropbox?session={session_id}")
     assert inbox["phase"] == "original_work" and inbox["frozen"] is False

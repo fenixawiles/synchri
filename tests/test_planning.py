@@ -86,11 +86,13 @@ PLAN_BODY = """# Implementation plan
 """
 
 
-def _write_plan(record, body=PLAN_BODY):
-    from pathlib import Path
-
-    workspace = Path(record.planning_workspace["path"])
-    (workspace / planning.PLAN_FILENAME).write_text(body, encoding="utf-8")
+def _submission(body=PLAN_BODY, summary="draft"):
+    """A planner turn's text: the plan travels through the reply protocol."""
+    return (
+        "Drafted the plan.\n"
+        "SYNCHRI-PLAN-BEGIN\n" + body + "\nSYNCHRI-PLAN-END\n"
+        f"SYNCHRI-PLAN-SUBMIT: {summary}"
+    )
 
 
 def _turn(manager, record, actor, text):
@@ -211,12 +213,13 @@ def test_the_loop_planner_first_review_revision_ready(manager, repo):
     _actions, warnings = _turn(manager, record, "codex", "SYNCHRI-PLAN-SUBMIT: sneaky")
     assert any("only the planner submits" in w for w in warnings)
 
-    # Submit requires the plan file to exist.
+    # Submit requires the plan document in the same reply.
     _actions, warnings = _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: draft")
-    assert any("PLAN.md" in w for w in warnings)
+    assert any("SYNCHRI-PLAN-BEGIN" in w for w in warnings)
 
-    _write_plan(record)
-    actions, warnings = _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: first full draft")
+    actions, warnings = _turn(
+        manager, record, "claude", _submission(summary="first full draft")
+    )
     assert actions == [{"kind": "submitted", "revision": 1}]
     plan = planning.get_plan(manager, session_id)
     assert plan["status"] == "awaiting_review" and plan["revision"] == 1
@@ -253,9 +256,11 @@ def test_the_loop_planner_first_review_revision_ready(manager, repo):
     )
     assert any("only the plan reviewer" in w for w in warnings)
 
-    _write_plan(record, PLAN_BODY.replace("2. Wire", "2. Bound the cache first, then wire"))
     actions, _warnings = _turn(
         manager, record, "claude",
+        "SYNCHRI-PLAN-BEGIN\n"
+        + PLAN_BODY.replace("2. Wire", "2. Bound the cache first, then wire")
+        + "\nSYNCHRI-PLAN-END\n"
         "SYNCHRI-OBJECTION-RESOLVED: OBJ-001|reordered so bounding lands first\n"
         "SYNCHRI-PLAN-SUBMIT: reordered per review",
     )
@@ -280,13 +285,14 @@ def test_the_loop_planner_first_review_revision_ready(manager, repo):
 
 def test_an_open_fork_prevents_ready_until_resolved(manager, repo):
     record, _ = _activated(manager, repo)
-    _write_plan(record)
     _turn(manager, record, "claude",
+          "SYNCHRI-PLAN-BEGIN\n" + PLAN_BODY + "\nSYNCHRI-PLAN-END\n"
           "SYNCHRI-FORK: cache in-process vs sidecar; both defensible\n"
           "SYNCHRI-PLAN-SUBMIT: draft with an open fork")
     _actions, warnings = _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
     assert any("OBJ-001 (fork)" in w for w in warnings)
     _turn(manager, record, "claude",
+          "SYNCHRI-PLAN-BEGIN\n" + PLAN_BODY + "\nSYNCHRI-PLAN-END\n"
           "SYNCHRI-OBJECTION-RESOLVED: OBJ-001|human chose in-process\n"
           "SYNCHRI-PLAN-SUBMIT: fork resolved")
     _actions, warnings = _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|closed")
@@ -295,8 +301,7 @@ def test_an_open_fork_prevents_ready_until_resolved(manager, repo):
 
 def test_ready_is_invalidated_by_a_human_edit_and_by_a_new_consideration(manager, repo):
     record, _ = _activated(manager, repo)
-    _write_plan(record)
-    _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: draft")
+    _turn(manager, record, "claude", _submission())
     _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
     assert planning.get_plan(manager, record.session_id)["status"] == "ready"
 
@@ -306,7 +311,7 @@ def test_ready_is_invalidated_by_a_human_edit_and_by_a_new_consideration(manager
     wakes = _wake_messages(manager, record, "plan_reopened")
     assert wakes and "HEAD requests" in wakes[-1]["content"]
 
-    _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: covers HEAD")
+    _turn(manager, record, "claude", _submission(summary="covers HEAD"))
     _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
     assert planning.get_plan(manager, record.session_id)["status"] == "ready"
 
@@ -321,8 +326,7 @@ def test_ready_is_invalidated_by_a_human_edit_and_by_a_new_consideration(manager
 
 def test_a_human_waiver_goes_back_through_review(manager, repo):
     record, _ = _activated(manager, repo)
-    _write_plan(record)
-    _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: draft")
+    _turn(manager, record, "claude", _submission())
     _turn(manager, record, "codex",
           "SYNCHRI-OBJECTION: blocking|No rollback story\n"
           "SYNCHRI-PLAN-REVIEW: revise|add rollback")
@@ -375,10 +379,9 @@ def test_turn_budget_exhaustion_goes_to_the_human_with_one_resume(manager, repo)
 
 def test_the_revision_budget_preserves_the_last_draft(manager, repo):
     record, _ = _activated(manager, repo)
-    _write_plan(record)
     for index in range(planning.REVISION_BUDGET):
         _actions, _warnings = _turn(
-            manager, record, "claude", f"SYNCHRI-PLAN-SUBMIT: revision {index + 1}"
+            manager, record, "claude", _submission(summary=f"revision {index + 1}")
         )
     plan = planning.get_plan(manager, record.session_id)
     assert plan["status"] == "needs_human_resolution"
@@ -396,8 +399,10 @@ def test_workspace_git_state_is_verified_and_restored(manager, repo):
 
     record, _ = _activated(manager, repo)
     workspace = Path(record.planning_workspace["path"])
-    _write_plan(record)  # notes and drafts are the point of the analysis area
-    assert planning.verify_workspace(manager, record) is True
+    (workspace / "notes.md").write_text("scratch notes\n", encoding="utf-8")
+    assert planning.verify_workspace(manager, record) is True, (
+        "untracked files never trip verification — only a moved HEAD does"
+    )
 
     env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.com",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.com",
@@ -458,11 +463,12 @@ def test_agents_drive_the_loop_through_the_conductor(manager, repo, tmp_path):
     record, credentials = _activated(manager, repo)
     workspace = record.planning_workspace["path"]
 
-    plan_lines = PLAN_BODY.replace("\n", "\\n").replace('"', '\\"')
     scripted = {
         "claude": (
-            f'open("PLAN.md", "w").write("{plan_lines}")\n'
             "print('Drafted the plan from the idea and the repository.')\n"
+            "print('SYNCHRI-PLAN-BEGIN')\n"
+            f"print({PLAN_BODY!r})\n"
+            "print('SYNCHRI-PLAN-END')\n"
             "print('SYNCHRI-PLAN-SUBMIT: first full draft')\n"
         ),
         "codex": (
@@ -510,8 +516,7 @@ def test_dashboard_and_plan_controls(manager, repo):
     from synchri.ui.api import Api
 
     record, _ = _activated(manager, repo)
-    _write_plan(record)
-    _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: draft")
+    _turn(manager, record, "claude", _submission())
     _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
 
     dashboard = manager.dashboard(record.session_id)
@@ -540,8 +545,7 @@ def test_dashboard_and_plan_controls(manager, repo):
 
 def _ready(manager, repo, body=PLAN_BODY):
     record, credentials = _activated(manager, repo)
-    _write_plan(record, body)
-    _turn(manager, record, "claude", "SYNCHRI-PLAN-SUBMIT: draft")
+    _turn(manager, record, "claude", _submission(body))
     _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
     return manager.get(record.session_id), credentials
 
@@ -682,6 +686,7 @@ def test_baseline_drift_returns_the_plan_to_review_and_reanchors(manager, repo):
     # Re-verify against the new baseline, re-review, approve — now it lands.
     record = manager.get(record.session_id)
     _turn(manager, record, "claude",
+          "SYNCHRI-PLAN-BEGIN\n" + PLAN_BODY + "\nSYNCHRI-PLAN-END\n"
           f"SYNCHRI-OBJECTION-RESOLVED: {drift[0]['objection_id']}|re-verified on the new tip\n"
           "SYNCHRI-PLAN-SUBMIT: re-verified")
     _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|holds on the new baseline")
@@ -725,7 +730,7 @@ def test_a_retry_resumes_the_reserved_promotion_never_a_second_session(manager, 
     assert len(linked) == 1
 
 
-def test_a_crash_between_provision_and_finalize_is_adopted_on_retry(manager, repo):
+def test_a_crash_between_provision_and_finalize_is_adopted_and_completed(manager, repo):
     record, _ = _ready(manager, repo)
     with pytest.raises(ValidationError):
         planning.approve(
@@ -733,19 +738,88 @@ def test_a_crash_between_provision_and_finalize_is_adopted_on_retry(manager, rep
             staffing=[{"name": "solo", "runtime": "claude_code", "role": "primary_builder"}],
         )
     promo = planning.promotion(manager, record.session_id)
-    # Simulate the crash window: the coordination session was created but the
-    # finalize transaction never ran.
-    orphan = planning._provision(manager, manager.get(record.session_id), promo, None)
+    # Simulate the worst crash window: the coordination session row exists
+    # with its provenance, but the crash landed before gates and contract.
+    body = planning.revision_body(manager, record.session_id, promo["plan_revision"])
+    orphan = manager.create(
+        name=record.name, mode="long_horizon", repo_root=record.repo_root,
+        base_branch="main",
+        participants=planning._staff(manager.get(record.session_id), None),
+        spec=planning._spec_from_plan(manager, manager.get(record.session_id), promo, body),
+        metadata={"promoted_from": record.session_id, "plan_id": promo["plan_id"]},
+        worktree_start_point=promo["inspection_sha"],
+    )
+    manager.set_gates(orphan.session_id, [])  # the crash landed before materialization
+    assert orphan.contract_revision == 0
     assert planning.promotion(manager, record.session_id)["coordination_session_id"] is None
 
     result = planning.approve(manager, record.session_id)
     assert result["coordination_session_id"] == orphan.session_id
     assert planning.promotion(manager, record.session_id)["status"] == "provisioned"
+    # Adoption is never "as found": the half-provisioned session was finished.
+    adopted = manager.get(orphan.session_id)
+    assert [g.gate_id for g in manager.gates(orphan.session_id)] == ["CACHE-01", "CACHE-02"]
+    assert adopted.contract_revision == 1
     linked = [
         s for s in manager.list_sessions()
         if (s.metadata or {}).get("promoted_from") == record.session_id
     ]
     assert len(linked) == 1
+
+
+def test_the_database_refuses_a_second_linked_session_and_the_loser_leaks_nothing(manager, repo):
+    """Concurrent promotion retries converge by constraint, not by hoping."""
+    import sqlite3
+    from pathlib import Path
+
+    record, _ = _ready(manager, repo)
+    result = planning.approve(manager, record.session_id)
+    before = {s.session_id for s in manager.list_sessions()}
+    trees_before = {
+        t["path"] for t in __import__("synchri.session.worktree", fromlist=["list_worktrees"])
+        .list_worktrees(str(repo))
+    }
+    with pytest.raises(sqlite3.IntegrityError):
+        manager.create(
+            name="duplicate", mode="long_horizon", repo_root=str(repo),
+            participants=planning._staff(manager.get(record.session_id), None),
+            spec=ProductSpec(text="dup"),
+            metadata={"promoted_from": record.session_id},
+        )
+    assert {s.session_id for s in manager.list_sessions()} == before
+    trees_after = {
+        t["path"] for t in __import__("synchri.session.worktree", fromlist=["list_worktrees"])
+        .list_worktrees(str(repo))
+    }
+    assert trees_after == trees_before, "the refused insert must clean its worktree"
+    assert result["coordination_session_id"] in before
+
+
+def test_a_capture_in_the_provisioning_window_routes_or_says_so(manager, repo):
+    from synchri.errors import StateError as ApiStateError
+    from synchri.ui.api import Api
+
+    record, _ = _ready(manager, repo)
+    with pytest.raises(ValidationError):
+        planning.approve(
+            manager, record.session_id,
+            staffing=[{"name": "solo", "runtime": "claude_code", "role": "primary_builder"}],
+        )
+    api = Api(manager.broker, manager)
+
+    # Reserved, no coordination session anywhere yet: an honest, precise
+    # refusal — never a misleading "frozen".
+    with pytest.raises(ApiStateError) as exc:
+        api.capture_drop({}, {"session": record.session_id, "prompt": "mid-window idea"})
+    assert exc.value.code == "promotion_in_progress"
+
+    # Once the retry provisions, the same capture routes to the new session.
+    result = planning.approve(manager, record.session_id)
+    payload = api.capture_drop({}, {"session": record.session_id, "prompt": "mid-window idea"})
+    assert payload["item"]["drop_id"] == "DROP-001"
+    assert [e["drop_id"] for e in dropbox.items(manager, result["coordination_session_id"])] == [
+        "DROP-001"
+    ]
 
 
 def test_worktrees_can_branch_from_an_exact_start_point(repo):
@@ -808,3 +882,82 @@ def test_the_approve_endpoint_returns_the_coordination_launch(manager, repo):
         "primary_builder", "adversarial_reviewer",
     }
     assert result["coordination"]["session"]["mode"] == "long_horizon"
+
+
+# ----------------------------------------------------------------------
+# enforced isolation
+# ----------------------------------------------------------------------
+
+
+def test_planning_commands_carry_the_clis_own_enforcement():
+    """Isolation is the runtime's, not a request in a prompt."""
+    from synchri.session.modes import KNOWN_RUNTIMES
+
+    claude = KNOWN_RUNTIMES["claude_code"]
+    assert "--permission-mode plan" in claude["planning_command"]
+    assert "--permission-mode plan" in claude["plain_planning_command"]
+    codex = KNOWN_RUNTIMES["codex"]
+    assert "--sandbox read-only" in codex["planning_command"]
+    assert "--sandbox read-only" in codex["plain_planning_command"]
+    # No verified enforcement flag in the Copilot adapter yet: unavailable,
+    # never silently downgraded to contract-only isolation.
+    assert planning_workspace_supported("copilot") is False
+
+
+def test_custom_commands_are_refused_for_planning(manager, repo):
+    with pytest.raises(ValidationError) as exc:
+        manager.create(
+            name="x", mode="planning", repo_root=str(repo),
+            participants=[
+                ParticipantPlan("claude", "claude_code", "planner",
+                                command="my-wrapper {prompt}"),
+                ParticipantPlan("codex", "codex", "plan_reviewer"),
+            ],
+            metadata={"idea": IDEA},
+        )
+    assert "custom command" in str(exc.value)
+
+
+def test_the_plan_block_is_extracted_and_kept_out_of_the_transcript():
+    body, directives = parse_directives(
+        "Here is my thinking.\n"
+        "SYNCHRI-PLAN-BEGIN\n"
+        "# The plan\n\n1. do the thing\n"
+        "SYNCHRI-PLAN-END\n"
+        "And a closing remark.\n"
+        "SYNCHRI-PLAN-SUBMIT: first draft\n"
+    )
+    assert directives.plan_body == "# The plan\n\n1. do the thing"
+    assert directives.plan_submitted == "first draft"
+    assert "do the thing" not in body, "the stored revision is the durable copy"
+    assert "Here is my thinking." in body and "closing remark" in body
+
+    # Quoting one marker mid-prose never opens a block.
+    body, directives = parse_directives("The convention uses SYNCHRI-PLAN-BEGIN markers.")
+    assert directives.plan_body is None
+    assert "SYNCHRI-PLAN-BEGIN" in body
+
+
+def test_the_registry_launches_planning_agents_under_enforcement(
+    manager, repo, workspace, monkeypatch
+):
+    import synchri.session.modes as modes
+    from synchri.runner.managed import ManagedRunnerRegistry
+
+    monkeypatch.setattr(
+        modes, "runtime_status",
+        lambda runtime: {"installed": True, "managed": True, "executable": "x",
+                         "path": "/x", "detail": "",
+                         "planning_supported": modes.planning_workspace_supported(runtime)},
+    )
+    record = _planning_session(manager, repo)
+    registry = ManagedRunnerRegistry(workspace)
+    planner_agent = registry._agent(record, record.participants[0])
+    assert "--permission-mode" in planner_agent.argv and "plan" in planner_agent.argv
+    assert planner_agent.cwd == record.planning_workspace["path"]
+    reviewer_agent = registry._agent(record, record.participants[1])
+    assert "--sandbox" in reviewer_agent.argv and "read-only" in reviewer_agent.argv
+    # The resume rung never applies to planning: a resume invocation would
+    # not carry the enforcement flag.
+    turn_agent = registry._turn_agent(manager, record, record.participants[0])
+    assert "--permission-mode" in turn_agent.argv

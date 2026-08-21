@@ -547,7 +547,12 @@ def run_connection_test(
                 _check("structured_output", FAIL, "the CLI did not emit its documented stream")
             )
 
-        connected = replied and result.ok
+        # "Connected" means every proof held — launch, bootstrap, auth, and
+        # (where the adapter streams) the structured-output parse. A reply
+        # whose documented stream never parsed is a degraded pipeline, and
+        # recording it green would be exactly the false green the passive
+        # doctor refuses to fake.
+        connected = replied and result.ok and not any(c["state"] == FAIL for c in checks)
 
         resume_command = spec.get("resume_command")
         if not resume_command:

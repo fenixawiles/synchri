@@ -22,7 +22,13 @@ from ..cli import session as session_files
 from ..errors import SynchriError, ValidationError
 from ..models.envelope import MessageDraft
 from ..session import dropbox, planning
-from ..session.modes import KNOWN_RUNTIMES, managed_command, plan_launch_status, stream_format_for
+from ..session.modes import (
+    KNOWN_RUNTIMES,
+    managed_command,
+    plan_launch_status,
+    planning_command,
+    stream_format_for,
+)
 from . import recovery
 from .agent_command import AgentCommand, terminate_process_group
 from .conductor import Conductor
@@ -720,6 +726,11 @@ class ManagedRunnerRegistry:
         The stored id is consumed either way, so a failed resume can never
         loop.
         """
+        # Planning agents always launch under the CLI's enforced read-only
+        # mode; the resume rung is skipped because a resume invocation would
+        # not carry the enforcement flag.
+        if record.mode == "planning":
+            return self._agent(record, plan)
         use_plain = plan.runtime in self._plain_runtimes
         user_command = bool(plan.command and plan.command.strip())
         if not use_plain and not user_command:
@@ -762,9 +773,19 @@ class ManagedRunnerRegistry:
 
     def _agent(self, record: "SessionRecord", plan) -> AgentCommand:
         use_plain = plan.runtime in self._plain_runtimes
-        command = managed_command(plan, plain=use_plain)
-        if not command:
-            raise ValidationError(f"no managed command is configured for {plan.name}")
+        if record.mode == "planning":
+            # Never the user command and never the ordinary managed command:
+            # the maintained planning invocation carries the CLI's own
+            # read-only enforcement, or the runtime cannot plan at all.
+            command = planning_command(plan, plain=use_plain)
+            if not command:
+                raise ValidationError(
+                    f"{plan.name} ({plan.runtime}) has no enforced planning command"
+                )
+        else:
+            command = managed_command(plan, plain=use_plain)
+            if not command:
+                raise ValidationError(f"no managed command is configured for {plan.name}")
         return self._build_agent(record, plan, command, plain=use_plain)
 
     def _build_agent(

@@ -55,6 +55,9 @@ if "--resume" in args:
     raise SystemExit(0)
 
 token = re.search(r"SYNCHRI-CONNECT-OK-[0-9a-f]+", prompt).group(0)
+if mode == "no-stream":
+    print(token)
+    raise SystemExit(0)
 init = {"type": "system", "subtype": "init", "model": "fake"}
 result = {"type": "result", "result": token}
 if sid:
@@ -202,6 +205,27 @@ def test_an_adapter_without_resume_is_unsupported_not_failed(broker, fake_cli, a
     assert outcome["resume"] == doctor.RESUME_UNSUPPORTED
 
 
+def test_a_reply_without_the_documented_stream_is_never_a_connection(
+    broker, fake_cli, auth_file, monkeypatch
+):
+    """Structured-output parse is one of the proofs — no false green.
+
+    The CLI launches, authenticates, and echoes the sentinel, but as plain
+    text instead of its documented stream. That is a degraded pipeline, not
+    a connected one.
+    """
+    monkeypatch.setenv("FAKE_CLI_MODE", "no-stream")
+    outcome = doctor.run_connection_test(
+        broker.conn, "fake", definition=make_definition(fake_cli, auth_file)
+    )
+    assert outcome["state"] == "failed"
+    checks = checks_by_key(outcome["checks"])
+    assert checks["bootstrap"]["state"] == doctor.PASS
+    assert checks["structured_output"]["state"] == doctor.FAIL
+    stored = doctor.stored_connections(broker.conn).get("fake") or {}
+    assert stored.get("state") != "connected"
+
+
 def test_the_canary_runs_in_a_fresh_directory_outside_any_repository(
     broker, fake_cli, auth_file, tmp_path, monkeypatch
 ):
@@ -210,12 +234,17 @@ def test_the_canary_runs_in_a_fresh_directory_outside_any_repository(
     doctor.run_connection_test(
         broker.conn, "fake", definition=make_definition(fake_cli, auth_file, resume=False)
     )
-    recorded = cwd_file.read_text()
-    assert "synchri-connect-" in recorded
-    assert recorded.startswith(tempfile.gettempdir())
-    # The sandbox is disposable: it is gone once the test finishes.
     import os
 
+    recorded = cwd_file.read_text()
+    assert "synchri-connect-" in recorded
+    # Compare fully resolved paths: on macOS the child's cwd resolves the
+    # /var -> /private/var symlink while gettempdir() reports the short form.
+    temp_root = os.path.realpath(tempfile.gettempdir())
+    assert os.path.realpath(recorded).startswith(temp_root + os.sep) or (
+        os.path.realpath(recorded) == temp_root
+    )
+    # The sandbox is disposable: it is gone once the test finishes.
     assert not os.path.exists(recorded)
 
 

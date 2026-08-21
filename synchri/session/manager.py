@@ -254,6 +254,12 @@ class SessionManager:
                         f"{plan.name} ({plan.runtime}) does not support the read-only "
                         "planning workspace; choose a supported runtime"
                     )
+                if plan.command and plan.command.strip():
+                    raise ValidationError(
+                        f"{plan.name}: Planning Mode always launches the maintained "
+                        "planning command, which carries the CLI's own read-only "
+                        "enforcement — a custom command cannot guarantee it"
+                    )
 
         grants = policy.apply_forced_denials(permissions or PermissionSet.defaults())
         rules = escalation or EscalationPolicy()
@@ -341,7 +347,21 @@ class SessionManager:
             },
             participants=plans,
         )
-        self._insert(record)
+        try:
+            self._insert(record)
+        except Exception:
+            # The insert can be refused — notably by the unique promotion
+            # provenance index when two promotion retries race. The loser
+            # must leak nothing: room, tree, and workspace all go.
+            with db.transaction(self.conn):
+                self.conn.execute(
+                    "DELETE FROM rooms WHERE room_id = ?", (room["room_id"],)
+                )
+            if created_worktree and tree is not None:
+                worktree_module.remove(tree, force=True, delete_branch=True)
+            if workspace_entry:
+                planning_module.remove_workspace(workspace_entry["path"])
+            raise
         if workspace_entry:
             # The durable plan: the idea verbatim, the inspected baseline, and
             # the loop state the review will drive.
@@ -647,12 +667,12 @@ class SessionManager:
             opening = (
                 "Begin Planning Mode. Read the human's idea articulation below and "
                 "inspect the repository copy in the planning workspace. Produce "
-                "PLAN-DRAFT revision 1 before the reviewer sees anything: write the "
-                "complete ordered implementation plan to PLAN.md at the workspace "
-                "root, include an '## Acceptance criteria' section with explicit "
-                "gate ids, then record the revision by ending your reply with "
-                "SYNCHRI-PLAN-SUBMIT: <one-line summary>. The review loop and its "
-                "budgets are described in your contract.\n\n"
+                "PLAN-DRAFT revision 1 before the reviewer sees anything: put the "
+                "complete ordered implementation plan in your reply between "
+                "SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END lines, include an "
+                "'## Acceptance criteria' section with explicit gate ids, and end "
+                "the reply with SYNCHRI-PLAN-SUBMIT: <one-line summary>. The "
+                "review loop and its budgets are described in your contract.\n\n"
                 "--- the idea, verbatim ---\n"
                 + (plan.get("idea") or "")
             )
@@ -1184,13 +1204,14 @@ class SessionManager:
                     "cannot complete: " + "; ".join(report["blockers"]),
                     code="gates_unsatisfied",
                 )
-            # Anything captured but not yet reconciled joins the appendix now,
-            # inside the freeze transaction, so the snapshot is total; the
-            # cutoff then ends investigation — an item whose scout or review
-            # never finished gets a timed-out failure report the pair can
-            # decline on, so evaluation never waits on work that won't arrive.
-            dropbox_module._reconcile_locked(self.conn, session_id)
+            # The cutoff ends investigation first — an item whose scout or
+            # review never finished gets a timed-out failure report the pair
+            # can decline on — and the reconcile that follows appends every
+            # now-ready item, inside this same freeze transaction, so the
+            # snapshot is total and evaluation never waits on work that will
+            # not arrive.
             cutoff = dropbox_module.freeze_incomplete_locked(self.conn, session_id)
+            dropbox_module._reconcile_locked(self.conn, session_id)
             snapshot = [
                 row["drop_id"]
                 for row in self.conn.execute(

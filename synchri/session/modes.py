@@ -186,18 +186,20 @@ Your first pass is yours alone. Turn the human's idea articulation plus your
 own repository inspection into PLAN-DRAFT revision 1 before the reviewer sees
 anything: inspect the current implementation, dependencies, constraints,
 acceptance criteria, migration risks, likely failure modes, and testing and
-preservation requirements. Write the complete plan into the file PLAN.md at
-the root of the planning workspace, then end your reply with
-`SYNCHRI-PLAN-SUBMIT: <one-line summary>` to record the revision.
+preservation requirements. You run in an enforced read-only mode with no
+write access anywhere; the plan travels through your reply: put the complete
+plan document between a `SYNCHRI-PLAN-BEGIN` line and a `SYNCHRI-PLAN-END`
+line, then end the reply with `SYNCHRI-PLAN-SUBMIT: <one-line summary>` to
+record the revision.
 
 The plan document must contain an `## Acceptance criteria` section whose
 bullets each carry an explicit gate id, e.g. `- AUTH-01: login works`. Those
 ids become the coordination session's gates verbatim; a plan without them
 cannot be promoted.
 
-When the reviewer raises objections, address each one: revise PLAN.md, record
-each disposition with `SYNCHRI-OBJECTION-RESOLVED: <id>|<what changed or why
-the decision stands>`, and submit the next revision. Defend a decision when
+When the reviewer raises objections, address each one: revise the plan,
+record each disposition with `SYNCHRI-OBJECTION-RESOLVED: <id>|<what changed
+or why the decision stands>`, and submit the next revision the same way. Defend a decision when
 the evidence supports it; revise when the reviewer has found a real problem.
 When multiple approaches remain genuinely defensible, record the fork
 explicitly with `SYNCHRI-FORK: <the choice and both defensible sides>` — the
@@ -208,8 +210,9 @@ this session, and you do not restate the plan — you independently review its
 implementation logic against the repository copy in the planning workspace.
 
 Wait for the planner's first submitted draft; it is never your job to write
-the plan. For each submitted revision, read PLAN.md and the repository state
-it claims to describe, then challenge: ordering, hidden dependencies,
+the plan. For each submitted revision, read its text (delivered in your
+prompt's planning state) against the repository state it claims to describe,
+then challenge: ordering, hidden dependencies,
 unnecessary reconstruction, missing rollback and migration concerns,
 insufficient tests, conflicting assumptions, unsafe sequencing, and places
 where existing behavior should be preserved instead of changed. Inspect
@@ -282,12 +285,13 @@ prose the user has to carry into the next workflow: the deliverable is an
 adversarially reviewed implementation plan the human can approve, and
 approval staffs and starts the coordination that executes it.
 
-Neither of you has implementation authority here. The authorized workspace is
-a disposable read-only planning copy of the repository, anchored to one
-inspected commit; it holds no remotes and is never reused for coordination.
-Inspect freely, take notes, and draft in it — but nothing written here ships,
-and the real repository must never be touched. Synchri verifies the
-workspace's Git state after every turn.
+Neither of you has implementation authority here, and this is enforced, not
+requested: you run under your CLI's read-only mode, with the working
+directory set to a disposable planning copy of the repository — anchored to
+one inspected commit, holding no remotes, never reused for coordination.
+Inspect it freely; you cannot and must not write anywhere. The plan itself
+travels through your replies via the SYNCHRI-PLAN-BEGIN/END protocol.
+Synchri verifies the workspace's Git state after every turn.
 
 The loop is PLAN-DRAFT -> ADVERSARIAL REVIEW -> REVISION -> RE-REVIEW ->
 PLAN-READY. The planner drafts first, alone; only then does the reviewer
@@ -479,9 +483,13 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "min_version": (1, 0, 0),
         "auth_indicators": ["~/.claude/.credentials.json", "~/.claude/credentials.json"],
         "resume_command": "claude -p --verbose --output-format stream-json --resume {resume_id} {prompt}",
-        # The maintained adapter launches unattended with its working directory
-        # confined to the disposable planning workspace, which holds no
-        # remotes — writes technically cannot reach the user's repository.
+        # Planning launches under the CLI's own enforced read-only mode
+        # (permission-mode plan denies edits, writes, and mutating commands),
+        # so the isolation is the runtime's, not a request in a prompt. The
+        # plan itself travels through the reply protocol — the agent needs no
+        # write access anywhere.
+        "planning_command": "claude -p --verbose --output-format stream-json --permission-mode plan {prompt}",
+        "plain_planning_command": "claude -p --permission-mode plan {prompt}",
         "read_only_planning_workspace": True,
     },
     "codex": {
@@ -495,6 +503,10 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "min_version": (0, 20, 0),
         "auth_indicators": ["~/.codex/auth.json"],
         "resume_command": None,
+        # Codex's sandbox is OS-enforced (Seatbelt / Landlock): read-only
+        # filesystem, no network — the strongest confinement available here.
+        "planning_command": "codex exec --json --sandbox read-only {prompt}",
+        "plain_planning_command": "codex exec --sandbox read-only {prompt}",
         "read_only_planning_workspace": True,
     },
     "copilot": {
@@ -509,7 +521,9 @@ KNOWN_RUNTIMES: dict[str, dict] = {
             "~/.config/github-copilot/apps.json",
         ],
         "resume_command": None,
-        "read_only_planning_workspace": True,
+        # No verified read-only enforcement flag in the maintained adapter
+        # yet: Planning Mode is unavailable on Copilot rather than silently
+        # downgraded to contract-only isolation.
     },
     "gemini": {
         "label": "Gemini CLI",
@@ -608,6 +622,23 @@ def managed_command(plan: ParticipantPlan, *, plain: bool = False) -> str | None
             return definition.get("plain_managed_command") or definition.get("managed_command")
         return definition.get("managed_command")
     return None
+
+
+def planning_command(plan: ParticipantPlan, *, plain: bool = False) -> str | None:
+    """The maintained planning invocation, carrying the CLI's own enforcement.
+
+    Deliberately never a user-supplied command: a custom command carries no
+    verified read-only guarantee, and Planning Mode never downgrades to
+    contract-only isolation. ``None`` means this runtime cannot plan.
+    """
+    definition = KNOWN_RUNTIMES.get(plan.runtime, KNOWN_RUNTIMES["generic"])
+    if not definition.get("read_only_planning_workspace"):
+        return None
+    if not runtime_status(plan.runtime)["installed"]:
+        return None
+    if plain:
+        return definition.get("plain_planning_command") or definition.get("planning_command")
+    return definition.get("planning_command")
 
 
 def stream_format_for(plan: ParticipantPlan) -> str | None:

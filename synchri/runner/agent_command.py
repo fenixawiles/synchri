@@ -267,11 +267,14 @@ class Directives:
     complete_requested: bool = False
     approval_capability: str | None = None
     approval_request: str | None = None
-    #: Planning Mode: a submitted revision's one-line summary (the body is
-    #: read from PLAN.md in the planning workspace), reviewer objections as
+    #: Planning Mode: a submitted revision's one-line summary plus the full
+    #: plan document, carried between SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END
+    #: in the same reply (planning agents run read-only — the plan travels
+    #: through the reply, never through a file write); reviewer objections as
     #: (classification, text), planner dispositions as (objection_id, text),
     #: recorded forks, and the reviewer's closing (verdict, note).
     plan_submitted: str | None = None
+    plan_body: str | None = None
     objections: list[tuple[str, str]] = field(default_factory=list)
     objection_resolutions: list[tuple[str, str]] = field(default_factory=list)
     forks: list[str] = field(default_factory=list)
@@ -309,14 +312,35 @@ class DropEvaluation:
     rationale: str
 
 
+#: The plan-document block. Unlike single control lines it is not trailing —
+#: a plan is large and sits mid-reply — but both markers must stand alone on
+#: their own lines, so quoted prose cannot open a block by accident.
+_PLAN_BLOCK = re.compile(
+    r"^[ \t]*SYNCHRI[-_]PLAN[-_]BEGIN[ \t]*\r?\n(?P<body>.*?)\r?\n?[ \t]*SYNCHRI[-_]PLAN[-_]END[ \t]*$",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+
+
 def parse_directives(text: str) -> tuple[str, Directives]:
     """Split trailing ``SYNCHRI-*`` control lines off an agent's reply.
 
     Only *trailing* lines count, so an agent quoting the convention in the
-    middle of a review does not accidentally redirect the room.
+    middle of a review does not accidentally redirect the room. The one
+    multi-line construct is the plan-document block, extracted first.
     """
     directives = Directives()
-    lines = (text or "").splitlines()
+    text = text or ""
+    blocks = list(_PLAN_BLOCK.finditer(text))
+    if blocks:
+        directives.plan_body = blocks[0].group("body")
+        if len(blocks) > 1:
+            directives.warnings.append(
+                "multiple plan blocks in one reply; using the first"
+            )
+        # Remove every block from the transcript body — the stored revision is
+        # the durable copy, and a 100 KB plan is not a room message.
+        text = _PLAN_BLOCK.sub("", text)
+    lines = text.splitlines()
     end = len(lines)
     consumed: list[re.Match] = []
 

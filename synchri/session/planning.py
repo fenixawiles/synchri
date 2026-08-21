@@ -9,12 +9,19 @@ REVISION -> RE-REVIEW -> PLAN-READY, where readiness requires review closure:
 open blocking objections or unresolved architectural forks prevent it, and
 nonblocking assumptions may remain only clearly classified.
 
-Isolation is capability-based, not contract-only: planning runs in a
-**disposable planning workspace** — a local clone anchored to one
-``inspection_sha`` with its remotes removed, so writes technically cannot
-reach the user's repository — offered only on runtimes whose adapter declares
-``read_only_planning_workspace``. The workspace's Git state is verified after
-every turn and the workspace is never reused for coordination.
+Isolation is capability-based, not contract-only, and it is layered.
+Planning agents launch under their CLI's **enforced read-only mode** (the
+maintained ``planning_command`` — e.g. Claude Code's plan permission mode,
+Codex's OS-level read-only sandbox), declared per runtime as
+``read_only_planning_workspace``; runtimes without a verified enforcement
+mechanism are unavailable, and custom commands are refused outright. Because
+the agents hold no write authority anywhere, the plan document travels
+through the reply protocol (``SYNCHRI-PLAN-BEGIN``/``END``), never through a
+file write. Beneath that, inspection happens in a **disposable planning
+workspace** — a local clone anchored to one ``inspection_sha`` with its
+remotes removed, so even a misbehaving process in it has no path back to the
+user's repository — whose Git state is verified after every turn; the
+workspace is never reused for coordination.
 
 The loop is budgeted (turns, revisions, wall clock — whichever first, with
 one user-authorized resume); exhaustion produces ``needs_human_resolution``,
@@ -44,7 +51,6 @@ from .spec import ProductSpec
 if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
     from .manager import SessionManager, SessionRecord
 
-PLAN_FILENAME = "PLAN.md"
 MAX_IDEA_CHARS = 100_000
 MAX_PLAN_CHARS = 500_000
 
@@ -400,7 +406,8 @@ def handle_turn(
             else:
                 submitted = _submit(
                     manager, record, plan, actor,
-                    directives.plan_submitted, reviewer, warnings, now,
+                    directives.plan_submitted, directives.plan_body,
+                    reviewer, warnings, now,
                 )
                 if submitted:
                     actions.append(submitted)
@@ -452,18 +459,18 @@ def _raise(manager, session_id: str, classification: str, text: str,
     return objection_id
 
 
-def _submit(manager, record, plan, actor, summary, reviewer, warnings, now) -> dict | None:
-    workspace = Path(plan["workspace_path"])
-    plan_file = workspace / PLAN_FILENAME
-    if not plan_file.exists():
+def _submit(manager, record, plan, actor, summary, body, reviewer, warnings, now) -> dict | None:
+    # The plan travels through the reply protocol: planning agents run under
+    # their CLI's enforced read-only mode and hold no write authority, so
+    # there is no file for a submission to read.
+    if body is None:
         warnings.append(
-            f"{actor}: submit ignored — write the plan to {PLAN_FILENAME} in the "
-            "planning workspace first"
+            f"{actor}: submit ignored — include the full plan document between "
+            "SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END in the same reply"
         )
         return None
-    body = plan_file.read_text(encoding="utf-8", errors="replace")
     if not body.strip():
-        warnings.append(f"{actor}: submit ignored — {PLAN_FILENAME} is empty")
+        warnings.append(f"{actor}: submit ignored — the plan block is empty")
         return None
     if len(body) > MAX_PLAN_CHARS:
         warnings.append(
@@ -520,8 +527,9 @@ def _submit(manager, record, plan, actor, summary, reviewer, warnings, now) -> d
         content=(
             f"Plan revision {revision} was submitted"
             + (f": {summary.strip()}" if summary and summary.strip() else ".")
-            + f" Read {PLAN_FILENAME} in the planning workspace and review it "
-            "adversarially against the repository state. Raise findings with "
+            + " Review it adversarially against the repository state in the "
+            "planning workspace (the revision text is in the planning state of "
+            "your prompt). Raise findings with "
             "SYNCHRI-OBJECTION lines"
             + (f" (still open: {', '.join(open_items)})" if open_items else "")
             + ", then close with SYNCHRI-PLAN-REVIEW: approve or revise."
@@ -566,7 +574,8 @@ def _close_review(manager, record, plan, actor, verdict, note, planner, warnings
             f"The reviewer sent revision {plan['revision']} back"
             + (f": {note.strip()}" if note and note.strip() else ".")
             + " Address each open item, record its disposition with "
-            "SYNCHRI-OBJECTION-RESOLVED, update PLAN.md, and submit the next revision."
+            "SYNCHRI-OBJECTION-RESOLVED, and submit the next revision between "
+            "SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END."
             + ("\nOpen items:\n" + "\n".join(f"  {item}" for item in open_items)
                if open_items else "")
         ),
@@ -680,8 +689,8 @@ def resume_budget(manager: "SessionManager", session_id: str) -> dict:
             source="plan_budget_resumed",
             content=(
                 "The human resumed the planning budget — once. Address the open "
-                "objections, update PLAN.md, and submit the next revision; stop at "
-                "the minimum sufficiently defensible plan."
+                "objections and submit the next revision; stop at the minimum "
+                "sufficiently defensible plan."
             ),
         )
     manager._log(record, "session.plan_budget_resumed", {})
@@ -714,7 +723,7 @@ def reopen(manager: "SessionManager", session_id: str, note: str) -> dict:
             source="plan_reopened",
             content=(
                 "The human requested plan changes: " + direction
-                + " Fold this into PLAN.md and submit the next revision; it will "
+                + " Fold this into the next plan revision and submit it; it will "
                 "be re-reviewed before PLAN-READY."
             ),
         )
@@ -797,8 +806,8 @@ def note_capture(manager: "SessionManager", record: "SessionRecord", drop_id: st
             source="plan_consideration",
             content=(
                 f"A new consideration ({drop_id}) was captured while the plan was "
-                "ready. Fold it into PLAN.md — or record explicitly why it does not "
-                "change the plan — and submit the next revision for re-review."
+                "ready. Fold it into the next plan revision — or record explicitly "
+                "why it does not change the plan — and submit it for re-review."
             ),
         )
     manager._log(
@@ -825,7 +834,8 @@ def render_status(manager: "SessionManager", record: "SessionRecord") -> str | N
         f"budgets: {limits['turns_used']}/{limits['turn_budget']} turns · "
         f"{limits['revisions_used']}/{limits['revision_budget']} revisions · "
         f"{limits['minutes_budget']} minutes wall clock",
-        f"plan file: {PLAN_FILENAME} at the planning workspace root",
+        "submit revisions between SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END lines "
+        "in your reply — you have no write access anywhere, by enforcement",
     ]
     idea = plan["idea"]
     lines.append("")
@@ -988,11 +998,20 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
     coordination = _provision(manager, record, existing, staffing)
     now = utc_now()
     with db.transaction(manager.conn):
-        manager.conn.execute(
+        cursor = manager.conn.execute(
             "UPDATE session_promotions SET coordination_session_id = ?, status = "
-            "'provisioned', updated_at = ? WHERE planning_session_id = ?",
-            (coordination.session_id, now, session_id),
+            "'provisioned', updated_at = ? WHERE planning_session_id = ? "
+            "AND (coordination_session_id IS NULL OR coordination_session_id = ?)",
+            (coordination.session_id, now, session_id, coordination.session_id),
         )
+        if cursor.rowcount == 0:
+            # Defensive: the unique provenance index makes a different linked
+            # session impossible, so a zero-row finalize means the record
+            # changed underneath us in a way we must not paper over.
+            raise ConflictError(
+                "the promotion was finalized concurrently with a different "
+                "coordination session; refusing to overwrite it"
+            )
         from .manager import SessionStatus
 
         metadata = {
@@ -1059,7 +1078,7 @@ def _return_to_review_for_drift(manager, record, plan, current_tip: str) -> None
                 "The repository moved past the inspected baseline, so approval was "
                 "refused and the workspace was re-anchored to the new tip. Re-verify "
                 "the plan's repository facts, resolve the drift objection, update "
-                "PLAN.md if needed, and submit the next revision for re-review."
+                "the plan text if needed, and submit the next revision for re-review."
             ),
         )
     manager._log(
@@ -1069,49 +1088,78 @@ def _return_to_review_for_drift(manager, record, plan, current_tip: str) -> None
 
 
 def _provision(manager, record, promo: dict, staffing):
-    """Create (or adopt) the coordination session for a reserved promotion.
+    """Create (or adopt and complete) the coordination session for a reserved
+    promotion.
 
-    Resumable by construction: the coordination session is created with its
-    provenance in metadata first, so a crash between creation and the
-    finalize transaction is recovered by adopting the orphan on retry.
+    Resumable in both directions: the session is created with its provenance
+    in metadata first, so a crash after creation is recovered by adopting the
+    orphan on retry — and adoption always **finishes** the idempotent steps
+    (gate materialization, contract) a crash may have skipped, so a
+    half-provisioned session is never handed back as done. A unique index on
+    that provenance makes concurrent retries converge: the loser of a create
+    race adopts the winner's session instead of ever producing a second one.
     """
-    for candidate in manager.list_sessions():
-        if (candidate.metadata or {}).get("promoted_from") == record.session_id:
-            return candidate
+    orphan = _linked_session(manager, record.session_id)
+    if orphan is not None:
+        return _complete_provisioning(manager, orphan, promo)
 
     body = revision_body(manager, record.session_id, promo["plan_revision"])
-    criteria = parse_acceptance_criteria(body)
     spec = _spec_from_plan(manager, record, promo, body)
     participants = _staff(record, staffing)
-    coordination = manager.create(
-        name=record.name,
-        mode="long_horizon",
-        repo_root=record.repo_root,
-        base_branch=promo_branch(manager, record),
-        participants=participants,
-        spec=spec,
-        metadata={
-            "promoted_from": record.session_id,
-            "plan_id": promo["plan_id"],
-            "plan_revision": promo["plan_revision"],
-            "plan_digest": promo["plan_digest"],
-            "inspection_sha": promo["inspection_sha"],
-        },
-        # The coordination worktree branches from the frozen inspection_sha
-        # exactly — not from wherever the source branch has moved. Retries
-        # reuse the recorded SHA.
-        worktree_start_point=promo["inspection_sha"],
-    )
-    # Gate materialization is deterministic: each explicitly identified
-    # criterion becomes its own gate, verbatim — never the generic extraction.
-    manager.set_gates(
-        coordination.session_id,
-        [Gate(gate_id=gate_id, description=text) for gate_id, text in criteria],
-    )
-    manager.issue_contract(
-        coordination.session_id,
-        reason=f"promoted from approved plan {promo['plan_id']}",
-    )
+    try:
+        coordination = manager.create(
+            name=record.name,
+            mode="long_horizon",
+            repo_root=record.repo_root,
+            base_branch=promo_branch(manager, record),
+            participants=participants,
+            spec=spec,
+            metadata={
+                "promoted_from": record.session_id,
+                "plan_id": promo["plan_id"],
+                "plan_revision": promo["plan_revision"],
+                "plan_digest": promo["plan_digest"],
+                "inspection_sha": promo["inspection_sha"],
+            },
+            # The coordination worktree branches from the frozen
+            # inspection_sha exactly — not from wherever the source branch
+            # has moved. Retries reuse the recorded SHA.
+            worktree_start_point=promo["inspection_sha"],
+        )
+    except Exception:
+        winner = _linked_session(manager, record.session_id)
+        if winner is not None:
+            return _complete_provisioning(manager, winner, promo)
+        raise
+    return _complete_provisioning(manager, coordination, promo)
+
+
+def _linked_session(manager, planning_session_id: str):
+    for candidate in manager.list_sessions():
+        if (candidate.metadata or {}).get("promoted_from") == planning_session_id:
+            return candidate
+    return None
+
+
+def _complete_provisioning(manager, coordination, promo: dict):
+    """Idempotently finish gates and contract, fresh or adopted alike.
+
+    Gate materialization is deterministic: each explicitly identified
+    criterion becomes its own gate, verbatim — never the generic extraction.
+    """
+    body = revision_body(manager, promo["planning_session_id"], promo["plan_revision"])
+    criteria = parse_acceptance_criteria(body)
+    existing = [gate.gate_id for gate in manager.gates(coordination.session_id)]
+    if existing != [gate_id for gate_id, _text in criteria]:
+        manager.set_gates(
+            coordination.session_id,
+            [Gate(gate_id=gate_id, description=text) for gate_id, text in criteria],
+        )
+    if coordination.contract_revision < 1:
+        manager.issue_contract(
+            coordination.session_id,
+            reason=f"promoted from approved plan {promo['plan_id']}",
+        )
     return manager.get(coordination.session_id)
 
 

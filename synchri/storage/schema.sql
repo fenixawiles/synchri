@@ -543,3 +543,16 @@ CREATE TABLE IF NOT EXISTS session_promotions (
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL
 );
+
+-- The promotion topology, enforced by the database rather than by hoping:
+-- at most one session may descend from a given planning session, so
+-- concurrent promotion retries converge on one coordination session instead
+-- of racing a metadata check. The finalized link is unique for the same
+-- reason in the other direction.
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_promoted_from
+    ON sessions(json_extract(metadata, '$.promoted_from'))
+    WHERE json_extract(metadata, '$.promoted_from') IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS session_promotions_coordination
+    ON session_promotions(coordination_session_id)
+    WHERE coordination_session_id IS NOT NULL;

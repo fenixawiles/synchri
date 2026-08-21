@@ -160,8 +160,9 @@ def capture(
             "skip_review, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
             (session_id, drop_id, heading, text, CAPTURED, int(bool(skip_review)), now, now),
         )
-        # Reconcile immediately: an idle room cannot miss an item, because
-        # membership in the appendix never waited for a turn to happen.
+        # Backstop reconcile: the fresh capture is not ready yet (the appendix
+        # holds investigated items), but any item whose readiness transition
+        # raced a crash is appended now rather than waiting for a turn.
         _reconcile_locked(manager.conn, session_id)
     manager._log(
         record,
@@ -179,29 +180,38 @@ def capture(
 
 
 def reconcile(manager: "SessionManager", session_id: str) -> list[str]:
-    """Append captured items to the appendix — exactly once, in capture order.
+    """Append **ready** items to the appendix — exactly once, in readiness order.
 
-    Runs after each completed main-agent turn and immediately on capture, so
-    neither an idle room nor a busy one can miss an item. Once the phase
-    leaves ``original_work`` the appendix is frozen along with capture, so
-    reconciliation appends nothing. Exactly-once is structural: the appendix
-    primary key admits each ``(session, drop)`` a single time.
+    An item is ready when its investigation reached a presentable state: a
+    proposal (reviewed, or with review explicitly skipped), or a failure
+    report the pair can decline on. Reconciliation runs after each completed
+    main-agent turn, immediately on capture, and inside every transition that
+    makes an item ready — so neither an idle room nor a busy one can miss
+    one. Once the phase leaves ``original_work`` the appendix is frozen along
+    with capture, so reconciliation appends nothing. Exactly-once is
+    structural: the appendix primary key admits each ``(session, drop)`` a
+    single time.
     """
     with db.transaction(manager.conn):
-        row = manager.conn.execute(
-            "SELECT phase FROM sessions WHERE session_id = ?", (session_id,)
-        ).fetchone()
-        if row is None or (row["phase"] or PHASE_ORIGINAL) != PHASE_ORIGINAL:
-            return []
-        return _reconcile_locked(manager.conn, session_id)
+        return _reconcile_if_open(manager.conn, session_id)
+
+
+def _reconcile_if_open(conn, session_id: str) -> list[str]:
+    row = conn.execute(
+        "SELECT phase FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if row is None or (row["phase"] or PHASE_ORIGINAL) != PHASE_ORIGINAL:
+        return []
+    return _reconcile_locked(conn, session_id)
 
 
 def _reconcile_locked(conn, session_id: str) -> list[str]:
     rows = conn.execute(
         "SELECT d.drop_id FROM session_drops d LEFT JOIN session_appendix a "
         "ON a.session_id = d.session_id AND a.drop_id = d.drop_id "
-        "WHERE d.session_id = ? AND a.drop_id IS NULL ORDER BY d.rowid",
-        (session_id,),
+        "WHERE d.session_id = ? AND a.drop_id IS NULL AND d.status IN (?, ?, ?) "
+        "ORDER BY d.rowid",
+        (session_id, PROPOSED, FAILED, TIMED_OUT),
     ).fetchall()
     if not rows:
         return []
@@ -465,6 +475,10 @@ def deposit_proposal(
             "updated_at = ? WHERE session_id = ? AND drop_id = ?",
             (next_status, serialized, digest, utc_now(), session_id, drop_id),
         )
+        if next_status == PROPOSED:
+            # Ready now (review explicitly skipped): the item joins the
+            # appendix in this same transaction — an idle room cannot miss it.
+            _reconcile_if_open(manager.conn, session_id)
     return item(manager, session_id, drop_id)
 
 
@@ -485,9 +499,14 @@ def record_review(
                 "can receive its review",
                 code="drop_wrong_status",
             )
+        # Screened like every deposited artifact: the ancillary reviewer reads
+        # the scratch worktree, so its critique is as capable of quoting a
+        # secret as the scout's evidence is.
+        stored_verdict, _hit = _screened(verdict, 200)
+        stored_critique, _hit = _screened(critique, MAX_TEXT_CHARS)
         review = {
-            "verdict": _bounded(verdict, 200),
-            "critique": _bounded(critique, MAX_TEXT_CHARS),
+            "verdict": stored_verdict,
+            "critique": stored_critique,
             "proposal_digest": row["proposal_digest"],
             "reviewed_at": utc_now(),
         }
@@ -496,6 +515,8 @@ def record_review(
             "WHERE session_id = ? AND drop_id = ?",
             (PROPOSED, json.dumps(review), utc_now(), session_id, drop_id),
         )
+        # Reviewed means ready: the item joins the appendix atomically.
+        _reconcile_if_open(manager.conn, session_id)
     return item(manager, session_id, drop_id)
 
 
@@ -521,11 +542,16 @@ def mark_failed(
             raise ConflictError(f"{drop_id} already has its disposition: {row['disposition']}")
         if row["status"] == EVALUATED:
             raise StateError(f"{drop_id} is already evaluated", code="drop_wrong_status")
+        # Failure reports carry raw CLI output tails and land in the
+        # completion package — screened fail-closed like every artifact.
+        stored_report, _hit = _screened(report, MAX_TEXT_CHARS)
         manager.conn.execute(
             "UPDATE session_drops SET status = ?, failure_report = ?, updated_at = ? "
             "WHERE session_id = ? AND drop_id = ?",
-            (kind, _bounded(report, MAX_TEXT_CHARS), utc_now(), session_id, drop_id),
+            (kind, stored_report, utc_now(), session_id, drop_id),
         )
+        # A failure report is what the pair declines on — it is ready.
+        _reconcile_if_open(manager.conn, session_id)
     return item(manager, session_id, drop_id)
 
 
@@ -608,10 +634,11 @@ def evaluate(
         except NotFoundError:
             generation = 0
         evaluations = json.loads(row["evaluations"] or "{}")
+        stored_rationale, _hit = _screened(reason, MAX_RATIONALE_CHARS)
         evaluations[slot] = {
             "participant": actor,
             "verdict": normalized,
-            "rationale": _bounded(reason, MAX_RATIONALE_CHARS),
+            "rationale": stored_rationale,
             "proposal_digest": row["proposal_digest"],
             "recovery_generation": generation,
             "at": utc_now(),
@@ -741,14 +768,19 @@ def render_appendix(manager: "SessionManager", record: "SessionRecord") -> str |
     The canonical contract and specification are never touched: this renders
     after them, so an appendix item can never silently become spec text.
     """
-    entries = [e for e in items(manager, record.session_id) if e["appendix_position"]]
+    entries = items(manager, record.session_id)
+    if not record.policy.planning:
+        # The appendix proper holds ready items; a planning session's
+        # considerations never become "ready" — they exist to be folded into
+        # the plan, so its panel lists every capture.
+        entries = [e for e in entries if e["appendix_position"]]
     if not entries:
         return None
     lines: list[str] = ["--- appendix: side-task dropbox (additional, not optional) ---"]
     if record.phase == PHASE_ORIGINAL and record.policy.planning:
         lines.append(
             "The human captured additional considerations for the plan. Each is a "
-            "reviewed planning consideration: fold it into PLAN.md — or record "
+            "reviewed planning consideration: fold it into the next plan revision — or record "
             "explicitly why it does not change the plan — before PLAN-READY."
         )
         for entry in entries:

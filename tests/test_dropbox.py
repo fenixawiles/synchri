@@ -535,6 +535,67 @@ def test_build_prompt_renders_the_appendix_by_phase(manager, repo, agents, tmp_p
 
 
 # ----------------------------------------------------------------------
+# completion-package provenance
+# ----------------------------------------------------------------------
+
+
+def test_the_completion_package_carries_the_dropbox_record_and_split_usage(manager, repo, agents):
+    import io
+    import zipfile
+
+    from synchri.session import package as package_module
+    from synchri.storage import dao
+
+    record = _activated(manager, repo, agents)
+    first = _proposed_item(manager, record.session_id)
+    second = dropbox.capture(manager, record.session_id, "Chase the flaky socket test")
+    dropbox.begin_investigation(manager, record.session_id, second["drop_id"], base_sha="d" * 40)
+    dropbox.mark_failed(
+        manager, record.session_id, second["drop_id"],
+        kind="failed", report="the scout crashed",
+    )
+    dao.insert_turn_usage(
+        manager.conn, session_id=record.session_id, room_id=record.room_id,
+        participant="claude", runtime="claude_code", input_tokens=100, output_tokens=50,
+    )
+    dao.insert_turn_usage(
+        manager.conn, session_id=record.session_id, room_id=record.room_id,
+        participant="claude", runtime="claude_code", input_tokens=7, output_tokens=3,
+        origin_kind="ancillary", drop_id=first["drop_id"],
+    )
+    _pass_main_gates(manager, record.session_id)
+    manager.complete(record.session_id)
+    for actor in ("claude", "codex"):
+        dropbox.evaluate(manager, record.session_id, first["drop_id"],
+                         actor=actor, verdict="approve", rationale="worth doing")
+        dropbox.evaluate(manager, record.session_id, second["drop_id"],
+                         actor=actor, verdict="decline", rationale="dead end")
+    manager.complete(record.session_id)
+    _pass_gate(manager, record.session_id, "EXT-001")
+    assert manager.complete(record.session_id).status == "complete"
+
+    _filename, data = package_module.build(manager.broker, manager, record.session_id)
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    names = set(archive.namelist())
+    assert {"dropbox.md", "dropbox.json"} <= names
+
+    dropbox_md = archive.read("dropbox.md").decode()
+    assert "DROP-001" in dropbox_md and "Extension: EXT-001" in dropbox_md
+    assert "declined" in dropbox_md and "the scout crashed" in dropbox_md
+    assert "Evaluation (builder: claude" in dropbox_md
+
+    assert "origin: extension of DROP-001" in archive.read("gates.md").decode()
+    assert "2 captured — 1 approved as extensions, 1 declined" in archive.read("session.md").decode()
+
+    usage = json.loads(archive.read("usage.json").decode())
+    assert set(usage) == {"main", "ancillary"}
+    assert usage["main"][0]["input_tokens"] == 100
+    assert usage["ancillary"][0]["drop_id"] == "DROP-001"
+    summary = archive.read("usage-summary.md").decode()
+    assert "Ancillary usage" in summary and "Total (main room)" in summary
+
+
+# ----------------------------------------------------------------------
 # the UI API
 # ----------------------------------------------------------------------
 
@@ -569,6 +630,18 @@ def test_api_capture_and_inbox(ui, repo):
     with pytest.raises(urllib.error.HTTPError) as exc:
         call(ui, "/api/dropbox/capture", {"session": session_id, "prompt": "x" * 5000})
     assert exc.value.code == 400
+
+
+def test_the_app_ships_the_dropbox_inbox():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '"gates","dropbox"' in source, "the inbox is a first-class session tab"
+    assert 'api("dropbox" + q)' in source
+    assert "dropbox/capture" in source
+    assert "Add a side task" in source
+    assert "Skip the adversarial review" in source
+    assert "Capture is frozen" in source
 
 
 def test_api_completion_resumes_the_team_on_a_phase_transition(ui, repo):

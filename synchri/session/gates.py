@@ -94,6 +94,9 @@ class Gate:
 
     def render(self) -> str:
         lines = [f"{self.gate_id}  [{self.status.upper()}]  {self.description}"]
+        if self.origin_kind and self.origin_kind != "main":
+            source = f" of {self.drop_id}" if self.drop_id else ""
+            lines.append(f"    origin: {self.origin_kind}{source} — not part of the original specification")
         for label, values in (("evidence", self.evidence), ("tests", self.tests),
                               ("commits", self.commits)):
             for value in values:

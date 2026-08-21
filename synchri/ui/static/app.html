@@ -2252,7 +2252,7 @@ function listen() {
   es.onerror = () => { /* EventSource retries on its own */ };
 }
 
-const DETAIL_TABS = ["gates","tests","changes","commits","worktree","memory","raw","contract","changelog"];
+const DETAIL_TABS = ["gates","dropbox","tests","changes","commits","worktree","memory","raw","contract","changelog"];
 
 function timeboxText(deadline) {
   if (!deadline?.ends_at) return "Open-ended";
@@ -2825,6 +2825,74 @@ async function paint(tab, el) {
         await api("gate", payload);
         S.dash = await api("dashboard" + q); await paint("gates", el); confirmNotice(`Updated ${id}.`);
       });
+    });
+  } else if (tab === "dropbox") {
+    const r = await api("dropbox" + q);
+    const terminal = ["complete","stopped","failed","timed_out"].includes(d.session.status);
+    const captureOpen = !r.frozen && !terminal;
+    const phaseNote = r.phase === "original_work"
+      ? "Side ideas land here without interrupting the agents. Each is investigated off the critical path, appended after the specification — never written into it — and explicitly evaluated once the original task is complete."
+      : r.phase === "appendix_evaluation"
+        ? "Capture is frozen — the original work is complete, and both agents now owe every item below an explicit evaluation."
+        : r.phase === "extension_work"
+          ? "Approved extensions are being implemented, in appendix order. The session closes when every extension gate passes."
+          : "Capture is frozen.";
+    const lifecycle = entry => {
+      if (entry.disposition === "approved")
+        return `<span class="pill">approved → ${esc(entry.extension_id || "EXT")}</span>`;
+      if (entry.disposition === "declined") return `<span class="pill dim">declined</span>`;
+      if (entry.disposition === "waived") return `<span class="pill warn">waived</span>`;
+      if (entry.status === "failed" || entry.status === "timed_out")
+        return `<span class="pill bad">${esc(entry.status.replace("_", " "))}</span>`;
+      return `<span class="pill dim">${esc(entry.status)}</span>`;
+    };
+    const clip = (text, max) => {
+      const flat = String(text || "").trim();
+      return flat.length > max ? flat.slice(0, max - 1) + "…" : flat;
+    };
+    const evaluations = entry => ["builder", "reviewer", "human"].map(slot => {
+      const value = (entry.evaluations || {})[slot];
+      return value ? `<div class="small muted">${esc(slot)} (${esc(value.participant || "")}):
+        <b>${esc(value.verdict || "")}</b>${value.rationale ? ` — ${esc(clip(value.rationale, 240))}` : ""}</div>` : "";
+    }).join("");
+    const card = entry => {
+      const proposal = entry.proposal || {};
+      const review = entry.review || {};
+      const stat = (proposal.diffstat || "").split("\n").map(line => line.trim()).filter(Boolean).slice(-1)[0];
+      return `<div class="card">
+        <div class="between"><div><b class="mono">${esc(entry.drop_id)}</b> <span class="small">${esc(entry.title)}</span>
+          <div class="small muted" style="margin-top:.18rem">${esc(clip(entry.prompt, 220))}</div></div>
+          ${lifecycle(entry)}</div>
+        ${proposal.recommendation ? `<div class="small" style="margin-top:.55rem"><b>Scout:</b> ${esc(clip(proposal.recommendation, 300))}</div>` : ""}
+        ${stat ? `<div class="small muted mono" style="margin-top:.25rem">${esc(stat)}</div>` : ""}
+        ${proposal.patch_note ? `<div class="small" style="color:var(--warn);margin-top:.25rem">${esc(proposal.patch_note)}</div>` : ""}
+        ${review.verdict ? `<div class="small muted" style="margin-top:.25rem">Adversarial review: <b>${esc(review.verdict)}</b>${review.critique ? ` — ${esc(clip(review.critique, 240))}` : ""}</div>`
+          : entry.skip_review ? `<div class="small muted" style="margin-top:.25rem">Adversarial review skipped by your explicit choice.</div>` : ""}
+        ${entry.failure_report ? `<div class="small" style="color:var(--warn);margin-top:.25rem">${esc(clip(entry.failure_report, 300))}</div>` : ""}
+        ${evaluations(entry)}
+      </div>`;
+    };
+    el.innerHTML = `<div class="small muted">${esc(phaseNote)}</div>
+      ${r.items.length ? `<div class="small muted" style="margin-top:.5rem">${r.summary.total} item(s) · ${r.summary.open} open · ${r.summary.approved} approved · ${r.summary.declined} declined${r.summary.waived ? ` · ${r.summary.waived} waived` : ""}</div>` : ""}
+      ${captureOpen ? `<div class="card" style="margin-top:1rem"><b class="small">Add a side task</b>
+        <div class="small muted" style="margin-top:.2rem">Captured without interrupting the agents. A scout investigates it in a disposable scratch worktree; nothing lands without both agents' approval after the original task.</div>
+        <textarea id="drop-prompt" rows="3" placeholder="What should the scout investigate?" style="margin-top:.55rem;width:100%"></textarea>
+        <div class="between" style="margin-top:.55rem">
+          <label class="small muted" style="display:flex;align-items:center;gap:.4rem"><input type="checkbox" id="drop-skip-review"> Skip the adversarial review for this item</label>
+          <button class="primary" id="drop-add">Add to dropbox</button></div></div>` : ""}
+      <div class="stack" style="margin-top:1rem">${r.items.map(card).join("") || `<span class="muted">Nothing captured yet.</span>`}</div>`;
+    const add = el.querySelector("#drop-add");
+    if (add) add.onclick = guard(async () => {
+      const prompt = el.querySelector("#drop-prompt").value.trim();
+      if (!prompt) { flash("Describe the side task first."); return; }
+      const result = await api("dropbox/capture", {
+        session: S.session, prompt,
+        skip_review: el.querySelector("#drop-skip-review").checked,
+      });
+      await paint("dropbox", el);
+      confirmNotice(result.investigating
+        ? `Captured ${result.item.drop_id} — the scout is investigating.`
+        : `Captured ${result.item.drop_id}. It will be evaluated at completion; connect an agent to investigate it sooner.`);
     });
   } else if (tab === "tests") {
     const t = d.tests;

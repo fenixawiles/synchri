@@ -3,9 +3,11 @@
 # release.yml, gated on v* tags.
 name: tests
 
+# push covers main (post-merge); pull_request covers every PR head — the
+# split avoids double runs on PR branches.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 jobs:

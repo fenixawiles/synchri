@@ -207,11 +207,17 @@ def create(
     name: str | None = None,
     parent_dir: str | Path | None = None,
     attempts: int = 5,
+    start_point: str | None = None,
 ) -> Worktree:
     """Create the session's isolated worktree on a fresh branch.
 
     Retries on name collision, then gives up rather than silently reusing an
     existing tree — reuse would break the isolation guarantee.
+
+    ``start_point`` pins the new branch to an exact commit instead of the
+    base branch's current tip — plan promotion branches from the frozen
+    ``inspection_sha`` the plan was reviewed against, not from wherever the
+    source branch has moved since.
     """
     root = Path(repo_root).resolve()
     status = inspect_repository(root)
@@ -219,6 +225,8 @@ def create(
         raise StateError("; ".join(status.problems), code="repo_unusable")
     if base_branch not in status.branches and not _rev_exists(root, base_branch):
         raise ValidationError(f"base branch {base_branch!r} does not exist in this repository")
+    if start_point and not _rev_exists(root, start_point):
+        raise ValidationError(f"start point {start_point!r} does not exist in this repository")
 
     parent = Path(parent_dir).expanduser() if parent_dir else default_worktree_parent(root)
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -237,7 +245,7 @@ def create(
                 raise ValidationError(f"a worktree or branch named {candidate!r} already exists")
             continue
         try:
-            git(root, "worktree", "add", "-b", candidate, str(path), base_branch)
+            git(root, "worktree", "add", "-b", candidate, str(path), start_point or base_branch)
         except StateError as exc:
             last_error = exc
             if name:
@@ -383,3 +391,32 @@ def _rev_exists(repo_root: str | Path, ref: str) -> bool:
     except StateError:
         return False
     return True
+
+
+def remove_scratch(
+    repo_root: str | Path, scratch_path: str | None, scratch_branch: str | None
+) -> None:
+    """Remove an ancillary scratch worktree and its branch, best-effort.
+
+    Scratch trees are ephemeral by contract: the durable dropbox proposal is
+    the artifact of record, so — unlike session worktrees, which are only
+    removed when provably pushed — these are deliberately exempt from that
+    protection. Nothing here ever touches a remote ref.
+    """
+    import shutil
+
+    if scratch_path:
+        try:
+            git(repo_root, "worktree", "remove", "--force", str(scratch_path), check=False)
+        except StateError:
+            pass
+        shutil.rmtree(scratch_path, ignore_errors=True)
+    if scratch_branch:
+        try:
+            git(repo_root, "branch", "-D", scratch_branch, check=False)
+        except StateError:
+            pass
+    try:
+        git(repo_root, "worktree", "prune", check=False)
+    except StateError:
+        pass

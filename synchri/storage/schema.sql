@@ -254,7 +254,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     deadline          TEXT,
     escalation        TEXT NOT NULL DEFAULT '{}',
     metadata          TEXT NOT NULL DEFAULT '{}',
-    contract_revision INTEGER NOT NULL DEFAULT 0
+    contract_revision INTEGER NOT NULL DEFAULT 0,
+    -- v6: the durable session phase. A valid completion request in
+    -- original_work advances to appendix_evaluation (it does not close the
+    -- session); only closing may invoke the terminal room-closing behavior.
+    phase             TEXT NOT NULL DEFAULT 'original_work'
 );
 
 CREATE INDEX IF NOT EXISTS sessions_repo ON sessions(repo_root, status);
@@ -309,6 +313,11 @@ CREATE TABLE IF NOT EXISTS session_gates (
     reviewer_assessment TEXT,
     updated_at          TEXT,
     updated_by          TEXT,
+    -- v6: provenance. 'main' gates come from the original spec; 'extension'
+    -- gates were materialized from an approved dropbox item.
+    origin_kind         TEXT NOT NULL DEFAULT 'main',
+    drop_id             TEXT,
+    extension_id        TEXT,
     PRIMARY KEY (session_id, gate_id)
 );
 
@@ -373,8 +382,182 @@ CREATE TABLE IF NOT EXISTS agent_turn_usage (
     cached_input_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd            REAL,
     duration_seconds    REAL,
-    created_at          TEXT NOT NULL
+    created_at          TEXT NOT NULL,
+    -- v6: ancillary (dropbox) work reports separately — it is never merged
+    -- into an ordinary participant's totals.
+    origin_kind         TEXT NOT NULL DEFAULT 'main',
+    drop_id             TEXT
 );
 
 CREATE INDEX IF NOT EXISTS agent_turn_usage_session
     ON agent_turn_usage(session_id, usage_id);
+
+-- v6: the side-task dropbox. During a live session the user captures side
+-- ideas as items; an ancillary scout investigates each one off the critical
+-- path and an ancillary adversarial reviewer attacks the proposal. Items are
+-- non-authoritative by default: they cannot alter the main contract or merge
+-- into the canonical branch. The spec created at room creation stays the
+-- source of truth; items land in an append-only appendix and every one is
+-- explicitly evaluated by both main roles after the original task completes.
+CREATE TABLE IF NOT EXISTS session_drops (
+    session_id      TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    drop_id         TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    prompt          TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'captured'
+                        CHECK (status IN ('captured', 'investigating', 'reviewing',
+                                          'proposed', 'evaluated', 'failed', 'timed_out')),
+    skip_review     INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    -- ancillary execution bookkeeping (scratch trees are ephemeral by
+    -- contract; the durable proposal is the artifact of record)
+    base_sha        TEXT,
+    scratch_branch  TEXT,
+    scratch_path    TEXT,
+    failure_report  TEXT,
+    -- the structured proposal: an immutable digest over evidence, rationale,
+    -- recommendation, patch info, and the scout's base_sha
+    proposal        TEXT,
+    proposal_digest TEXT,
+    review          TEXT,
+    -- evaluation: both main roles, recorded individually; both approving
+    -- means approved, any non-approval means declined with both rationales.
+    -- 'waived' is the human override at a forced completion — an explicit
+    -- recorded disposition, never a silent drop.
+    evaluations     TEXT NOT NULL DEFAULT '{}',
+    disposition     TEXT CHECK (disposition IS NULL
+                                OR disposition IN ('approved', 'declined', 'waived')),
+    extension_id    TEXT,
+    PRIMARY KEY (session_id, drop_id)
+);
+
+-- Exactly-once membership in the append-only appendix: reconciliation may
+-- run any number of times, but an item is appended exactly once, in order.
+CREATE TABLE IF NOT EXISTS session_appendix (
+    session_id  TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    drop_id     TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    appended_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, drop_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS session_appendix_position
+    ON session_appendix(session_id, position);
+
+-- v6: the durable outcome of a runtime's user-initiated connection test — the
+-- proof that Synchri can launch this CLI unattended, inject a prompt, read its
+-- output, and (where the adapter defines it) resume a provider session.  One
+-- row per runtime.  The row is never guessed stale: invalidation happens by
+-- comparing these stored facts against a fresh passive probe.
+CREATE TABLE IF NOT EXISTS runtime_connections (
+    runtime          TEXT PRIMARY KEY,
+    state            TEXT NOT NULL CHECK (state IN ('connected', 'failed')),
+    executable_path  TEXT,
+    version          TEXT,
+    adapter_revision TEXT NOT NULL DEFAULT '',
+    -- 1 = a cached sign-in file was present at test time, 0 = indicators are
+    -- defined but none was found, NULL = this adapter has no indicators.
+    auth_indication  INTEGER,
+    resume           TEXT NOT NULL DEFAULT 'unsupported'
+                         CHECK (resume IN ('verified', 'supported_unverified', 'unsupported')),
+    checks           TEXT NOT NULL DEFAULT '[]',
+    detail           TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+
+-- v6: Planning Mode. One plan per planning session, produced by a planner and
+-- an adversarial plan reviewer working in a disposable read-only planning
+-- workspace anchored to inspection_sha. The plan is durable, revisioned, and
+-- immutable once approved; approval promotes it into a new coordination
+-- session and never rewrites it retroactively.
+CREATE TABLE IF NOT EXISTS session_plans (
+    session_id     TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+    plan_id        TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'drafting'
+                       CHECK (status IN ('drafting', 'awaiting_review', 'under_revision',
+                                         'ready', 'needs_human_resolution', 'approved')),
+    -- the human's idea articulation, verbatim — the spec on-ramp
+    idea           TEXT NOT NULL,
+    revision       INTEGER NOT NULL DEFAULT 0,
+    inspection_sha TEXT NOT NULL,
+    source_branch  TEXT NOT NULL,
+    workspace_path TEXT NOT NULL,
+    -- budgets: 24 agent turns, 6 revisions, 60 minutes — whichever first —
+    -- with one user-authorized resume; exhaustion goes to the human.
+    turns_used     INTEGER NOT NULL DEFAULT 0,
+    resumes_used   INTEGER NOT NULL DEFAULT 0,
+    ready_at       TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+-- Every submitted plan revision, verbatim. The final artifact distinguishes
+-- the original proposed plan from changes introduced through review.
+CREATE TABLE IF NOT EXISTS session_plan_revisions (
+    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    revision   INTEGER NOT NULL,
+    summary    TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL,
+    author     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, revision)
+);
+
+-- Reviewer objections and planner-recorded forks, with their dispositions.
+-- Open blocking objections and open forks prevent PLAN-READY and approval.
+CREATE TABLE IF NOT EXISTS session_plan_objections (
+    session_id        TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    objection_id      TEXT NOT NULL,
+    classification    TEXT NOT NULL
+                          CHECK (classification IN ('blocking', 'nonblocking', 'advisory', 'fork')),
+    text              TEXT NOT NULL,
+    raised_by         TEXT NOT NULL,
+    raised_revision   INTEGER NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'open'
+                          CHECK (status IN ('open', 'resolved', 'waived')),
+    disposition       TEXT,
+    resolved_by       TEXT,
+    resolved_revision INTEGER,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (session_id, objection_id)
+);
+
+-- v6: plan promotion. Approval is a state transition, not an acknowledgment:
+-- one transaction reserves this record — freezing the plan digest, revision,
+-- and inspected SHA — and then the coordination session is provisioned
+-- resumably against it. The primary key is the topology: exactly one
+-- coordination session per approved plan, and a retry resumes the record
+-- instead of creating a second session.
+CREATE TABLE IF NOT EXISTS session_promotions (
+    planning_session_id     TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+    plan_id                 TEXT NOT NULL,
+    plan_revision           INTEGER NOT NULL,
+    plan_digest             TEXT NOT NULL,
+    inspection_sha          TEXT NOT NULL,
+    status                  TEXT NOT NULL DEFAULT 'reserved'
+                                CHECK (status IN ('reserved', 'provisioned')),
+    coordination_session_id TEXT,
+    -- Captures that raced the reserve-to-finalize window. Approval froze the
+    -- planning dropbox and the coordination session may not exist yet, so
+    -- they queue here durably and drain into the coordination session's
+    -- dropbox inside the same transaction that finalizes the promotion.
+    pending_captures        TEXT NOT NULL DEFAULT '[]',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+
+-- The promotion topology, enforced by the database rather than by hoping:
+-- at most one session may descend from a given planning session, so
+-- concurrent promotion retries converge on one coordination session instead
+-- of racing a metadata check. The finalized link is unique for the same
+-- reason in the other direction.
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_promoted_from
+    ON sessions(json_extract(metadata, '$.promoted_from'))
+    WHERE json_extract(metadata, '$.promoted_from') IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS session_promotions_coordination
+    ON session_promotions(coordination_session_id)
+    WHERE coordination_session_id IS NOT NULL;

@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 #: How long a writer waits for a competing writer before giving up.
@@ -91,11 +91,40 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "memory_note": "TEXT",
     },
     # v5: per-agent runtime supervision state (NULL = never launched).
+    # v6: durable join-assembly phases so the launch UI can show what each
+    # agent is actually doing to join (launching -> injecting_bootstrap ->
+    # awaiting_acknowledgment -> ready | failed), and retry only the failed
+    # participant.
     "session_participants": {
         "runtime_status": "TEXT",
         "runtime_detail": "TEXT",
         "consecutive_failures": "INTEGER NOT NULL DEFAULT 0",
         "runtime_updated_at": "TEXT",
+        "join_phase": "TEXT",
+        "join_detail": "TEXT",
+        "join_updated_at": "TEXT",
+        # v6: participant-scoped recovery — the provider's own resume id from
+        # the agent's last completed invocation, and a generation counter that
+        # increments on every recovery action (resume, replace, restart).
+        "resume_id": "TEXT",
+        "recovery_generation": "INTEGER NOT NULL DEFAULT 0",
+    },
+    # v6: the durable session phase (original_work -> appendix_evaluation ->
+    # extension_work -> closing).
+    "sessions": {
+        "phase": "TEXT NOT NULL DEFAULT 'original_work'",
+    },
+    # v6: gate provenance — main-spec gates vs. extension gates materialized
+    # from approved dropbox items.
+    "session_gates": {
+        "origin_kind": "TEXT NOT NULL DEFAULT 'main'",
+        "drop_id": "TEXT",
+        "extension_id": "TEXT",
+    },
+    # v6: ancillary usage reports separately from ordinary participants.
+    "agent_turn_usage": {
+        "origin_kind": "TEXT NOT NULL DEFAULT 'main'",
+        "drop_id": "TEXT",
     },
 }
 

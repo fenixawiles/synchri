@@ -186,7 +186,7 @@ def test_broker_errors_come_back_as_structured_json(ui):
 
 def test_bootstrap_gives_the_app_everything_it_needs(ui):
     boot = call(ui, "/api/bootstrap")
-    assert [m["mode"] for m in boot["modes"]] == ["long_horizon"]
+    assert [m["mode"] for m in boot["modes"]] == ["long_horizon", "planning"]
     assert any(c["key"] == "git.push" for g in boot["permissions"] for c in g["capabilities"])
     assert boot["sessions"] == [] and "workspace" in boot
     assert boot["github"]["authenticated"] is False
@@ -1287,8 +1287,10 @@ def test_restart_agent_resets_state_and_resolves_the_escalation(ui, repo):
         def __init__(self):
             self.restarted = []
 
-        def restart(self, record):
-            self.restarted.append(record.session_id)
+        def restart_participant(self, record, name):
+            # Participant-scoped: the restart names exactly one agent and
+            # never touches the rest of the team.
+            self.restarted.append((record.session_id, name))
             return {"phase": "resuming"}
 
     stub = _RestartStub()
@@ -1299,7 +1301,7 @@ def test_restart_agent_resets_state_and_resolves_the_escalation(ui, repo):
     assert dashboard["participant_states"]["claude"]["state"] == "active"
     assert dashboard["participant_states"]["claude"]["failures"] == 0
     assert dashboard["user_intervention_required"] is False
-    assert stub.restarted == [session_id]
+    assert stub.restarted == [(session_id, "claude")]
 
     with pytest.raises(urllib.error.HTTPError) as exc:
         call(ui, "/api/control", {"session": session_id, "action": "restart_agent",
@@ -1645,3 +1647,122 @@ def test_a_quiet_stream_stays_open(ui, repo):
         assert not response.closed
     finally:
         response.close()
+
+
+# ----------------------------------------------------------------------
+# join assembly: durable phases, partial joins, retry-only-the-failed
+# ----------------------------------------------------------------------
+
+GOOD_AGENT = """\
+import sys
+prompt = sys.argv[1]
+if 'output exactly UNDERSTOOD' in prompt:
+    with open({count!r}, 'a') as handle:
+        handle.write('ack\\n')
+    print('UNDERSTOOD')
+else:
+    print('Inspected the worktree.')
+    print('SYNCHRI-PASS')
+"""
+
+FAILING_AGENT = """\
+import sys
+prompt = sys.argv[1]
+if 'output exactly UNDERSTOOD' in prompt:
+    with open({count!r}, 'a') as handle:
+        handle.write('ack\\n')
+sys.stderr.write('provider sign-in expired')
+raise SystemExit(1)
+"""
+
+
+def _wait_managed_phase(ui, session_id, phases, timeout=20):
+    deadline = time.monotonic() + timeout
+    managed = {}
+    while time.monotonic() < deadline:
+        managed = call(ui, f"/api/managed?session={session_id}")["managed"]
+        if managed["phase"] in phases and not managed["alive"]:
+            return managed
+        time.sleep(0.05)
+    raise AssertionError(f"managed run never reached {phases}: {managed}")
+
+
+def test_partial_join_keeps_the_room_inactive_and_retries_only_the_failed_agent(
+    ui, repo, tmp_path
+):
+    import sys
+
+    builder_count = tmp_path / "builder-acks.log"
+    reviewer_count = tmp_path / "reviewer-acks.log"
+    builder_script = tmp_path / "builder.py"
+    reviewer_script = tmp_path / "reviewer.py"
+    builder_script.write_text(GOOD_AGENT.format(count=str(builder_count)), encoding="utf-8")
+    reviewer_script.write_text(FAILING_AGENT.format(count=str(reviewer_count)), encoding="utf-8")
+
+    started = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Inspect the repository.",
+        "agents": [{
+            "name": "builder", "runtime": "generic", "role": "primary_builder",
+            "command": f"{sys.executable} {builder_script} {{prompt}}",
+        }, {
+            "name": "reviewer", "runtime": "generic", "role": "adversarial_reviewer",
+            "command": f"{sys.executable} {reviewer_script} {{prompt}}",
+        }],
+    })
+    session_id = started["session"]["session_id"]
+
+    call(ui, "/api/managed/start", {"session": session_id})
+    managed = _wait_managed_phase(ui, session_id, {"needs_attention"})
+    assert "reviewer" in managed["detail"]
+
+    # The room stays inactive; the ready agent is attached but receives no work.
+    assert call(ui, f"/api/session?session={session_id}")["status"] == "awaiting_ack"
+    launch = call(ui, f"/api/launch?session={session_id}")["launch"]
+    phases = {agent["name"]: agent for agent in launch["agents"]}
+    assert phases["builder"]["join_phase"] == "ready"
+    assert phases["builder"]["acknowledged"] is True
+    assert phases["reviewer"]["join_phase"] == "failed"
+    assert "sign-in expired" in phases["reviewer"]["join_detail"]
+
+    # Fix the failed agent and retry: only the reviewer is re-invoked for the
+    # agreement — the builder's acknowledgment stands.
+    reviewer_script.write_text(GOOD_AGENT.format(count=str(reviewer_count)), encoding="utf-8")
+    call(ui, "/api/managed/start", {"session": session_id})
+    _wait_managed_phase(ui, session_id, {"waiting"})
+
+    assert builder_count.read_text().count("ack") == 1
+    assert reviewer_count.read_text().count("ack") == 2
+    assert call(ui, f"/api/session?session={session_id}")["status"] == "active"
+    launch = call(ui, f"/api/launch?session={session_id}")["launch"]
+    assert all(agent["join_phase"] == "ready" for agent in launch["agents"])
+
+
+def test_launch_payload_reports_runtime_connection_state(ui, repo):
+    from synchri.runner import doctor
+
+    doctor._save_connection(ui["broker"].conn, {
+        "runtime": "codex",
+        "state": "connected",
+        "executable_path": "/usr/local/bin/codex",
+        "version": "1.0.0",
+        "adapter_revision": "abc",
+        "auth_indication": True,
+        "resume": doctor.RESUME_UNSUPPORTED,
+        "checks": [],
+        "detail": "connected",
+    })
+    result = call(ui, "/api/quick-start", {
+        "repo_path": str(repo),
+        "goal": "Review the current change together.",
+        "agents": [
+            {"name": "codex", "runtime": "codex", "role": "primary_builder"},
+            {"name": "copilot", "runtime": "copilot", "role": "adversarial_reviewer"},
+        ],
+    })
+    agents = {agent["name"]: agent for agent in result["launch"]["agents"]}
+    assert agents["codex"]["connected"] is True
+    assert agents["copilot"]["connected"] is False
+
+    boot = call(ui, "/api/bootstrap")
+    assert boot["runtime_connections"]["codex"]["state"] == "connected"

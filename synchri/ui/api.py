@@ -34,6 +34,8 @@ from ..session.modes import (
 from ..session.permissions import PermissionSet, permission_profile, permission_profiles
 from ..session.spec import ProductSpec
 from ..storage import dao
+from ..runner import ancillary as ancillary_module
+from ..runner import doctor as doctor_module
 from ..runner.managed import ManagedRunnerRegistry
 
 Route = Callable[[dict, dict], dict]
@@ -53,6 +55,8 @@ class Api:
         self.broker = broker
         self.manager = manager
         self.managed = managed or ManagedRunnerRegistry(broker.workspace)
+        self.connections = doctor_module.ConnectionTester(broker.workspace)
+        self.ancillary = ancillary_module.AncillaryRunner(broker.workspace)
         # ``synchri ui`` is normally launched from the repository being worked
         # on.  Keeping that small piece of context makes the default path a
         # room launch, not a repository-discovery exercise.  The draft still
@@ -82,6 +86,10 @@ class Api:
             ("GET", "launch"): self.launch,
             ("POST", "managed/start"): self.start_managed,
             ("GET", "managed"): self.managed_status,
+            ("GET", "runtimes/doctor"): self.runtimes_doctor,
+            ("POST", "runtimes/connect"): self.connect_runtime,
+            ("GET", "runtimes/connect"): self.connect_runtime_status,
+            ("POST", "runtimes/connect/cancel"): self.cancel_connect_runtime,
             ("GET", "sessions"): self.sessions,
             ("GET", "session"): self.session,
             ("POST", "session/rename"): self.rename_session,
@@ -97,6 +105,11 @@ class Api:
             ("POST", "approval"): self.approval,
             ("GET", "gates"): self.gates,
             ("POST", "gate"): self.update_gate,
+            ("GET", "dropbox"): self.dropbox,
+            ("POST", "dropbox/capture"): self.capture_drop,
+            ("GET", "plan"): self.plan,
+            ("POST", "plan/control"): self.plan_control,
+            ("POST", "plan/approve"): self.approve_plan,
             ("POST", "gates/preview"): self.preview_gates,
             ("POST", "tests/run"): self.run_tests,
             ("GET", "changes"): self.changes,
@@ -135,6 +148,9 @@ class Api:
             # never makes the session database cloud-hosted; it simply lets the
             # person see who is signed in before choosing repository grants.
             "github": discovery.github_status(self.broker.workspace),
+            # Stored connection outcomes only — no probes on first paint. The
+            # doctor endpoint refreshes these with live invalidation checks.
+            "runtime_connections": doctor_module.stored_connections(self.broker.conn),
             "default_repo": self.default_repo,
             "desktop_clone_root": str(discovery.desktop_clone_root()),
             "open_drafts": drafts_module.versions(self.broker.conn),
@@ -355,6 +371,9 @@ class Api:
         draft = self._draft(key)
         if not draft.is_ready:
             raise ValidationError("; ".join(draft.blocking_problems()))
+        # Planning Mode's spec on-ramp: the wizard's text is the user's idea
+        # articulation, stored verbatim on the plan — not a ProductSpec.
+        planning = bool(draft.policy and draft.policy.planning)
         record = self.manager.create(
             name=draft.name or "Synchri session",
             mode=draft.mode,
@@ -362,12 +381,13 @@ class Api:
             base_branch=draft.base_branch,
             participants=draft.participants,
             permissions=draft.permissions,
-            spec=draft.spec,
+            spec=None if planning else draft.spec,
             deadline=draft.deadline,
             escalation=draft.escalation,
             worktree_parent=draft.worktree_parent,
             worktree_name=draft.worktree_name,
             existing_worktree_path=draft.existing_worktree_path,
+            metadata={"idea": draft.spec.text} if planning and draft.spec else None,
         )
         document = self.manager.issue_contract(record.session_id, reason="initial contract")
         if body.get("save_preset"):
@@ -470,6 +490,51 @@ class Api:
             "readiness": self.managed.readiness(record),
         }
 
+    # -- runtime connections -------------------------------------------
+
+    def runtimes_doctor(self, query: dict, body: dict) -> dict:
+        """The two-tier doctor view: passive checks plus live connection state.
+
+        This endpoint runs the passive probes (cheap, local, timeout-bounded);
+        it never invokes a provider. The consented connection test lives
+        behind ``runtimes/connect``.
+        """
+        runtimes = []
+        for entry in runtime_catalog():
+            runtime = entry["key"]
+            report = doctor_module.passive_report(runtime)
+            runtimes.append(
+                {
+                    **entry,
+                    "doctor": report["checks"],
+                    "connection": doctor_module.connection_state(self.broker.conn, runtime),
+                    "test": self.connections.status(runtime),
+                }
+            )
+        return {"runtimes": runtimes}
+
+    def connect_runtime(self, query: dict, body: dict) -> dict:
+        """Start the user-initiated connection test for one runtime."""
+        runtime = (body.get("runtime") or "").strip()
+        if not runtime:
+            raise ValidationError("choose which runtime to connect")
+        return {"test": self.connections.start(runtime)}
+
+    def connect_runtime_status(self, query: dict, body: dict) -> dict:
+        runtime = (query.get("runtime") or "").strip()
+        if not runtime:
+            raise ValidationError("name the runtime to check")
+        return {
+            "test": self.connections.status(runtime),
+            "connection": doctor_module.connection_state(self.broker.conn, runtime),
+        }
+
+    def cancel_connect_runtime(self, query: dict, body: dict) -> dict:
+        runtime = (body.get("runtime") or "").strip()
+        if not runtime:
+            raise ValidationError("name the runtime to cancel")
+        return {"test": self.connections.cancel(runtime)}
+
     def _plans(self, values: list[dict] | None) -> list[ParticipantPlan]:
         if not isinstance(values, list):
             raise ValidationError("add at least one agent")
@@ -510,6 +575,13 @@ class Api:
         }
         acknowledgments = self.manager.acknowledgment_state(record.session_id)
         worktree = record.worktree
+        workdir = worktree.path if worktree else (
+            record.planning_workspace.get("path") or record.repo_root
+        )
+        participant_states = self.manager.participant_states(record.session_id)
+        # Stored connection outcomes gate the paste-free presentation; the
+        # managed registry stays the mechanical authority when Start is hit.
+        connections = doctor_module.stored_connections(self.broker.conn)
         agents = []
         # The packaged macOS app is also a CLI helper.  Generated external
         # prompts must use that concrete executable, not assume the provider's
@@ -522,7 +594,7 @@ class Api:
             plan_view = plan.to_dict()
             launch_status = plan_launch_status(plan)
             join_command = (
-                f"cd {shlex.quote(worktree.path)} && {cli} join {invite['token']} "
+                f"cd {shlex.quote(workdir)} && {cli} join {invite['token']} "
                 f"--name {shlex.quote(plan.name)}"
             )
             setup_prompt = "\n".join(
@@ -549,6 +621,7 @@ class Api:
                     ),
                 ]
             )
+            state = participant_states.get(plan.name) or {}
             agents.append(
                 {
                     "name": plan.name,
@@ -560,6 +633,9 @@ class Api:
                     "launch_mode": launch_status["mode"],
                     "managed_ready": launch_status["ready"],
                     "launch_detail": launch_status["detail"],
+                    "connected": connections.get(plan.runtime, {}).get("state") == "connected",
+                    "join_phase": state.get("join_phase"),
+                    "join_detail": state.get("join_detail"),
                     "join_command": join_command,
                     "setup_prompt": setup_prompt,
                 }
@@ -569,7 +645,7 @@ class Api:
             "contract": document.to_dict(),
             "launch": {
                 "room_id": record.room_id,
-                "worktree_path": worktree.path if worktree else None,
+                "worktree_path": workdir,
                 "agents": agents,
                 "joined_count": sum(agent["joined"] for agent in agents),
                 "acknowledgments": acknowledgments,
@@ -845,6 +921,143 @@ class Api:
         )
         return gate.to_dict()
 
+    def dropbox(self, query: dict, body: dict) -> dict:
+        """The side-task inbox: every item's lifecycle, in appendix order."""
+        from ..session import dropbox as dropbox_module
+
+        session_id = self._session_id(query)
+        record = self.manager.get(session_id)
+        return {
+            "phase": record.phase,
+            "frozen": record.phase != dropbox_module.PHASE_ORIGINAL,
+            "items": dropbox_module.items(self.manager, session_id),
+            "summary": dropbox_module.summarize(self.manager, session_id),
+        }
+
+    def capture_drop(self, query: dict, body: dict) -> dict:
+        """Capture a side task. The main agents are never interrupted.
+
+        Reconciliation happens inside the capture, so an idle room still gets
+        the item into the appendix exactly once.
+        """
+        from ..session import dropbox as dropbox_module
+
+        from ..session import planning as planning_module
+
+        session_id = self._session_id(query, body)
+        record = self.manager.get(session_id)
+        promotion = planning_module.promotion(self.manager, session_id)
+        if promotion is not None:
+            # Capture froze at plan approval; an item captured after it enters
+            # the new coordination session's dropbox. Before the promotion
+            # finalizes there may be nothing to capture into yet, so the item
+            # queues durably on the promotion record and drains into the
+            # coordination dropbox atomically with the finalize — never lost,
+            # never bounced back to the user.
+            target = promotion.get("coordination_session_id")
+            if target is None:
+                queued = planning_module.queue_capture(
+                    self.manager,
+                    session_id,
+                    prompt=body.get("prompt", ""),
+                    title=body.get("title"),
+                    skip_review=bool(body.get("skip_review")),
+                )
+                if queued is not None:
+                    return {"item": None, "investigating": False, **queued}
+                # The promotion finalized between our read and the queue
+                # attempt — capture straight into the coordination session.
+                target = planning_module.promotion(self.manager, session_id)[
+                    "coordination_session_id"
+                ]
+            session_id = target
+        item = dropbox_module.capture(
+            self.manager,
+            session_id,
+            body.get("prompt", ""),
+            title=body.get("title"),
+            skip_review=bool(body.get("skip_review")),
+        )
+        # The scout starts in parallel, off the critical path — but only for
+        # an agent the user actually wired up: an explicit command, or a
+        # runtime whose consented connection test passed. A merely-installed
+        # CLI is never invoked implicitly. Otherwise the item waits honestly
+        # as captured; the completion cutoff has a terminal route for it, and
+        # the human can retry once an agent is connected.
+        record = self.manager.get(session_id)
+        lead, _reviewer = collaboration_pair(record.participants)
+        investigating = False
+        # Planning considerations are folded into the plan by the planner —
+        # they are never scouted.
+        if lead is not None and not record.policy.planning:
+            if lead.command and lead.command.strip():
+                investigating = True
+            elif plan_launch_status(lead)["ready"]:
+                connections = doctor_module.stored_connections(self.broker.conn)
+                investigating = (
+                    connections.get(lead.runtime, {}).get("state") == "connected"
+                )
+        if investigating:
+            self.ancillary.investigate(session_id, item["drop_id"])
+        return {
+            "item": item,
+            "investigating": investigating,
+            **self.dropbox({"session": session_id}, {}),
+        }
+
+    def plan(self, query: dict, body: dict) -> dict:
+        """The PLAN-NNN artifact and loop state for a planning session."""
+        from ..session import planning as planning_module
+
+        session_id = self._session_id(query)
+        payload = planning_module.payload(self.manager, session_id)
+        if query.get("revision"):
+            payload["revision_body"] = planning_module.revision_body(
+                self.manager, session_id, int(query["revision"])
+            )
+        return payload
+
+    def plan_control(self, query: dict, body: dict) -> dict:
+        """The human's planning controls: reopen, waive, resume the budget."""
+        from ..session import planning as planning_module
+
+        session_id = self._session_id(query, body)
+        action = body.get("action")
+        if action == "reopen":
+            payload = planning_module.reopen(self.manager, session_id, body.get("note", ""))
+        elif action == "waive_objection":
+            payload = planning_module.waive_objection(
+                self.manager, session_id, body.get("objection_id", ""), body.get("note", "")
+            )
+        elif action == "resume_budget":
+            payload = planning_module.resume_budget(self.manager, session_id)
+        else:
+            raise ValidationError(f"unknown plan control {action!r}")
+        # Every control queues work for the agents; pick the room back up.
+        record = self.manager.get(session_id)
+        if record.status == "active":
+            self.managed.resume(record)
+        return payload
+
+    def approve_plan(self, query: dict, body: dict) -> dict:
+        """Approve & Start Coordination: a state transition, not an acknowledgment.
+
+        Approval reserves the promotion, converts the frozen plan revision
+        into ProductSpec v1 with its gates materialized deterministically,
+        and provisions the new linked coordination session — resumably, and
+        exactly one per approved plan. The planning session's agents stop;
+        Stream A's paste-free start then launches the coordination team.
+        """
+        from ..session import planning as planning_module
+
+        session_id = self._session_id(query, body)
+        result = planning_module.approve(
+            self.manager, session_id, staffing=body.get("staffing")
+        )
+        self.managed.cancel(session_id, reason="Plan approved; planning has concluded.")
+        coordination = self.manager.get(result["coordination_session_id"])
+        return {**result, "coordination": self._launch_payload(coordination)}
+
     def run_tests(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)
         if body.get("command"):
@@ -901,24 +1114,38 @@ class Api:
                 session_id, participant, "active", "restarted by the user",
                 reset_failures=True,
             )
+            self.manager.bump_recovery_generation(session_id, participant, "restart")
             for escalation in self.manager.open_escalations(session_id):
-                if escalation["rule"] == "agent_failed":
+                if escalation["rule"] in {"agent_failed", "agent_auth_failed", "agent_refused"}:
                     self.manager.resolve_escalation(
                         escalation["escalation_id"], f"{participant} restarted by the user"
                     )
             refreshed = self.manager.get(session_id)
             if refreshed.status == "active":
-                self.managed.restart(refreshed)
+                # Participant-scoped: only this agent's invocation is touched;
+                # every other agent's process keeps running.
+                self.managed.restart_participant(refreshed, participant)
         elif action == "stop":
             # Durable state first: once the session row says stopped, the
             # cancel below is cleanup, not the thing the user is waiting on.
             self.manager.stop(session_id, body.get("reason") or "stopped by the user")
             self.managed.cancel(session_id, reason="Stopping the session.")
+            self.ancillary.cancel(session_id)
         elif action == "complete":
-            # Validate and complete BEFORE touching the agents: a refused
-            # completion (unsatisfied gates) must leave the team running.
-            self.manager.complete(session_id, force=bool(body.get("force")))
-            self.managed.cancel(session_id, reason="Completing the session.")
+            # Validate and drive the phase machine BEFORE touching the agents:
+            # a refused completion (unsatisfied gates, unevaluated appendix
+            # items) must leave the team running. A non-terminal outcome is a
+            # phase transition — appendix evaluation or extension work — whose
+            # wake task the agents must be running to receive. Either way the
+            # capture freeze has ended investigation, so in-flight ancillary
+            # work stops now.
+            completed = self.manager.complete(session_id, force=bool(body.get("force")))
+            self.ancillary.cancel(session_id)
+            if completed.is_terminal:
+                self.managed.cancel(session_id, reason="Completing the session.")
+                ancillary_module.sweep(self.manager, completed)
+            else:
+                self.managed.resume(completed)
         elif action == "remove":
             self.broker.remove_participant(
                 record.room_id, body["participant"], credential=credential

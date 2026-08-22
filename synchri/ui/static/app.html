@@ -1205,7 +1205,95 @@ async function home() {
     empty.querySelector("#empty-run").onclick = () => quickStart();
     page.append(empty);
   }
+  renderAgentConnections(page);
   app().append(page);
+}
+
+function renderAgentConnections(page) {
+  const connectable = (S.boot.runtimes || []).filter(runtime => runtime.managed_command);
+  if (!connectable.length) return;
+  page.append($(`<div class="section-head" style="margin-top:2.1rem"><span class="kicker">Agent connections</span></div>`));
+  const box = $(`<div class="card stack" style="gap:.6rem"></div>`);
+  box.append($(`<div class="small muted">Connect a CLI once and every session starts without a paste step:
+    choose your agents, give your brief, hit Start. Sign-in stays inside each CLI —
+    Synchri owns no provider account, stores no credential or API key, and uses no cloud relay.</div>`));
+  for (const runtime of connectable) {
+    const stored = (S.boot.runtime_connections || {})[runtime.key];
+    const state = stored?.state === "connected" ? `<span class="pill">connected</span>`
+      : stored?.state === "failed" ? `<span class="pill bad">failed</span>`
+      : runtime.installed ? `<span class="pill dim">not connected</span>`
+      : `<span class="pill dim">not detected</span>`;
+    const summary = stored?.state === "connected"
+      ? `resume ${stored.resume.replaceAll("_", " ")}${stored.version ? ` · v${stored.version}` : ""}`
+      : (stored?.state === "failed" ? stored.detail : runtime.detail);
+    const row = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0;gap:.55rem">${state}
+      <b style="font-size:12.5px">${esc(runtime.label)}</b><span class="small muted">${esc(summary || "")}</span></div>
+      <button class="ghost" data-connect>${stored?.state === "connected" ? "Details" : "Connect"}</button></div>`);
+    row.querySelector("[data-connect]").onclick = () => showConnectDialog(runtime.key);
+    box.append(row);
+  }
+  page.append(box);
+}
+
+async function showConnectDialog(runtimeKey) {
+  document.getElementById("connect-dialog")?.remove();
+  const dialog = $(`<div class="dialog stack" id="connect-dialog" role="dialog" aria-modal="true">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="kicker">AGENT CONNECTION</div>
+    <h2 id="connect-title">Checking…</h2>
+    <p class="muted small" style="margin:.2rem 0 0">Sign in to this CLI once in your own terminal.
+    The connection test then proves the whole managed path — one real invocation (two where
+    resume is supported) in a fresh temporary folder outside every repository, with a
+    sentinel-only prompt and nothing of yours to read or change.</p>
+    <div id="connect-checks" class="stack" style="gap:.3rem"></div>
+    <div class="row" id="connect-actions"><button class="primary" data-connect>Run connection test</button><button data-close>Close</button></div>
+    <div class="small muted" id="connect-status"></div>
+  </div>`);
+  document.body.append(dialog);
+  const close = () => { dialog.remove(); if (S.view === "home") home().catch(() => {}); };
+  dialog.querySelector(".detail-close").onclick = close;
+  dialog.querySelector("[data-close]").onclick = close;
+
+  const stateChip = state => state === "pass" ? `<span class="pill">pass</span>`
+    : state === "fail" ? `<span class="pill bad">fail</span>` : `<span class="pill dim">unknown</span>`;
+  const renderChecks = checks => {
+    const box = dialog.querySelector("#connect-checks");
+    box.innerHTML = "";
+    for (const check of checks || []) {
+      box.append($(`<div class="row" style="gap:.5rem;align-items:baseline">${stateChip(check.state)}
+        <b class="mono small">${esc(check.key.replaceAll("_", " "))}</b><span class="small muted">${esc(check.detail || "")}</span></div>`));
+    }
+  };
+
+  const payload = await api("runtimes/doctor");
+  const entry = (payload.runtimes || []).find(runtime => runtime.key === runtimeKey);
+  if (entry) {
+    dialog.querySelector("#connect-title").textContent = entry.label;
+    renderChecks(entry.doctor);
+    dialog.querySelector("#connect-status").textContent = entry.connection?.detail || "";
+  }
+
+  dialog.querySelector("[data-connect]").onclick = guard(async () => {
+    const button = dialog.querySelector("[data-connect]");
+    button.disabled = true; button.textContent = "Testing…";
+    await api("runtimes/connect", {runtime: runtimeKey});
+    const poll = async () => {
+      if (!document.getElementById("connect-dialog")) return;
+      const status = await api("runtimes/connect?runtime=" + encodeURIComponent(runtimeKey));
+      const test = status.test || {};
+      if (test.alive || !["done", "failed", "cancelled", "idle"].includes(test.phase)) {
+        dialog.querySelector("#connect-status").textContent = test.detail || test.phase || "";
+        window.setTimeout(guard(poll), 700);
+        return;
+      }
+      if (test.result?.checks) renderChecks(test.result.checks);
+      dialog.querySelector("#connect-status").textContent = status.connection?.detail || test.detail || "";
+      button.disabled = false;
+      button.textContent = status.connection?.state === "connected" ? "Re-run connection test" : "Run connection test";
+      S.boot = await api("bootstrap");
+    };
+    await poll();
+  });
 }
 
 function showDeleteSessionDialog(s) {
@@ -1656,18 +1744,45 @@ function renderLaunch() {
 
   if (allManaged) {
     const list = document.getElementById("preflight-agents");
+    // Assembly indicators are real durable phase transitions, never a spinner
+    // on a timer. They live from Start until every agent is officially ready,
+    // then the room opens and they go away.
+    const phasePills = {
+      launching: ["launching", "warn"],
+      injecting_bootstrap: ["injecting bootstrap", "warn"],
+      awaiting_acknowledgment: ["awaiting acknowledgment", "warn"],
+      ready: ["ready", ""],
+      failed: ["failed", "bad"],
+    };
+    const failedAgents = l.agents.filter(agent => agent.join_phase === "failed");
+    const allConnected = l.agents.every(agent => agent.connected);
     for (const agent of l.agents) {
-      const status = agent.joined
-        ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">reading agreement</span>`)
-        : `<span class="pill dim">not connected</span>`;
+      let status;
+      if (agent.join_phase && phasePills[agent.join_phase]) {
+        const [label, cls] = phasePills[agent.join_phase];
+        status = `<span class="pill ${cls}">${esc(label)}</span>`;
+      } else {
+        status = agent.joined
+          ? (agent.acknowledged ? `<span class="pill">ready</span>` : `<span class="pill warn">reading agreement</span>`)
+          : `<span class="pill dim">${agent.connected ? "ready to launch" : "not started"}</span>`;
+      }
+      const failure = agent.join_phase === "failed" && agent.join_detail
+        ? `<div class="small" style="margin-top:.3rem;color:var(--bad)">${esc(agent.join_detail)}</div>` : "";
       list.append($(`<div class="check-row"><div class="check-status">${status}</div>
-        <div class="check-main"><b class="mono">${esc(agent.name)}</b>
-        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div></div>`));
+        <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
+        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>${failure}</div></div>`));
     }
     const actions = document.getElementById("preflight-actions");
+    const note = failedAgents.length
+      ? `The room stays inactive. Ready agents stay attached and receive no work; retry relaunches only ${esc(failedAgents.map(a=>a.name).join(", "))}.`
+      : (allConnected
+        ? "No paste step — Synchri launches your agents, verifies their agreement, and begins the room."
+        : "Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.");
+    const startLabel = run.alive ? "Starting…"
+      : (failedAgents.length ? `Retry ${esc(failedAgents.map(a=>a.name).join(", "))}` : "Start my agents");
     const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0"><button class="ghost" id="external">Send prompts instead</button>
-      <span class="small faint">Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.</span></div>
-      <button class="primary" id="managed-start" ${run.alive?"disabled":""}>${run.alive ? "Starting…" : "Start my agents"}</button></div>`);
+      <span class="small faint">${note}</span></div>
+      <button class="primary" id="managed-start" ${run.alive?"disabled":""}>${startLabel}</button></div>`);
     bar.querySelector("#managed-start").onclick = guard(startManaged);
     bar.querySelector("#external").onclick = () => renderExternalSetup(l);
     actions.append(bar);
@@ -1686,7 +1801,14 @@ async function startManaged() {
 function pollManagedLaunch() {
   window.setTimeout(guard(async () => {
     if (S.view !== "launch" || !S.session) return;
-    const status = await api("managed?session=" + encodeURIComponent(S.session));
+    // Refresh the whole launch payload, not just the run: the per-agent join
+    // phases (launching → injecting bootstrap → awaiting acknowledgment →
+    // ready) are durable rows the indicators render from.
+    const [status, launch] = await Promise.all([
+      api("managed?session=" + encodeURIComponent(S.session)),
+      api("launch?session=" + encodeURIComponent(S.session)),
+    ]);
+    S.launch = launch.launch;
     S.launch.managed = {readiness:status.readiness, run:status.managed};
     if (status.managed.phase === "working") { await openSession(S.session); return; }
     renderLaunch();
@@ -1927,11 +2049,17 @@ function stepTree() {
 }
 
 function stepAgents() {
+  const planningMode = S.draft.draft.mode === "planning";
   const agents = S.draft.draft.agents.length ? [...S.draft.draft.agents]
-    : [{name:"claude",runtime:"claude_code",role:"primary_builder"},
-       {name:"codex",runtime:"codex",role:"adversarial_reviewer"}];
+    : planningMode
+      ? [{name:"claude",runtime:"claude_code",role:"planner"},
+         {name:"codex",runtime:"codex",role:"plan_reviewer"}]
+      : [{name:"claude",runtime:"claude_code",role:"primary_builder"},
+         {name:"codex",runtime:"codex",role:"adversarial_reviewer"}];
   S.agentDraft = agents;
-  const box = $(`<div class="stack"><h2>Which agents, doing what?</h2></div>`);
+  const box = $(`<div class="stack"><h2>Which agents, doing what?</h2>${planningMode
+    ? `<div class="muted small">Planning runs in a read-only planning workspace. Runtimes without
+       that capability are unavailable here — never silently downgraded.</div>` : ""}</div>`);
   app().append(box);
   const list = $(`<div class="stack"></div>`); box.append(list);
   const draw = () => {
@@ -1939,7 +2067,10 @@ function stepAgents() {
     agents.forEach((a, i) => {
       const card = $(`<div class="card grid" style="grid-template-columns:1fr 1fr 1fr auto;align-items:center">
         <input value="${esc(a.name)}" placeholder="name">
-        <select>${S.boot.runtimes.map(r=>`<option value="${r.key}" ${r.key===a.runtime?"selected":""}>${esc(r.label)}</option>`).join("")}</select>
+        <select>${S.boot.runtimes.map(r=>{
+          const unavailable = planningMode && !r.planning_supported;
+          return `<option value="${r.key}" ${r.key===a.runtime?"selected":""} ${unavailable?"disabled":""}>${esc(r.label)}${unavailable?" — no planning support":""}</option>`;
+        }).join("")}</select>
         <select>${S.boot.roles.map(r=>`<option value="${r.key}" ${r.key===a.role?"selected":""}>${esc(r.label)}</option>`).join("")}</select>
         <button class="ghost">Remove</button></div>`);
       const [nameEl, rtEl, roleEl] = card.querySelectorAll("input,select");
@@ -1995,7 +2126,16 @@ function stepPerms() {
 
 function stepSpec() {
   const req = S.draft.steps.find(s => s.key === "spec")?.label || "";
-  const box = $(`<div class="stack"><h2>What should the agents build?</h2>
+  const planningMode = S.draft.draft.mode === "planning";
+  const box = planningMode
+    ? $(`<div class="stack"><h2>Articulate the idea</h2>
+      <div class="muted small">In as much or as little detail as you want — it is stored verbatim.
+        The planner turns it, plus real repository inspection, into the first plan draft; an
+        adversarial reviewer then attacks the plan until it is ready to approve. You never write
+        a product specification on this path.</div>
+      <textarea id="spec" placeholder="What do you want built or changed? Rough thoughts are fine — constraints, hopes, things that must not break…">${esc(S.draft.draft.spec||"")}</textarea>
+      <div class="row"><button class="primary" id="save">Save the idea</button></div></div>`)
+    : $(`<div class="stack"><h2>What should the agents build?</h2>
     <div class="muted small">Paste any text. This is stored unchanged and becomes the
       contract's source of truth for what "done" means — agents may not rewrite it.</div>
     <textarea id="spec" placeholder="# Product\n\n## Acceptance\n- AUTH-01 users can log in\n- API-01 tasks support CRUD">${esc(S.draft.draft.spec||"")}</textarea>
@@ -2005,7 +2145,7 @@ function stepSpec() {
   document.getElementById("save").onclick = guard(async () => {
     await patch({ spec: document.getElementById("spec").value });
   });
-  if (S.draft.detected_gates?.length) {
+  if (!planningMode && S.draft.detected_gates?.length) {
     const t = $(`<div class="card"><h3 class="small muted">DETECTED ACCEPTANCE GATES</h3>
       <table><tbody>${S.draft.detected_gates.map(g =>
         `<tr><td class="mono">${esc(g.gate_id)}</td><td>${esc(g.description)}</td></tr>`).join("")}
@@ -2130,7 +2270,7 @@ function listen() {
   es.onerror = () => { /* EventSource retries on its own */ };
 }
 
-const DETAIL_TABS = ["gates","tests","changes","commits","worktree","memory","raw","contract","changelog"];
+const DETAIL_TABS = ["plan","gates","dropbox","tests","changes","commits","worktree","memory","raw","contract","changelog"];
 
 function timeboxText(deadline) {
   if (!deadline?.ends_at) return "Open-ended";
@@ -2200,15 +2340,17 @@ function renderSession() {
   const runtimeStates = d.participant_states || {};
   const team = s.participants.map(p => {
     const runtime = runtimeStates[p.name] || {};
-    const trouble = ["failed", "timed_out", "dropped"].includes(runtime.state);
+    const trouble = TROUBLE_STATES.includes(runtime.state);
     const active = p.name === d.current_actor;
     const dot = trouble ? (runtime.state === "dropped" ? "bad" : "warn") : (active ? "live" : "");
-    const label = trouble ? runtime.state.replace("_", " ")
+    const label = trouble ? runtime.state.replaceAll("_", " ")
       : (activeNotes.has(p.name) ? "working" : (active ? "on point" : "waiting"));
     return `<div class="team-line" data-member="${esc(p.name)}"${runtime.detail ? ` title="${esc(runtime.detail)}"` : ""}><span class="presence"><i class="${dot}"></i>${esc(p.name)}</span>
       <span class="muted small" data-team-state${trouble ? ' style="color:var(--bad)"' : ""}>${esc(label)}</span></div>`;
   }).join("");
-  const nav = ["conversation", ...DETAIL_TABS.filter(tab => tab !== "changelog" || s.status === "complete")];
+  const nav = ["conversation", ...DETAIL_TABS.filter(tab =>
+    (tab !== "changelog" || s.status === "complete")
+    && (tab !== "plan" || s.mode === "planning"))];
   const layout = $(`<div class="session-layout"><aside class="session-rail">
       <div><div class="kicker">Synchri session</div><div class="rail-title">${esc(s.name)}</div></div>
       <div class="rail-status"><i id="rail-current-dot" class="led ${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
@@ -2450,13 +2592,26 @@ function composerHint(d) {
   return "Your message reaches the agent leading the work";
 }
 
+// Failure discrimination surfaces in the chat as distinct, honest states —
+// the "failed"/"timed_out" entries keep pre-classification rows readable.
+const TROUBLE_STATES = ["failed", "timed_out", "dropped",
+  "auth_failure", "provider_refusal", "crash", "unresponsive"];
+const TROUBLE_LABELS = {
+  dropped: "stopped responding and was dropped",
+  timed_out: "timed out",
+  failed: "failed",
+  auth_failure: "is signed out of its provider — sign in again in your terminal, then restart it",
+  provider_refusal: "was refused or rate-limited by its provider",
+  crash: "crashed",
+  unresponsive: "became unresponsive and its processes were ended",
+};
+
 function agentAlerts(d) {
   const states = d.participant_states || {};
   const blocks = Object.entries(states).map(([name, runtime]) => {
     if (!runtime || !runtime.state) return "";
-    if (["failed", "timed_out", "dropped"].includes(runtime.state)) {
-      const label = runtime.state === "dropped" ? "stopped responding and was dropped"
-        : (runtime.state === "timed_out" ? "timed out" : "failed");
+    if (TROUBLE_STATES.includes(runtime.state)) {
+      const label = TROUBLE_LABELS[runtime.state] || runtime.state.replaceAll("_", " ");
       return `<div class="agent-alert"><div><b>${esc(name)}</b> ${esc(label)}${runtime.detail ? ` — ${esc(runtime.detail)}` : ""}.</div>
         <button data-restart="${esc(name)}">Restart ${esc(name)}</button></div>`;
     }
@@ -2522,10 +2677,10 @@ function refreshSessionChrome() {
     const name = row.dataset.member;
     const active = name === d.current_actor;
     const runtime = runtimeStates[name] || {};
-    const trouble = ["failed", "timed_out", "dropped"].includes(runtime.state);
+    const trouble = TROUBLE_STATES.includes(runtime.state);
     const state = row.querySelector("[data-team-state]");
     if (state) {
-      state.textContent = trouble ? runtime.state.replace("_", " ")
+      state.textContent = trouble ? runtime.state.replaceAll("_", " ")
         : (activeNotes.has(name) ? "working" : (active ? "on point" : "waiting"));
       state.style.color = trouble ? "var(--bad)" : "";
     }
@@ -2651,6 +2806,79 @@ async function paint(tab, el) {
     const r = await api("changelog" + q);
     el.innerHTML = `<div class="between" style="margin-bottom:.9rem"><span class="small muted">The verified delivery record for this session.</span><button class="primary" id="package-download">Download session package</button></div><div class="rich">${rich(r.markdown)}</div>`;
     el.querySelector("#package-download").onclick = event => downloadSessionPackage(event.target);
+  } else if (tab === "plan") {
+    const p = await api("plan" + q);
+    const statusPill = p.status === "ready" ? `<span class="pill">PLAN-READY</span>`
+      : p.status === "approved" ? `<span class="pill">approved</span>`
+      : p.status === "needs_human_resolution" ? `<span class="pill warn">needs you</span>`
+      : `<span class="pill dim">${esc(p.status.replace(/_/g," "))}</span>`;
+    const b = p.budgets;
+    const chip = o => o.classification === "blocking" || o.classification === "fork"
+      ? `<span class="pill bad">${esc(o.classification)}</span>`
+      : `<span class="pill dim">${esc(o.classification)}</span>`;
+    const openRows = p.open_objections.map(o => `<div class="card" data-objection="${esc(o.objection_id)}">
+        <div class="between"><div><b class="mono">${esc(o.objection_id)}</b> ${chip(o)}
+          <span class="small muted">r${o.raised_revision} · ${esc(o.raised_by)}</span></div>
+          ${(o.classification === "blocking" || o.classification === "fork") && ["ready","awaiting_review","under_revision","drafting","needs_human_resolution"].includes(p.status)
+            ? `<button class="ghost objection-waive">Waive…</button>` : ""}</div>
+        <div class="small" style="margin-top:.35rem">${esc(o.text)}</div></div>`).join("");
+    const settledRows = p.resolved_objections.map(o => `<div class="small muted" style="margin-top:.3rem">
+        <b class="mono">${esc(o.objection_id)}</b> ${esc(o.classification)} · ${esc(o.status)}${o.resolved_by==="human"?" by you":""}
+        — ${esc(o.disposition || o.text)}</div>`).join("");
+    el.innerHTML = `
+      <div class="between"><div><b class="mono">${esc(p.plan_id)}</b> ${statusPill}
+        <span class="small muted">revision ${p.revision} · baseline ${esc((p.inspection_sha||"").slice(0,12))}</span>
+        <div class="small muted" style="margin-top:.25rem">budgets: ${b.turns_used}/${b.turn_budget} turns ·
+          ${b.revisions_used}/${b.revision_budget} revisions · ${b.minutes_budget} min${b.resumes_used?" (resumed once)":""}</div></div>
+        <div class="row">
+          ${p.status === "ready" ? `<button class="primary" id="plan-approve">Approve &amp; Start Coordination</button>` : ""}
+          ${p.status === "needs_human_resolution" && b.resume_available ? `<button class="primary" id="plan-resume">Resume the budget (once)</button>` : ""}
+          ${p.status === "approved" && p.promotion?.coordination_session_id ? `<button class="primary" id="plan-open-coordination">Open the coordination session</button>` : ""}
+          ${["ready","awaiting_review","under_revision","drafting","needs_human_resolution"].includes(p.status) ? `<button id="plan-reopen">Request changes…</button>` : ""}
+        </div></div>
+      ${p.status === "ready" ? `<div class="note small" style="margin-top:.8rem">Review closure reached: no blocking objections or open forks remain.
+        Approval creates a new linked coordination session branched from the inspected baseline — the plan and this session stay immutable.</div>` : ""}
+      ${p.status === "needs_human_resolution" ? `<div class="note warn small" style="margin-top:.8rem">The planning budget is exhausted. The latest draft and its open objections are preserved below.</div>` : ""}
+      <details style="margin-top:.9rem"><summary class="small muted" style="cursor:pointer">Your idea, verbatim</summary>
+        <pre style="margin-top:.5rem;max-height:14rem;overflow:auto">${esc(p.idea)}</pre></details>
+      ${p.open_objections.length ? `<h3 class="small muted" style="margin-top:1rem">OPEN OBJECTIONS &amp; FORKS</h3><div class="stack" style="margin-top:.5rem">${openRows}</div>` : ""}
+      ${settledRows ? `<h3 class="small muted" style="margin-top:1rem">RESOLVED &amp; WAIVED</h3>${settledRows}` : ""}
+      ${p.acceptance_criteria.length ? `<h3 class="small muted" style="margin-top:1rem">ACCEPTANCE CRITERIA → GATES</h3>
+        <table style="margin-top:.4rem"><tbody>${p.acceptance_criteria.map(c =>
+          `<tr><td class="mono">${esc(c.gate_id)}</td><td class="small">${esc(c.description)}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${p.latest_body ? `<h3 class="small muted" style="margin-top:1rem">PLAN — REVISION ${p.revision}</h3>
+        <div class="rich" style="margin-top:.5rem;max-height:32rem;overflow:auto">${rich(p.latest_body)}</div>`
+        : `<div class="muted" style="margin-top:1rem">No revision submitted yet — the planner drafts first.</div>`}`;
+    const approve = el.querySelector("#plan-approve");
+    if (approve) approve.onclick = guard(async () => {
+      approve.disabled = true; approve.textContent = "Provisioning…";
+      const result = await api("plan/approve", { session: S.session });
+      confirmNotice(`${p.plan_id} approved — coordination session created.`);
+      await openSession(result.coordination_session_id);
+    });
+    const resume = el.querySelector("#plan-resume");
+    if (resume) resume.onclick = guard(async () => {
+      await api("plan/control", { session: S.session, action: "resume_budget" });
+      S.dash = await api("dashboard" + q); await paint("plan", el);
+    });
+    const openCoordination = el.querySelector("#plan-open-coordination");
+    if (openCoordination) openCoordination.onclick = guard(async () => {
+      await openSession(p.promotion.coordination_session_id);
+    });
+    const reopen = el.querySelector("#plan-reopen");
+    if (reopen) reopen.onclick = guard(async () => {
+      const note = prompt("What should change in the plan?");
+      if (!note || !note.trim()) return;
+      await api("plan/control", { session: S.session, action: "reopen", note });
+      S.dash = await api("dashboard" + q); await paint("plan", el);
+    });
+    el.querySelectorAll(".objection-waive").forEach(button => button.onclick = guard(async () => {
+      const objectionId = button.closest("[data-objection]").dataset.objection;
+      const note = prompt(`Waive ${objectionId} — your reason goes on the record, and the plan returns to review:`);
+      if (!note || !note.trim()) return;
+      await api("plan/control", { session: S.session, action: "waive_objection", objection_id: objectionId, note });
+      S.dash = await api("dashboard" + q); await paint("plan", el);
+    }));
   } else if (tab === "gates") {
     const r = await api("gates" + q);
     const editable = !["complete", "stopped", "failed", "timed_out"].includes(d.session.status);
@@ -2690,6 +2918,76 @@ async function paint(tab, el) {
         await api("gate", payload);
         S.dash = await api("dashboard" + q); await paint("gates", el); confirmNotice(`Updated ${id}.`);
       });
+    });
+  } else if (tab === "dropbox") {
+    const r = await api("dropbox" + q);
+    const terminal = ["complete","stopped","failed","timed_out"].includes(d.session.status);
+    const captureOpen = !r.frozen && !terminal;
+    const phaseNote = r.phase === "original_work"
+      ? "Side ideas land here without interrupting the agents. Each is investigated off the critical path, appended after the specification — never written into it — and explicitly evaluated once the original task is complete."
+      : r.phase === "appendix_evaluation"
+        ? "Capture is frozen — the original work is complete, and both agents now owe every item below an explicit evaluation."
+        : r.phase === "extension_work"
+          ? "Approved extensions are being implemented, in appendix order. The session closes when every extension gate passes."
+          : "Capture is frozen.";
+    const lifecycle = entry => {
+      if (entry.disposition === "approved")
+        return `<span class="pill">approved → ${esc(entry.extension_id || "EXT")}</span>`;
+      if (entry.disposition === "declined") return `<span class="pill dim">declined</span>`;
+      if (entry.disposition === "waived") return `<span class="pill warn">waived</span>`;
+      if (entry.status === "failed" || entry.status === "timed_out")
+        return `<span class="pill bad">${esc(entry.status.replace("_", " "))}</span>`;
+      return `<span class="pill dim">${esc(entry.status)}</span>`;
+    };
+    const clip = (text, max) => {
+      const flat = String(text || "").trim();
+      return flat.length > max ? flat.slice(0, max - 1) + "…" : flat;
+    };
+    const evaluations = entry => ["builder", "reviewer", "human"].map(slot => {
+      const value = (entry.evaluations || {})[slot];
+      return value ? `<div class="small muted">${esc(slot)} (${esc(value.participant || "")}):
+        <b>${esc(value.verdict || "")}</b>${value.rationale ? ` — ${esc(clip(value.rationale, 240))}` : ""}</div>` : "";
+    }).join("");
+    const card = entry => {
+      const proposal = entry.proposal || {};
+      const review = entry.review || {};
+      const stat = (proposal.diffstat || "").split("\n").map(line => line.trim()).filter(Boolean).slice(-1)[0];
+      return `<div class="card">
+        <div class="between"><div><b class="mono">${esc(entry.drop_id)}</b> <span class="small">${esc(entry.title)}</span>
+          <div class="small muted" style="margin-top:.18rem">${esc(clip(entry.prompt, 220))}</div></div>
+          ${lifecycle(entry)}</div>
+        ${proposal.recommendation ? `<div class="small" style="margin-top:.55rem"><b>Scout:</b> ${esc(clip(proposal.recommendation, 300))}</div>` : ""}
+        ${stat ? `<div class="small muted mono" style="margin-top:.25rem">${esc(stat)}</div>` : ""}
+        ${proposal.patch_note ? `<div class="small" style="color:var(--warn);margin-top:.25rem">${esc(proposal.patch_note)}</div>` : ""}
+        ${review.verdict ? `<div class="small muted" style="margin-top:.25rem">Adversarial review: <b>${esc(review.verdict)}</b>${review.critique ? ` — ${esc(clip(review.critique, 240))}` : ""}</div>`
+          : entry.skip_review ? `<div class="small muted" style="margin-top:.25rem">Adversarial review skipped by your explicit choice.</div>` : ""}
+        ${entry.failure_report ? `<div class="small" style="color:var(--warn);margin-top:.25rem">${esc(clip(entry.failure_report, 300))}</div>` : ""}
+        ${evaluations(entry)}
+      </div>`;
+    };
+    el.innerHTML = `<div class="small muted">${esc(phaseNote)}</div>
+      ${r.items.length ? `<div class="small muted" style="margin-top:.5rem">${r.summary.total} item(s) · ${r.summary.open} open · ${r.summary.approved} approved · ${r.summary.declined} declined${r.summary.waived ? ` · ${r.summary.waived} waived` : ""}</div>` : ""}
+      ${captureOpen ? `<div class="card" style="margin-top:1rem"><b class="small">Add a side task</b>
+        <div class="small muted" style="margin-top:.2rem">Captured without interrupting the agents. A scout investigates it in a disposable scratch worktree; nothing lands without both agents' approval after the original task.</div>
+        <textarea id="drop-prompt" rows="3" placeholder="What should the scout investigate?" style="margin-top:.55rem;width:100%"></textarea>
+        <div class="between" style="margin-top:.55rem">
+          <label class="small muted" style="display:flex;align-items:center;gap:.4rem"><input type="checkbox" id="drop-skip-review"> Skip the adversarial review for this item</label>
+          <button class="primary" id="drop-add">Add to dropbox</button></div></div>` : ""}
+      <div class="stack" style="margin-top:1rem">${r.items.map(card).join("") || `<span class="muted">Nothing captured yet.</span>`}</div>`;
+    const add = el.querySelector("#drop-add");
+    if (add) add.onclick = guard(async () => {
+      const prompt = el.querySelector("#drop-prompt").value.trim();
+      if (!prompt) { flash("Describe the side task first."); return; }
+      const result = await api("dropbox/capture", {
+        session: S.session, prompt,
+        skip_review: el.querySelector("#drop-skip-review").checked,
+      });
+      await paint("dropbox", el);
+      confirmNotice(result.queued
+        ? "Captured — it will enter the coordination session's dropbox as provisioning finishes."
+        : result.investigating
+          ? `Captured ${result.item.drop_id} — the scout is investigating.`
+          : `Captured ${result.item.drop_id}. It will be evaluated at completion; connect an agent to investigate it sooner.`);
     });
   } else if (tab === "tests") {
     const t = d.tests;

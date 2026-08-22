@@ -18,11 +18,12 @@ from .permissions import Decision, PermissionSet
 
 class SessionMode(str, Enum):
     # Keep the historical values readable so an existing room is never made
-    # unreadable by an app upgrade.  New sessions intentionally expose only
-    # Long Horizon Development; it is the product Synchri is concentrating on.
+    # unreadable by an app upgrade.  New sessions expose Long Horizon
+    # Development and Planning; the rest remain for persisted rooms.
     INTERACTIVE = "interactive"
     LONG_HORIZON = "long_horizon"
     REVIEW_AUDIT = "review_audit"
+    PLANNING = "planning"
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.value
@@ -47,6 +48,10 @@ class ModePolicy:
     default_roles: tuple[str, ...] = ()
     #: Capabilities this mode forces off regardless of what the user picked.
     forced_denials: tuple[str, ...] = ()
+    #: Planning Mode: the session runs in a disposable read-only planning
+    #: workspace instead of a repository worktree, and produces an approved
+    #: plan rather than code.
+    planning: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +65,7 @@ class ModePolicy:
             "min_agents": self.min_agents,
             "default_roles": list(self.default_roles),
             "forced_denials": list(self.forced_denials),
+            "planning": self.planning,
         }
 
     def apply_forced_denials(self, permissions: PermissionSet) -> PermissionSet:
@@ -76,6 +82,8 @@ class Role(str, Enum):
     VERIFIER = "verifier"
     AUDITOR = "auditor"
     PARTICIPANT = "participant"
+    PLANNER = "planner"
+    PLAN_REVIEWER = "plan_reviewer"
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.value
@@ -88,6 +96,8 @@ ROLE_LABELS: dict[str, str] = {
     Role.VERIFIER.value: "Verifier",
     Role.AUDITOR.value: "Auditor",
     Role.PARTICIPANT.value: "Participant",
+    Role.PLANNER.value: "Planner / Architect",
+    Role.PLAN_REVIEWER.value: "Adversarial Plan Reviewer",
 }
 
 #: Per-role instructions appended to the shared contract.  The core contract is
@@ -167,6 +177,59 @@ evidence. Do not modify code unless explicitly authorized and asked.""",
     Role.PARTICIPANT.value: """\
 You are a participant in this room. Follow the shared contract, take your turns
 when the queue gives them to you, and report with evidence.""",
+    Role.PLANNER.value: """\
+You are the Planner / Architect. You have no implementation authority in this
+session: you inspect the repository copy in the planning workspace, and you
+produce an ordered implementation plan — never code changes meant to ship.
+
+Your first pass is yours alone. Turn the human's idea articulation plus your
+own repository inspection into PLAN-DRAFT revision 1 before the reviewer sees
+anything: inspect the current implementation, dependencies, constraints,
+acceptance criteria, migration risks, likely failure modes, and testing and
+preservation requirements. You are launched under your CLI's read-only
+enforcement with no sanctioned write path; the plan travels through your
+reply: put the complete
+plan document between a `SYNCHRI-PLAN-BEGIN` line and a `SYNCHRI-PLAN-END`
+line, then end the reply with `SYNCHRI-PLAN-SUBMIT: <one-line summary>` to
+record the revision.
+
+The plan document must contain an `## Acceptance criteria` section whose
+bullets each carry an explicit gate id, e.g. `- AUTH-01: login works`. Those
+ids become the coordination session's gates verbatim; a plan without them
+cannot be promoted.
+
+When the reviewer raises objections, address each one: revise the plan,
+record each disposition with `SYNCHRI-OBJECTION-RESOLVED: <id>|<what changed
+or why the decision stands>`, and submit the next revision the same way. Defend a decision when
+the evidence supports it; revise when the reviewer has found a real problem.
+When multiple approaches remain genuinely defensible, record the fork
+explicitly with `SYNCHRI-FORK: <the choice and both defensible sides>` — the
+human resolves forks, and an open fork prevents PLAN-READY.""",
+    Role.PLAN_REVIEWER.value: """\
+You are the Adversarial Plan Reviewer. You have no implementation authority in
+this session, and you do not restate the plan — you independently review its
+implementation logic against the repository copy in the planning workspace.
+
+Wait for the planner's first submitted draft; it is never your job to write
+the plan. For each submitted revision, read its text (delivered in your
+prompt's planning state) against the repository state it claims to describe,
+then challenge: ordering, hidden dependencies,
+unnecessary reconstruction, missing rollback and migration concerns,
+insufficient tests, conflicting assumptions, unsafe sequencing, and places
+where existing behavior should be preserved instead of changed. Inspect
+enough repository state to judge executability — a review that never opened
+the code is ceremony.
+
+Record every finding as its own control line:
+  `SYNCHRI-OBJECTION: blocking|<a problem that must be fixed before approval>`
+  `SYNCHRI-OBJECTION: nonblocking|<an assumption that may stand, clearly stated>`
+  `SYNCHRI-OBJECTION: advisory|<worth noting; the planner may defer it>`
+Close every review with `SYNCHRI-PLAN-REVIEW: approve|<why the plan is now
+sufficient>` or `SYNCHRI-PLAN-REVIEW: revise|<what must change>`. Approval is
+review closure, not politeness: approve only when no blocking objection or
+fork remains open and the plan is executable as ordered. Do not manufacture
+objections to seem thorough — when remaining concerns are redundant or
+low-value, say so and approve.""",
 }
 
 
@@ -217,6 +280,31 @@ findings with severity, location, and evidence. Do not modify the repository
 unless the permissions below explicitly authorize it and the user asked for
 fixes."""
 
+_PLANNING_DOCTRINE = """\
+This is a Planning Mode session. Planning should be executable state, not
+prose the user has to carry into the next workflow: the deliverable is an
+adversarially reviewed implementation plan the human can approve, and
+approval staffs and starts the coordination that executes it.
+
+Neither of you has implementation authority here, and this is enforced, not
+requested: you are launched under your CLI's own read-only enforcement, with
+the working directory set to a disposable planning copy of the repository —
+anchored to one inspected commit, holding no remotes, never reused for
+coordination. Inspect it freely; you have no sanctioned write path and must
+not attempt one. The plan itself travels through your replies via the
+SYNCHRI-PLAN-BEGIN/END protocol. Synchri verifies the workspace's Git state
+after every turn.
+
+The loop is PLAN-DRAFT -> ADVERSARIAL REVIEW -> REVISION -> RE-REVIEW ->
+PLAN-READY. The planner drafts first, alone; only then does the reviewer
+receive it. PLAN-READY requires adversarial-review closure, not planner
+completion: open blocking objections or unresolved architectural forks
+prevent it, while nonblocking assumptions may remain when clearly classified.
+The loop has budgets — agent turns, plan revisions, and wall-clock time —
+and exhausting them hands the decision to the human with the latest draft
+and open objections preserved. Do not loop for the sake of thoroughness:
+stop at the minimum sufficiently defensible plan."""
+
 
 POLICIES: dict[SessionMode, ModePolicy] = {
     SessionMode.INTERACTIVE: ModePolicy(
@@ -257,6 +345,30 @@ POLICIES: dict[SessionMode, ModePolicy] = {
         # An audit does not ship code. Narrowing, never widening.
         forced_denials=("git.push", "gh.pr_merge", "sys.deploy", "sys.destructive"),
     ),
+    SessionMode.PLANNING: ModePolicy(
+        mode=SessionMode.PLANNING,
+        label="Planning",
+        summary=(
+            "Articulate the idea; a planner drafts the implementation plan and an "
+            "adversarial reviewer attacks it until it is ready to approve."
+        ),
+        doctrine=_PLANNING_DOCTRINE,
+        # The planning turn budget: exhaustion goes to the human, never a loop.
+        max_consecutive_agent_turns=24,
+        requires_spec=False,
+        requires_deadline=False,
+        supports_deadline=False,
+        min_agents=2,
+        default_roles=(Role.PLANNER.value, Role.PLAN_REVIEWER.value),
+        # Planning ships nothing. The workspace provides the real isolation;
+        # the contract narrows the same way, never wider.
+        forced_denials=(
+            "git.push", "git.force_push", "gh.pr_create", "gh.pr_update",
+            "gh.pr_merge", "gh.pr_close", "sys.ci_config", "sys.infra_config",
+            "sys.deploy", "sys.destructive",
+        ),
+        planning=True,
+    ),
 }
 
 
@@ -264,7 +376,7 @@ POLICIES: dict[SessionMode, ModePolicy] = {
 # This deliberately smaller list is the new-session product surface used by the
 # UI and CLI.  Do not turn a persisted interactive/audit room into an error just
 # because it no longer appears in the starter flow.
-NEW_SESSION_MODES: tuple[SessionMode, ...] = (SessionMode.LONG_HORIZON,)
+NEW_SESSION_MODES: tuple[SessionMode, ...] = (SessionMode.LONG_HORIZON, SessionMode.PLANNING)
 
 
 def policy_for(mode: str | SessionMode) -> ModePolicy:
@@ -324,7 +436,7 @@ def collaboration_pair(
     lead = next(
         (
             plan
-            for role in (Role.PRIMARY_BUILDER.value, Role.AUDITOR.value)
+            for role in (Role.PRIMARY_BUILDER.value, Role.AUDITOR.value, Role.PLANNER.value)
             for plan in participants
             if plan.role == role
         ),
@@ -334,7 +446,7 @@ def collaboration_pair(
         (
             plan
             for plan in participants
-            if plan.role == Role.ADVERSARIAL_REVIEWER.value
+            if plan.role in (Role.ADVERSARIAL_REVIEWER.value, Role.PLAN_REVIEWER.value)
             and plan.name != getattr(lead, "name", None)
         ),
         None,
@@ -344,11 +456,20 @@ def collaboration_pair(
 
 #: Runtimes Synchri knows how to find on the local machine.  A managed command
 #: is intentionally an opt-in convenience over the same CLI protocol used by
-#: every other agent: there is no provider account, API key, or cloud relay.
+#: every other agent. Synchri owns no provider account, stores no provider
+#: credential or API key, and uses no cloud relay; authentication remains
+#: inside each provider CLI.
 #:
 #: These commands are the providers' documented non-interactive modes.  They
 #: do not widen provider permissions; a provider that needs sign-in or asks for
 #: approval still reports that truthfully during Synchri's contract step.
+#:
+#: The doctor metadata (``min_version``, ``auth_indicators``,
+#: ``resume_command``) feeds the two-tier connection doctor in
+#: ``runner/doctor.py``: ``auth_indicators`` are cached sign-in *indications*
+#: only (an absent file is unknown, never "signed out" — several CLIs keep
+#: auth in a keychain), and ``resume_command`` is defined only where the
+#: maintained adapter actually knows the CLI's resume invocation.
 KNOWN_RUNTIMES: dict[str, dict] = {
     "claude_code": {
         "label": "Claude Code",
@@ -361,6 +482,41 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "plain_managed_command": "claude -p {prompt}",
         "suggested_command": "claude -p {prompt}",
         "stream_format": "claude",
+        "min_version": (1, 0, 0),
+        "auth_indicators": ["~/.claude/.credentials.json", "~/.claude/credentials.json"],
+        "resume_command": "claude -p --verbose --output-format stream-json --resume {resume_id} {prompt}",
+        # Planning launches under the CLI's own enforcement, hardened:
+        # permission-mode plan denies edits, writes, and mutating commands;
+        # --safe-mode disables the configuration surfaces that could widen it
+        # (hooks, plugins, MCP servers, custom commands); --strict-mcp-config
+        # with no --mcp-config loads no MCP servers at all; and --tools pins
+        # the built-in tool set to read-only inspection. This is provider
+        # enforcement (the CLI's permission engine), not an OS sandbox — the
+        # honest limit of what this adapter can guarantee.
+        "planning_command": (
+            "claude -p --verbose --output-format stream-json --permission-mode plan "
+            '--safe-mode --strict-mcp-config --tools "Read,Glob,Grep" {prompt}'
+        ),
+        "plain_planning_command": (
+            'claude -p --permission-mode plan --safe-mode --strict-mcp-config '
+            '--tools "Read,Glob,Grep" {prompt}'
+        ),
+        # The connection-test canary answers a sentinel prompt and needs no
+        # tools at all: --tools "" disables every built-in tool on top of the
+        # same hardening, so the canary technically cannot read or write.
+        "connection_test_command": (
+            "claude -p --verbose --output-format stream-json --permission-mode plan "
+            '--safe-mode --strict-mcp-config --tools "" {prompt}'
+        ),
+        "plain_connection_test_command": (
+            'claude -p --permission-mode plan --safe-mode --strict-mcp-config '
+            '--tools "" {prompt}'
+        ),
+        "connection_test_resume_command": (
+            "claude -p --verbose --output-format stream-json --permission-mode plan "
+            '--safe-mode --strict-mcp-config --tools "" --resume {resume_id} {prompt}'
+        ),
+        "read_only_planning_workspace": True,
     },
     "codex": {
         "label": "Codex",
@@ -370,6 +526,17 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "plain_managed_command": "codex exec {prompt}",
         "suggested_command": "codex exec {prompt}",
         "stream_format": "codex",
+        "min_version": (0, 20, 0),
+        "auth_indicators": ["~/.codex/auth.json"],
+        "resume_command": None,
+        # Codex's sandbox is OS-enforced (Seatbelt / Landlock): read-only
+        # filesystem, no network — the strongest confinement available here.
+        # The connection-test canary runs under the same sandbox.
+        "planning_command": "codex exec --json --sandbox read-only {prompt}",
+        "plain_planning_command": "codex exec --sandbox read-only {prompt}",
+        "connection_test_command": "codex exec --json --sandbox read-only {prompt}",
+        "plain_connection_test_command": "codex exec --sandbox read-only {prompt}",
+        "read_only_planning_workspace": True,
     },
     "copilot": {
         "label": "GitHub Copilot CLI",
@@ -377,6 +544,15 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "executable": "copilot",
         "managed_command": "copilot -sp {prompt}",
         "suggested_command": "copilot -sp {prompt}",
+        "min_version": (0, 1, 0),
+        "auth_indicators": [
+            "~/.config/github-copilot/hosts.json",
+            "~/.config/github-copilot/apps.json",
+        ],
+        "resume_command": None,
+        # No verified read-only enforcement flag in the maintained adapter
+        # yet: Planning Mode and the consented connection test are both
+        # unavailable on Copilot rather than run without a technical sandbox.
     },
     "gemini": {
         "label": "Gemini CLI",
@@ -443,7 +619,17 @@ def runtime_status(runtime: str) -> dict:
         "executable": executable,
         "path": path,
         "detail": detail,
+        # Capability-based, never contract-only: Planning Mode is offered only
+        # on runtimes whose maintained adapter confines writes to the
+        # disposable planning workspace. Others are shown unavailable.
+        "planning_supported": planning_workspace_supported(runtime),
     }
+
+
+def planning_workspace_supported(runtime: str) -> bool:
+    """Whether this runtime's adapter declares the planning-isolation capability."""
+    definition = KNOWN_RUNTIMES.get(runtime, KNOWN_RUNTIMES["generic"])
+    return bool(definition.get("read_only_planning_workspace"))
 
 
 def runtime_catalog() -> list[dict]:
@@ -465,6 +651,23 @@ def managed_command(plan: ParticipantPlan, *, plain: bool = False) -> str | None
             return definition.get("plain_managed_command") or definition.get("managed_command")
         return definition.get("managed_command")
     return None
+
+
+def planning_command(plan: ParticipantPlan, *, plain: bool = False) -> str | None:
+    """The maintained planning invocation, carrying the CLI's own enforcement.
+
+    Deliberately never a user-supplied command: a custom command carries no
+    verified read-only guarantee, and Planning Mode never downgrades to
+    contract-only isolation. ``None`` means this runtime cannot plan.
+    """
+    definition = KNOWN_RUNTIMES.get(plan.runtime, KNOWN_RUNTIMES["generic"])
+    if not definition.get("read_only_planning_workspace"):
+        return None
+    if not runtime_status(plan.runtime)["installed"]:
+        return None
+    if plain:
+        return definition.get("plain_planning_command") or definition.get("planning_command")
+    return definition.get("planning_command")
 
 
 def stream_format_for(plan: ParticipantPlan) -> str | None:

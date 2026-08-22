@@ -540,6 +540,11 @@ CREATE TABLE IF NOT EXISTS session_promotions (
     status                  TEXT NOT NULL DEFAULT 'reserved'
                                 CHECK (status IN ('reserved', 'provisioned')),
     coordination_session_id TEXT,
+    -- Captures that raced the reserve-to-finalize window. Approval froze the
+    -- planning dropbox and the coordination session may not exist yet, so
+    -- they queue here durably and drain into the coordination session's
+    -- dropbox inside the same transaction that finalizes the promotion.
+    pending_captures        TEXT NOT NULL DEFAULT '[]',
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL
 );

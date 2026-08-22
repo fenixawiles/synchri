@@ -33,6 +33,11 @@ if cwd_file:
     with open(cwd_file, "w") as handle:
         handle.write(os.getcwd())
 
+args_file = os.environ.get("FAKE_CLI_ARGS_FILE")
+if args_file:
+    with open(args_file, "a") as handle:
+        handle.write(" ".join(args) + "\\n")
+
 mode = os.environ.get("FAKE_CLI_MODE", "ok")
 prompt = args[-1] if args else ""
 if mode == "auth-fail":
@@ -95,6 +100,13 @@ def make_definition(script, auth_file, *, resume=True, min_version=(1, 0, 0)):
         "suggested_command": base + " {prompt}",
         "stream_format": "claude",
         "resume_command": (base + " --stream --resume {resume_id} {prompt}") if resume else None,
+        # The canary's enforced invocations: the fake --sandboxed flag stands
+        # in for the real CLIs' no-tools / read-only modes.
+        "connection_test_command": base + " --sandboxed --stream {prompt}",
+        "plain_connection_test_command": base + " --sandboxed {prompt}",
+        "connection_test_resume_command": (
+            (base + " --sandboxed --stream --resume {resume_id} {prompt}") if resume else None
+        ),
         "auth_indicators": [str(auth_file)],
     }
 
@@ -283,11 +295,47 @@ def test_a_sign_in_problem_is_classified_as_auth_not_launch(
     assert "sign-in" in checks["auth"]["detail"]
 
 
-def test_a_runtime_without_a_managed_command_cannot_be_tested(broker, fake_cli, auth_file):
-    definition = make_definition(fake_cli, auth_file)
-    definition["managed_command"] = None
-    with pytest.raises(ValidationError):
-        doctor.run_connection_test(broker.conn, "fake", definition=definition)
+def test_the_canary_only_runs_under_the_adapters_enforced_command(
+    broker, fake_cli, auth_file, tmp_path, monkeypatch
+):
+    """The temp directory is defense-in-depth; the enforced invocation is the
+    guard. No enforced command means no consented connection test at all."""
+    args_file = tmp_path / "canary-args.log"
+    monkeypatch.setenv("FAKE_CLI_ARGS_FILE", str(args_file))
+    doctor.run_connection_test(
+        broker.conn, "fake", definition=make_definition(fake_cli, auth_file)
+    )
+    # The multi-line sentinel prompt spreads each record over several lines;
+    # each invocation's argv record starts with its flags.
+    heads = [
+        line for line in args_file.read_text().splitlines()
+        if line.startswith("--sandboxed")
+    ]
+    assert len(heads) == 2, "launch canary plus resume canary, both enforced"
+    assert any("--resume" in line for line in heads)
+
+    unavailable = make_definition(fake_cli, auth_file)
+    unavailable["connection_test_command"] = None
+    with pytest.raises(ValidationError) as exc:
+        doctor.run_connection_test(broker.conn, "fake", definition=unavailable)
+    assert "unavailable" in str(exc.value)
+
+
+def test_real_adapters_declare_enforced_canary_commands():
+    from synchri.session.modes import KNOWN_RUNTIMES
+
+    claude = KNOWN_RUNTIMES["claude_code"]
+    for key in ("connection_test_command", "plain_connection_test_command",
+                "connection_test_resume_command"):
+        assert "--permission-mode plan" in claude[key]
+        assert "--safe-mode" in claude[key]
+        assert "--strict-mcp-config" in claude[key]
+        assert '--tools ""' in claude[key], "the canary needs no tools at all"
+    codex = KNOWN_RUNTIMES["codex"]
+    assert "--sandbox read-only" in codex["connection_test_command"]
+    assert "--sandbox read-only" in codex["plain_connection_test_command"]
+    # Copilot has no verified enforcement flag: no canary command at all.
+    assert KNOWN_RUNTIMES["copilot"].get("connection_test_command") is None
 
 
 # ----------------------------------------------------------------------

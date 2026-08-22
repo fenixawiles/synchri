@@ -466,6 +466,32 @@ def test_failure_reports_and_critiques_are_screened_fail_closed(manager, repo, a
         verdict="unsound", critique=f"the diff hardcodes {token} in config.py",
     )
     assert token not in json.dumps(reviewed["review"])
+
+    # A quarantined patch must not leak through its diffstat's filenames.
+    stat = dropbox.capture(manager, record.session_id, "leaky diffstat")
+    dropbox.begin_investigation(manager, record.session_id, stat["drop_id"], base_sha="f" * 40)
+    deposited = dropbox.deposit_proposal(
+        manager, record.session_id, stat["drop_id"],
+        evidence="e", rationale="r", recommendation="adopt",
+        diffstat=f" config-{token}.py | 3 +",
+    )
+    assert token not in json.dumps(deposited["proposal"])
+
+    # The user's own capture text takes the same boundary — it reaches the
+    # completion package like everything else.
+    pasted = dropbox.capture(
+        manager, record.session_id, f"try this key I found: {token}"
+    )
+    assert token not in pasted["prompt"] and token not in pasted["title"]
+    assert "withheld" in pasted["prompt"]
+
+    # And the forced-waiver rationale, however it is produced.
+    from synchri.storage import db as db_module
+
+    with db_module.transaction(manager.conn):
+        dropbox.waive_pending_locked(
+            manager.conn, record.session_id, f"waived; context: {token}"
+        )
     row = manager.conn.execute(
         "SELECT * FROM session_drops WHERE session_id = ?", (record.session_id,)
     ).fetchall()

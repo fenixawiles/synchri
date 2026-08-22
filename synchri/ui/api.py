@@ -942,7 +942,6 @@ class Api:
         """
         from ..session import dropbox as dropbox_module
 
-        from ..errors import StateError
         from ..session import planning as planning_module
 
         session_id = self._session_id(query, body)
@@ -950,21 +949,27 @@ class Api:
         promotion = planning_module.promotion(self.manager, session_id)
         if promotion is not None:
             # Capture froze at plan approval; an item captured after it enters
-            # the new coordination session's dropbox instead of being lost.
-            target = promotion.get("coordination_session_id") or next(
-                (
-                    candidate.session_id
-                    for candidate in self.manager.list_sessions()
-                    if (candidate.metadata or {}).get("promoted_from") == session_id
-                ),
-                None,
-            )
+            # the new coordination session's dropbox. Before the promotion
+            # finalizes there may be nothing to capture into yet, so the item
+            # queues durably on the promotion record and drains into the
+            # coordination dropbox atomically with the finalize — never lost,
+            # never bounced back to the user.
+            target = promotion.get("coordination_session_id")
             if target is None:
-                raise StateError(
-                    "the plan was just approved and its coordination session is "
-                    "still being provisioned — capture again in a moment",
-                    code="promotion_in_progress",
+                queued = planning_module.queue_capture(
+                    self.manager,
+                    session_id,
+                    prompt=body.get("prompt", ""),
+                    title=body.get("title"),
+                    skip_review=bool(body.get("skip_review")),
                 )
+                if queued is not None:
+                    return {"item": None, "investigating": False, **queued}
+                # The promotion finalized between our read and the queue
+                # attempt — capture straight into the coordination session.
+                target = planning_module.promotion(self.manager, session_id)[
+                    "coordination_session_id"
+                ]
             session_id = target
         item = dropbox_module.capture(
             self.manager,

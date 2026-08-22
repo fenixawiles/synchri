@@ -93,6 +93,9 @@ def adapter_revision(definition: dict) -> str:
         for key in (
             "managed_command",
             "plain_managed_command",
+            "connection_test_command",
+            "plain_connection_test_command",
+            "connection_test_resume_command",
             "stream_format",
             "resume_command",
             "min_version",
@@ -376,9 +379,10 @@ def connection_state(
 def _sandbox_dir() -> str:
     """A fresh temporary directory outside every repository.
 
-    The canary runs here with a sentinel-only prompt; it has nothing of the
-    user's to read and no repository to mutate. Fail closed if the temp area
-    is somehow inside a working tree.
+    Defense-in-depth beneath the real guard: the canary's invocation itself
+    is the adapter's enforced no-tools command, so this directory is where a
+    technically disarmed process runs — not the thing disarming it. Fail
+    closed if the temp area is somehow inside a working tree.
     """
     path = tempfile.mkdtemp(prefix="synchri-connect-")
     try:
@@ -444,14 +448,24 @@ def run_connection_test(
 ) -> dict:
     """Prove the whole managed path with explicit user consent.
 
-    Two bounded invocations where the adapter defines resume (one cannot prove
-    it); a cancelled test stores nothing; a completed one stores the durable
-    ``runtime_connections`` record, replacing any earlier proof.
+    The canary runs only under the adapter's ``connection_test_command`` —
+    the CLI's own enforced no-tools / read-only mode — inside a fresh
+    temporary directory outside every repository (defense-in-depth, not the
+    guard). Two bounded invocations where the adapter defines resume (one
+    cannot prove it); a cancelled test stores nothing; a completed one stores
+    the durable ``runtime_connections`` record, replacing any earlier proof.
     """
     spec = _definition(runtime, definition)
-    command = spec.get("managed_command")
+    # The canary only ever runs under the adapter's enforced invocation — the
+    # CLI's own no-tools / read-only mode. An adapter without one has no
+    # consented connection test at all; the prompt asking nicely is not a
+    # sandbox.
+    command = spec.get("connection_test_command")
     if not command:
-        raise ValidationError(f"no maintained managed command for runtime {runtime!r}")
+        raise ValidationError(
+            f"the consented connection test is unavailable for {runtime!r}: its "
+            "maintained adapter has no enforced canary command"
+        )
     report = passive_report(runtime, definition=definition)
     facts = report["facts"]
     if not facts["executable_path"]:
@@ -485,8 +499,10 @@ def run_connection_test(
         if not result.ok and not result.cancelled and stream_format:
             from .managed import _looks_like_flag_rejection
 
-            if _looks_like_flag_rejection(result):
-                plain = spec.get("plain_managed_command") or command
+            plain = spec.get("plain_connection_test_command")
+            if _looks_like_flag_rejection(result) and plain:
+                # The plain retry keeps the same enforcement flags — never a
+                # fallback to an unenforced invocation.
                 notify("invoking", "The CLI rejected its streaming flags; retrying plain.")
                 result, parser = _invoke(
                     plain,
@@ -554,9 +570,17 @@ def run_connection_test(
         # doctor refuses to fake.
         connected = replied and result.ok and not any(c["state"] == FAIL for c in checks)
 
-        resume_command = spec.get("resume_command")
-        if not resume_command:
+        resume_command = spec.get("connection_test_resume_command")
+        if not spec.get("resume_command"):
             resume_detail = "the maintained adapter does not define resume for this runtime"
+        elif not resume_command:
+            # Resume exists for recovery, but there is no enforced canary
+            # invocation for it — never probe with the unenforced command.
+            resume_state = RESUME_UNVERIFIED
+            resume_detail = (
+                "resume is defined but has no enforced canary invocation; it "
+                "will be verified at the first real recovery"
+            )
         elif not connected:
             resume_state = RESUME_UNVERIFIED
             resume_detail = "not attempted — the first invocation failed"

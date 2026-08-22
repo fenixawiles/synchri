@@ -773,6 +773,7 @@ def test_the_database_refuses_a_second_linked_session_and_the_loser_leaks_nothin
     record, _ = _ready(manager, repo)
     result = planning.approve(manager, record.session_id)
     before = {s.session_id for s in manager.list_sessions()}
+    rooms_before = {p.name for p in manager.broker.workspace.rooms_dir.iterdir()}
     trees_before = {
         t["path"] for t in __import__("synchri.session.worktree", fromlist=["list_worktrees"])
         .list_worktrees(str(repo))
@@ -790,11 +791,14 @@ def test_the_database_refuses_a_second_linked_session_and_the_loser_leaks_nothin
         .list_worktrees(str(repo))
     }
     assert trees_after == trees_before, "the refused insert must clean its worktree"
+    rooms_after = {p.name for p in manager.broker.workspace.rooms_dir.iterdir()}
+    assert rooms_after == rooms_before, (
+        "the refused insert must also clean the room directory and ledger"
+    )
     assert result["coordination_session_id"] in before
 
 
-def test_a_capture_in_the_provisioning_window_routes_or_says_so(manager, repo):
-    from synchri.errors import StateError as ApiStateError
+def test_a_capture_in_the_provisioning_window_queues_and_drains(manager, repo):
     from synchri.ui.api import Api
 
     record, _ = _ready(manager, repo)
@@ -805,18 +809,27 @@ def test_a_capture_in_the_provisioning_window_routes_or_says_so(manager, repo):
         )
     api = Api(manager.broker, manager)
 
-    # Reserved, no coordination session anywhere yet: an honest, precise
-    # refusal — never a misleading "frozen".
-    with pytest.raises(ApiStateError) as exc:
-        api.capture_drop({}, {"session": record.session_id, "prompt": "mid-window idea"})
-    assert exc.value.code == "promotion_in_progress"
-
-    # Once the retry provisions, the same capture routes to the new session.
-    result = planning.approve(manager, record.session_id)
+    # Reserved, no coordination session anywhere yet: the capture is neither
+    # lost nor bounced back — it queues durably on the promotion record.
     payload = api.capture_drop({}, {"session": record.session_id, "prompt": "mid-window idea"})
-    assert payload["item"]["drop_id"] == "DROP-001"
-    assert [e["drop_id"] for e in dropbox.items(manager, result["coordination_session_id"])] == [
-        "DROP-001"
+    assert payload["queued"] is True and payload["item"] is None
+
+    # The retry finalizes the promotion and drains the queue atomically: the
+    # window capture enters the coordination session's dropbox.
+    result = planning.approve(manager, record.session_id)
+    coordination_id = result["coordination_session_id"]
+    drained = dropbox.items(manager, coordination_id)
+    assert [(e["drop_id"], e["prompt"]) for e in drained] == [("DROP-001", "mid-window idea")]
+    assert dropbox.items(manager, record.session_id) == []
+    promo = planning.promotion(manager, record.session_id)
+    assert promo["pending_captures"] == "[]", "drained exactly once"
+
+    # After finalize, the same endpoint captures straight into the
+    # coordination session.
+    payload = api.capture_drop({}, {"session": record.session_id, "prompt": "late idea"})
+    assert payload["item"]["drop_id"] == "DROP-002"
+    assert [e["drop_id"] for e in dropbox.items(manager, coordination_id)] == [
+        "DROP-001", "DROP-002",
     ]
 
 
@@ -892,8 +905,13 @@ def test_planning_commands_carry_the_clis_own_enforcement():
     from synchri.session.modes import KNOWN_RUNTIMES
 
     claude = KNOWN_RUNTIMES["claude_code"]
-    assert "--permission-mode plan" in claude["planning_command"]
-    assert "--permission-mode plan" in claude["plain_planning_command"]
+    for key in ("planning_command", "plain_planning_command"):
+        assert "--permission-mode plan" in claude[key]
+        # Hardened beyond the permission mode: configuration surfaces off,
+        # no MCP servers, and an explicit read-only tool allowlist.
+        assert "--safe-mode" in claude[key]
+        assert "--strict-mcp-config" in claude[key]
+        assert '--tools "Read,Glob,Grep"' in claude[key]
     codex = KNOWN_RUNTIMES["codex"]
     assert "--sandbox read-only" in codex["planning_command"]
     assert "--sandbox read-only" in codex["plain_planning_command"]

@@ -352,11 +352,21 @@ class SessionManager:
         except Exception:
             # The insert can be refused — notably by the unique promotion
             # provenance index when two promotion retries race. The loser
-            # must leak nothing: room, tree, and workspace all go.
+            # must leak nothing: the room rows, the room directory and ledger
+            # that create_room already wrote to disk, the tree, and the
+            # workspace all go.
             with db.transaction(self.conn):
                 self.conn.execute(
                     "DELETE FROM rooms WHERE room_id = ?", (room["room_id"],)
                 )
+            shutil.rmtree(
+                self.broker.workspace.room_dir(room["room_id"]), ignore_errors=True
+            )
+            if self.broker.workspace.sessions_dir.exists():
+                for path in self.broker.workspace.sessions_dir.glob(
+                    f"{room['room_id']}.*.json"
+                ):
+                    path.unlink(missing_ok=True)
             if created_worktree and tree is not None:
                 worktree_module.remove(tree, force=True, delete_branch=True)
             if workspace_entry:

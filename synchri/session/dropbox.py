@@ -150,7 +150,13 @@ def capture(
             f"a side task is capped at {MAX_PROMPT_CHARS:,} characters — "
             "keep the capture short; the scout does the investigating"
         )
-    heading = (title or "").strip() or text.splitlines()[0][:80]
+    # Even the user's own capture text is screened: every persisted free-form
+    # field that can reach the completion package takes the same fail-closed
+    # boundary, and the withheld marker tells the user exactly why.
+    text, _hit = _screened(text, MAX_PROMPT_CHARS)
+    heading, _hit = _screened(
+        (title or "").strip() or text.splitlines()[0][:80], 200
+    )
     now = utc_now()
     with db.transaction(manager.conn):
         _require_phase(manager.conn, session_id, PHASE_ORIGINAL, action="capture a side task")
@@ -461,7 +467,7 @@ def deposit_proposal(
             "base_sha": row["base_sha"],
             "commit": commit,
             "patch": stored_patch,
-            "diffstat": _bounded(diffstat, MAX_RATIONALE_CHARS) or None,
+            "diffstat": _screened(diffstat, MAX_RATIONALE_CHARS)[0] or None,
             "patch_preview": patch_preview,
             "patch_note": patch_note,
             "withheld": withheld,
@@ -745,7 +751,7 @@ def waive_pending_locked(conn, session_id: str, note: str) -> list[str]:
         evaluations["human"] = {
             "participant": "human",
             "verdict": WAIVED,
-            "rationale": note,
+            "rationale": _screened(note, MAX_RATIONALE_CHARS)[0],
             "at": now,
         }
         conn.execute(

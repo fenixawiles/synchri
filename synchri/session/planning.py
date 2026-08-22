@@ -9,19 +9,25 @@ REVISION -> RE-REVIEW -> PLAN-READY, where readiness requires review closure:
 open blocking objections or unresolved architectural forks prevent it, and
 nonblocking assumptions may remain only clearly classified.
 
-Isolation is capability-based, not contract-only, and it is layered.
-Planning agents launch under their CLI's **enforced read-only mode** (the
-maintained ``planning_command`` — e.g. Claude Code's plan permission mode,
-Codex's OS-level read-only sandbox), declared per runtime as
-``read_only_planning_workspace``; runtimes without a verified enforcement
-mechanism are unavailable, and custom commands are refused outright. Because
-the agents hold no write authority anywhere, the plan document travels
-through the reply protocol (``SYNCHRI-PLAN-BEGIN``/``END``), never through a
-file write. Beneath that, inspection happens in a **disposable planning
-workspace** — a local clone anchored to one ``inspection_sha`` with its
-remotes removed, so even a misbehaving process in it has no path back to the
-user's repository — whose Git state is verified after every turn; the
-workspace is never reused for coordination.
+Isolation is capability-based, not contract-only, and it is layered —
+and its strength is stated honestly per adapter. Planning agents launch only
+under the maintained ``planning_command``: for Codex that is ``--sandbox
+read-only``, an **OS-enforced** sandbox (Seatbelt / Landlock, read-only
+filesystem, no network); for Claude Code it is **provider enforcement**, not
+an OS sandbox — the CLI's permission engine in plan mode, hardened with
+``--safe-mode`` (hooks, plugins, MCP servers, and other configuration
+surfaces disabled), ``--strict-mcp-config`` with no MCP config (no servers
+at all), and an explicit read-only ``--tools`` allowlist. Trusting that
+boundary means trusting the Claude Code binary itself. Runtimes without a
+verified enforcement mechanism are unavailable, and custom commands are
+refused outright. The agents are given no sanctioned write path, so the plan
+document travels through the reply protocol
+(``SYNCHRI-PLAN-BEGIN``/``END``), never through a file write. Beneath that,
+inspection happens in a **disposable planning workspace** — a local clone
+anchored to one ``inspection_sha`` with its remotes removed, so even a
+misbehaving process in it has no path back to the user's repository — whose
+Git state is verified after every turn; the workspace is never reused for
+coordination.
 
 The loop is budgeted (turns, revisions, wall clock — whichever first, with
 one user-authorized resume); exhaustion produces ``needs_human_resolution``,
@@ -881,6 +887,68 @@ def promotion(manager: "SessionManager", session_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def queue_capture(
+    manager: "SessionManager",
+    session_id: str,
+    *,
+    prompt: str,
+    title: str | None = None,
+    skip_review: bool = False,
+) -> dict | None:
+    """Durably queue a capture that raced the promotion window.
+
+    Approval froze the planning session's dropbox and the coordination
+    session may not exist yet, so the capture must be neither lost nor
+    bounced back to the user: it lands on the promotion record — screened at
+    the same fail-closed boundary as every capture — and drains into the
+    coordination session's dropbox inside the transaction that finalizes the
+    promotion. Returns ``None`` when the promotion has already finalized,
+    telling the caller to capture into the coordination session directly.
+    """
+    from . import dropbox as dropbox_module
+
+    text = (prompt or "").strip()
+    if not text:
+        raise ValidationError("describe the side task")
+    if len(text) > dropbox_module.MAX_PROMPT_CHARS:
+        raise ValidationError(
+            f"a side task is capped at {dropbox_module.MAX_PROMPT_CHARS:,} characters"
+        )
+    text, _hit = dropbox_module._screened(text, dropbox_module.MAX_PROMPT_CHARS)
+    with db.transaction(manager.conn):
+        row = manager.conn.execute(
+            "SELECT coordination_session_id, pending_captures FROM session_promotions "
+            "WHERE planning_session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError("no promotion is in flight for this session")
+        if row["coordination_session_id"]:
+            return None
+        pending = json.loads(row["pending_captures"] or "[]")
+        pending.append(
+            {
+                "prompt": text,
+                "title": (title or "").strip() or None,
+                "skip_review": bool(skip_review),
+                "queued_at": utc_now(),
+            }
+        )
+        manager.conn.execute(
+            "UPDATE session_promotions SET pending_captures = ?, updated_at = ? "
+            "WHERE planning_session_id = ?",
+            (json.dumps(pending), utc_now(), session_id),
+        )
+    return {
+        "queued": True,
+        "position": len(pending),
+        "detail": (
+            "captured — it will enter the coordination session's dropbox as "
+            "provisioning finishes"
+        ),
+    }
+
+
 def plan_digest(plan_id: str, revision: int, inspection_sha: str, body: str) -> str:
     """The frozen identity of what the human approved."""
     material = f"{plan_id}\nrevision {revision}\n{inspection_sha}\n{body}"
@@ -1011,6 +1079,31 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
             raise ConflictError(
                 "the promotion was finalized concurrently with a different "
                 "coordination session; refusing to overwrite it"
+            )
+        # Drain the window captures into the coordination session's dropbox —
+        # atomically with the finalize, exactly once.
+        from . import dropbox as dropbox_module
+
+        pending_row = manager.conn.execute(
+            "SELECT pending_captures FROM session_promotions WHERE planning_session_id = ?",
+            (session_id,),
+        ).fetchone()
+        window_captures = json.loads(
+            (pending_row["pending_captures"] if pending_row else "[]") or "[]"
+        )
+        for entry in window_captures:
+            dropbox_module.capture(
+                manager,
+                coordination.session_id,
+                entry.get("prompt") or "",
+                title=entry.get("title"),
+                skip_review=bool(entry.get("skip_review")),
+            )
+        if window_captures:
+            manager.conn.execute(
+                "UPDATE session_promotions SET pending_captures = '[]', updated_at = ? "
+                "WHERE planning_session_id = ?",
+                (now, session_id),
             )
         from .manager import SessionStatus
 

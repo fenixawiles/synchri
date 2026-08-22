@@ -2983,9 +2983,11 @@ async function paint(tab, el) {
         skip_review: el.querySelector("#drop-skip-review").checked,
       });
       await paint("dropbox", el);
-      confirmNotice(result.investigating
-        ? `Captured ${result.item.drop_id} — the scout is investigating.`
-        : `Captured ${result.item.drop_id}. It will be evaluated at completion; connect an agent to investigate it sooner.`);
+      confirmNotice(result.queued
+        ? "Captured — it will enter the coordination session's dropbox as provisioning finishes."
+        : result.investigating
+          ? `Captured ${result.item.drop_id} — the scout is investigating.`
+          : `Captured ${result.item.drop_id}. It will be evaluated at completion; connect an agent to investigate it sooner.`);
     });
   } else if (tab === "tests") {
     const t = d.tests;

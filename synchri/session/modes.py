@@ -186,8 +186,9 @@ Your first pass is yours alone. Turn the human's idea articulation plus your
 own repository inspection into PLAN-DRAFT revision 1 before the reviewer sees
 anything: inspect the current implementation, dependencies, constraints,
 acceptance criteria, migration risks, likely failure modes, and testing and
-preservation requirements. You run in an enforced read-only mode with no
-write access anywhere; the plan travels through your reply: put the complete
+preservation requirements. You are launched under your CLI's read-only
+enforcement with no sanctioned write path; the plan travels through your
+reply: put the complete
 plan document between a `SYNCHRI-PLAN-BEGIN` line and a `SYNCHRI-PLAN-END`
 line, then end the reply with `SYNCHRI-PLAN-SUBMIT: <one-line summary>` to
 record the revision.
@@ -286,12 +287,13 @@ adversarially reviewed implementation plan the human can approve, and
 approval staffs and starts the coordination that executes it.
 
 Neither of you has implementation authority here, and this is enforced, not
-requested: you run under your CLI's read-only mode, with the working
-directory set to a disposable planning copy of the repository — anchored to
-one inspected commit, holding no remotes, never reused for coordination.
-Inspect it freely; you cannot and must not write anywhere. The plan itself
-travels through your replies via the SYNCHRI-PLAN-BEGIN/END protocol.
-Synchri verifies the workspace's Git state after every turn.
+requested: you are launched under your CLI's own read-only enforcement, with
+the working directory set to a disposable planning copy of the repository —
+anchored to one inspected commit, holding no remotes, never reused for
+coordination. Inspect it freely; you have no sanctioned write path and must
+not attempt one. The plan itself travels through your replies via the
+SYNCHRI-PLAN-BEGIN/END protocol. Synchri verifies the workspace's Git state
+after every turn.
 
 The loop is PLAN-DRAFT -> ADVERSARIAL REVIEW -> REVISION -> RE-REVIEW ->
 PLAN-READY. The planner drafts first, alone; only then does the reviewer
@@ -483,13 +485,37 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "min_version": (1, 0, 0),
         "auth_indicators": ["~/.claude/.credentials.json", "~/.claude/credentials.json"],
         "resume_command": "claude -p --verbose --output-format stream-json --resume {resume_id} {prompt}",
-        # Planning launches under the CLI's own enforced read-only mode
-        # (permission-mode plan denies edits, writes, and mutating commands),
-        # so the isolation is the runtime's, not a request in a prompt. The
-        # plan itself travels through the reply protocol — the agent needs no
-        # write access anywhere.
-        "planning_command": "claude -p --verbose --output-format stream-json --permission-mode plan {prompt}",
-        "plain_planning_command": "claude -p --permission-mode plan {prompt}",
+        # Planning launches under the CLI's own enforcement, hardened:
+        # permission-mode plan denies edits, writes, and mutating commands;
+        # --safe-mode disables the configuration surfaces that could widen it
+        # (hooks, plugins, MCP servers, custom commands); --strict-mcp-config
+        # with no --mcp-config loads no MCP servers at all; and --tools pins
+        # the built-in tool set to read-only inspection. This is provider
+        # enforcement (the CLI's permission engine), not an OS sandbox — the
+        # honest limit of what this adapter can guarantee.
+        "planning_command": (
+            "claude -p --verbose --output-format stream-json --permission-mode plan "
+            '--safe-mode --strict-mcp-config --tools "Read,Glob,Grep" {prompt}'
+        ),
+        "plain_planning_command": (
+            'claude -p --permission-mode plan --safe-mode --strict-mcp-config '
+            '--tools "Read,Glob,Grep" {prompt}'
+        ),
+        # The connection-test canary answers a sentinel prompt and needs no
+        # tools at all: --tools "" disables every built-in tool on top of the
+        # same hardening, so the canary technically cannot read or write.
+        "connection_test_command": (
+            "claude -p --verbose --output-format stream-json --permission-mode plan "
+            '--safe-mode --strict-mcp-config --tools "" {prompt}'
+        ),
+        "plain_connection_test_command": (
+            'claude -p --permission-mode plan --safe-mode --strict-mcp-config '
+            '--tools "" {prompt}'
+        ),
+        "connection_test_resume_command": (
+            "claude -p --verbose --output-format stream-json --permission-mode plan "
+            '--safe-mode --strict-mcp-config --tools "" --resume {resume_id} {prompt}'
+        ),
         "read_only_planning_workspace": True,
     },
     "codex": {
@@ -505,8 +531,11 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "resume_command": None,
         # Codex's sandbox is OS-enforced (Seatbelt / Landlock): read-only
         # filesystem, no network — the strongest confinement available here.
+        # The connection-test canary runs under the same sandbox.
         "planning_command": "codex exec --json --sandbox read-only {prompt}",
         "plain_planning_command": "codex exec --sandbox read-only {prompt}",
+        "connection_test_command": "codex exec --json --sandbox read-only {prompt}",
+        "plain_connection_test_command": "codex exec --sandbox read-only {prompt}",
         "read_only_planning_workspace": True,
     },
     "copilot": {
@@ -522,8 +551,8 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         ],
         "resume_command": None,
         # No verified read-only enforcement flag in the maintained adapter
-        # yet: Planning Mode is unavailable on Copilot rather than silently
-        # downgraded to contract-only isolation.
+        # yet: Planning Mode and the consented connection test are both
+        # unavailable on Copilot rather than run without a technical sandbox.
     },
     "gemini": {
         "label": "Gemini CLI",

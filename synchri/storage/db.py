@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,6 +27,39 @@ INITIALIZE_RETRIES = 8
 INITIALIZE_RETRY_SECONDS = 0.05
 
 
+class Connection(sqlite3.Connection):
+    """A shared-connection-aware ``sqlite3.Connection``.
+
+    The local app shares one connection across threads — the threaded UI
+    server, conductors, recovery timers all reach the broker's connection
+    with ``check_same_thread=False``. ``sqlite3`` serializes individual
+    statements, but ``in_transaction`` is connection-global: without
+    ownership, one thread's open transaction reads as "nested" to every
+    other thread, which would then join it instead of waiting — and a bare
+    statement from another thread would land inside it. The lock makes a
+    read-decide-write block atomic across threads exactly the way ``BEGIN
+    IMMEDIATE`` already makes it atomic across processes; ``_txn_owner``
+    records which thread may genuinely nest.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._txn_lock = threading.RLock()
+        self._txn_owner: int | None = None
+
+    def execute(self, sql, parameters=(), /):
+        with self._txn_lock:
+            return super().execute(sql, parameters)
+
+    def executemany(self, sql, parameters, /):
+        with self._txn_lock:
+            return super().executemany(sql, parameters)
+
+    def executescript(self, sql, /):
+        with self._txn_lock:
+            return super().executescript(sql)
+
+
 def connect(db_path: Path, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS) -> sqlite3.Connection:
     """Open a connection with the pragmas Synchri relies on."""
     db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -35,6 +69,7 @@ def connect(db_path: Path, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS) -> sq
         timeout=busy_timeout_ms / 1000,
         isolation_level=None,  # explicit transaction control, see transaction()
         check_same_thread=False,
+        factory=Connection,
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -140,36 +175,60 @@ def _apply_additive_migrations(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
+def _owned_transaction(conn: sqlite3.Connection, begin: str) -> Iterator[sqlite3.Connection]:
+    lock = getattr(conn, "_txn_lock", None)
+    if lock is None:
+        # A bare ``sqlite3.connect`` connection (tests, one-off scripts):
+        # single-threaded use, where the original nesting rule is exact.
+        if conn.in_transaction:
+            yield conn
+            return
+        conn.execute(begin)
+        try:
+            yield conn
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        else:
+            conn.execute("COMMIT")
+        return
+    if conn._txn_owner == threading.get_ident():
+        # Nested use by the owning thread: the outermost block owns the
+        # commit. Another thread's open transaction never counts as nested —
+        # it means "wait for the lock", below.
+        yield conn
+        return
+    with lock:
+        conn._txn_owner = threading.get_ident()
+        try:
+            conn.execute(begin)
+            try:
+                yield conn
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            else:
+                conn.execute("COMMIT")
+        finally:
+            conn._txn_owner = None
+
+
+@contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """Run a block inside a single ``BEGIN IMMEDIATE`` write transaction.
 
-    Nested use is a no-op: the outermost block owns the commit, so a broker
-    operation composed of smaller helpers still commits exactly once.
+    Nested use by the same thread is a no-op: the outermost block owns the
+    commit, so a broker operation composed of smaller helpers still commits
+    exactly once. Across threads sharing one connection, transactions are
+    serialized by the connection's lock — a concurrent request waits for the
+    write transaction instead of silently joining it.
     """
-    if conn.in_transaction:
-        yield conn
-        return
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        yield conn
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    else:
-        conn.execute("COMMIT")
+    with _owned_transaction(conn, "BEGIN IMMEDIATE") as inner:
+        yield inner
 
 
 @contextmanager
 def read_transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """Run a block inside a deferred (read) transaction for a consistent snapshot."""
-    if conn.in_transaction:
-        yield conn
-        return
-    conn.execute("BEGIN DEFERRED")
-    try:
-        yield conn
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    else:
-        conn.execute("COMMIT")
+    with _owned_transaction(conn, "BEGIN DEFERRED") as inner:
+        yield inner

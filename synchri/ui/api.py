@@ -943,67 +943,84 @@ class Api:
         from ..session import dropbox as dropbox_module
 
         from ..session import planning as planning_module
+        from ..storage import db as db_module
 
         session_id = self._session_id(query, body)
-        record = self.manager.get(session_id)
-        promotion = planning_module.promotion(self.manager, session_id)
-        if promotion is not None:
-            # Capture froze at plan approval; an item captured after it enters
-            # the new coordination session's dropbox. Before the promotion
-            # finalizes there may be nothing to capture into yet, so the item
-            # queues durably on the promotion record and drains into the
-            # coordination dropbox atomically with the finalize — never lost,
-            # never bounced back to the user.
-            target = promotion.get("coordination_session_id")
-            if target is None:
-                queued = planning_module.queue_capture(
+        self.manager.get(session_id)
+        # Routing and capture are one transaction: the decision — planning
+        # dropbox, promotion queue, or coordination dropbox — is made against
+        # the same state the insert lands in. An approval finalizing on
+        # another request thread waits for the connection's write lock, so a
+        # capture can never target a session the approval just closed.
+        queued = None
+        with db_module.transaction(self.manager.conn):
+            promotion = planning_module.promotion(self.manager, session_id)
+            if promotion is not None:
+                # Capture froze at plan approval; an item captured after it
+                # enters the new coordination session's dropbox. Before the
+                # promotion finalizes there is nothing to capture into yet,
+                # so the item queues durably on the promotion record and
+                # drains into the coordination dropbox atomically with the
+                # finalize — never lost, never bounced back to the user.
+                target = promotion.get("coordination_session_id")
+                if target is None:
+                    queued = planning_module.queue_capture(
+                        self.manager,
+                        session_id,
+                        prompt=body.get("prompt", ""),
+                        title=body.get("title"),
+                        skip_review=bool(body.get("skip_review")),
+                    )
+                    if queued is None:
+                        # The promotion had already finalized: route directly.
+                        target = planning_module.promotion(self.manager, session_id)[
+                            "coordination_session_id"
+                        ]
+                        session_id = target
+                else:
+                    session_id = target
+            if queued is None:
+                item = dropbox_module.capture(
                     self.manager,
                     session_id,
-                    prompt=body.get("prompt", ""),
+                    body.get("prompt", ""),
                     title=body.get("title"),
                     skip_review=bool(body.get("skip_review")),
                 )
-                if queued is not None:
-                    return {"item": None, "investigating": False, **queued}
-                # The promotion finalized between our read and the queue
-                # attempt — capture straight into the coordination session.
-                target = planning_module.promotion(self.manager, session_id)[
-                    "coordination_session_id"
-                ]
-            session_id = target
-        item = dropbox_module.capture(
-            self.manager,
-            session_id,
-            body.get("prompt", ""),
-            title=body.get("title"),
-            skip_review=bool(body.get("skip_review")),
-        )
-        # The scout starts in parallel, off the critical path — but only for
-        # an agent the user actually wired up: an explicit command, or a
-        # runtime whose consented connection test passed. A merely-installed
-        # CLI is never invoked implicitly. Otherwise the item waits honestly
-        # as captured; the completion cutoff has a terminal route for it, and
-        # the human can retry once an agent is connected.
-        record = self.manager.get(session_id)
-        lead, _reviewer = collaboration_pair(record.participants)
-        investigating = False
-        # Planning considerations are folded into the plan by the planner —
-        # they are never scouted.
-        if lead is not None and not record.policy.planning:
-            if lead.command and lead.command.strip():
-                investigating = True
-            elif plan_launch_status(lead)["ready"]:
-                connections = doctor_module.stored_connections(self.broker.conn)
-                investigating = (
-                    connections.get(lead.runtime, {}).get("state") == "connected"
-                )
-        if investigating:
-            self.ancillary.investigate(session_id, item["drop_id"])
+        if queued is not None:
+            return {"item": None, "investigating": False, **queued}
+        investigating = self._start_scout_if_connected(session_id, item["drop_id"])
         return {
             "item": item,
             "investigating": investigating,
             **self.dropbox({"session": session_id}, {}),
         }
+
+    def _start_scout_if_connected(self, session_id: str, drop_id: str) -> bool:
+        """Start the scout in parallel, off the critical path.
+
+        Only for an agent the user actually wired up: an explicit command, or
+        a runtime whose consented connection test passed. A merely-installed
+        CLI is never invoked implicitly. Otherwise the item waits honestly as
+        captured; the completion cutoff has a terminal route for it, and the
+        human can retry once an agent is connected. Planning considerations
+        are folded into the plan by the planner — they are never scouted.
+        """
+        record = self.manager.get(session_id)
+        lead, _reviewer = collaboration_pair(record.participants)
+        if lead is None or record.policy.planning:
+            return False
+        investigating = False
+        if lead.command and lead.command.strip():
+            investigating = True
+        elif plan_launch_status(lead)["ready"]:
+            connections = doctor_module.stored_connections(self.broker.conn)
+            investigating = (
+                connections.get(lead.runtime, {}).get("state") == "connected"
+            )
+        if investigating:
+            self.ancillary.investigate(session_id, drop_id)
+        return investigating
 
     def plan(self, query: dict, body: dict) -> dict:
         """The PLAN-NNN artifact and loop state for a planning session."""
@@ -1056,6 +1073,12 @@ class Api:
         )
         self.managed.cancel(session_id, reason="Plan approved; planning has concluded.")
         coordination = self.manager.get(result["coordination_session_id"])
+        # Captures drained from the promotion queue get the same scout start
+        # as a direct capture would — a queued item must not idle as captured
+        # until the completion cutoff times it out just because it arrived
+        # mid-window.
+        for entry in result.get("window_captures", []):
+            self._start_scout_if_connected(coordination.session_id, entry["drop_id"])
         return {**result, "coordination": self._launch_payload(coordination)}
 
     def run_tests(self, query: dict, body: dict) -> dict:

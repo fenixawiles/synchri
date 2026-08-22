@@ -487,11 +487,12 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "resume_command": "claude -p --verbose --output-format stream-json --resume {resume_id} {prompt}",
         # Planning launches under the CLI's own enforcement, hardened:
         # permission-mode plan denies edits, writes, and mutating commands;
-        # --safe-mode disables the configuration surfaces that could widen it
-        # (hooks, plugins, MCP servers, custom commands); --strict-mcp-config
-        # with no --mcp-config loads no MCP servers at all; and --tools pins
-        # the built-in tool set to read-only inspection. This is provider
-        # enforcement (the CLI's permission engine), not an OS sandbox — the
+        # --safe-mode disables the user-configurable surfaces that could
+        # widen it (hooks, plugins, custom commands — managed-policy hooks
+        # remain active by design); --strict-mcp-config with no --mcp-config
+        # loads no MCP servers at all; and --tools pins the built-in tool set
+        # to read-only inspection. This is provider enforcement (the CLI's
+        # permission engine plus its managed policy), not an OS sandbox — the
         # honest limit of what this adapter can guarantee.
         "planning_command": (
             "claude -p --verbose --output-format stream-json --permission-mode plan "

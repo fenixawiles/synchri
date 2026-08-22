@@ -349,3 +349,53 @@ def test_hard_stop_from_another_process_ends_a_wait(workspace):
 
     assert waiter.returncode == 11, stderr
     assert json.loads(stdout)["state"] == "stopped"
+
+
+def test_one_shared_connection_serializes_transactions_across_threads(tmp_path):
+    """A second thread waits for the open write transaction — never joins it.
+
+    The threaded UI server shares the broker's single connection across
+    request threads. ``in_transaction`` alone cannot express ownership: to a
+    naive nesting check, another thread's open transaction looks like this
+    thread's own, and the "nested" block would interleave into it — making
+    every read-decide-write atomicity claim false. Ownership is per-thread;
+    everyone else queues on the connection's lock.
+    """
+    import time
+
+    from synchri.storage import db
+
+    conn = db.connect(tmp_path / "shared.db")
+    conn.execute("CREATE TABLE t (k TEXT PRIMARY KEY, v TEXT)")
+    order: list[str] = []
+    inside = threading.Event()
+    release = threading.Event()
+
+    def writer():
+        with db.transaction(conn):
+            conn.execute("INSERT INTO t VALUES ('a', '1')")
+            order.append("writer-first-insert")
+            inside.set()
+            release.wait(30)
+            conn.execute("INSERT INTO t VALUES ('b', '2')")
+        order.append("writer-committed")
+
+    def reader():
+        inside.wait(30)
+        with db.transaction(conn):
+            count = conn.execute("SELECT count(*) AS c FROM t").fetchone()["c"]
+            order.append(f"reader-saw-{count}")
+
+    first = threading.Thread(target=writer)
+    second = threading.Thread(target=reader)
+    first.start()
+    second.start()
+    assert inside.wait(30)
+    time.sleep(0.2)  # let the reader reach the lock while the writer holds it
+    release.set()
+    first.join(30)
+    second.join(30)
+    assert order == ["writer-first-insert", "writer-committed", "reader-saw-2"], (
+        f"the reader entered the writer's open transaction: {order}"
+    )
+    conn.close()

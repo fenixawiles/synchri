@@ -139,9 +139,7 @@ def capture(
     own ``BEGIN IMMEDIATE`` transaction, so exactly one ordering happens: the
     capture lands in the snapshot, or it is refused as frozen.
     """
-    record = manager.get(session_id)
-    if record.is_terminal:
-        raise StateError(f"session is {record.status}", code="session_finished")
+    manager.get(session_id)  # not-found before validation
     text = (prompt or "").strip()
     if not text:
         raise ValidationError("describe the side task")
@@ -159,6 +157,11 @@ def capture(
     )
     now = utc_now()
     with db.transaction(manager.conn):
+        # Both liveness checks run under the write lock, so the decision to
+        # insert is made against the same state the insert lands in.
+        record = manager.get(session_id, sweep=False)
+        if record.is_terminal:
+            raise StateError(f"session is {record.status}", code="session_finished")
         _require_phase(manager.conn, session_id, PHASE_ORIGINAL, action="capture a side task")
         drop_id = _next_drop_id(manager.conn, session_id)
         manager.conn.execute(

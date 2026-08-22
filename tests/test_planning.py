@@ -798,7 +798,11 @@ def test_the_database_refuses_a_second_linked_session_and_the_loser_leaks_nothin
     assert result["coordination_session_id"] in before
 
 
-def test_a_capture_in_the_provisioning_window_queues_and_drains(manager, repo):
+def test_a_capture_in_the_provisioning_window_queues_and_drains(manager, repo, monkeypatch):
+    import json
+
+    from synchri.runner import doctor as doctor_module
+    from synchri.ui import api as api_module
     from synchri.ui.api import Api
 
     record, _ = _ready(manager, repo)
@@ -814,23 +818,132 @@ def test_a_capture_in_the_provisioning_window_queues_and_drains(manager, repo):
     payload = api.capture_drop({}, {"session": record.session_id, "prompt": "mid-window idea"})
     assert payload["queued"] is True and payload["item"] is None
 
+    # The queued entry persists on the promotion row — indefinitely, after a
+    # crash — so its title takes the same fail-closed screen at queue time as
+    # every other stored free-form field.
+    token = "ghp_" + "q7W3" * 8
+    payload = api.capture_drop(
+        {}, {"session": record.session_id, "prompt": "rotate the key",
+             "title": f"found {token} in config"},
+    )
+    assert payload["queued"] is True
+    promo_row = manager.conn.execute(
+        "SELECT * FROM session_promotions WHERE planning_session_id = ?",
+        (record.session_id,),
+    ).fetchone()
+    assert token not in json.dumps(
+        {key: promo_row[key] for key in promo_row.keys()}, default=str
+    ), "a queued capture's title must never persist a raw secret"
+
     # The retry finalizes the promotion and drains the queue atomically: the
-    # window capture enters the coordination session's dropbox.
-    result = planning.approve(manager, record.session_id)
+    # window captures enter the coordination session's dropbox — and each
+    # drained item gets the same scout start a direct capture would, instead
+    # of idling as captured until the completion cutoff times it out.
+    class _Scouts:
+        def __init__(self):
+            self.calls = []
+
+        def investigate(self, session_id, drop_id):
+            self.calls.append((session_id, drop_id))
+
+    class _Managed:
+        cli_command = "synchri"
+
+        def cancel(self, session_id, reason=""):
+            pass
+
+        def readiness(self, record):
+            return {"available": False, "agents": []}
+
+        def status(self, session_id):
+            return {"phase": "not_started"}
+
+    api.ancillary = _Scouts()
+    api.managed = _Managed()
+    monkeypatch.setattr(
+        api_module, "plan_launch_status",
+        lambda plan: {"mode": "managed", "ready": True, "command": "agent {prompt}",
+                      "detail": "stubbed for the drained-scout check"},
+    )
+    monkeypatch.setattr(
+        doctor_module, "stored_connections",
+        lambda conn: {"claude_code": {"state": "connected"}},
+    )
+    result = api.approve_plan({}, {"session": record.session_id})
     coordination_id = result["coordination_session_id"]
     drained = dropbox.items(manager, coordination_id)
-    assert [(e["drop_id"], e["prompt"]) for e in drained] == [("DROP-001", "mid-window idea")]
+    assert [(e["drop_id"], e["prompt"]) for e in drained] == [
+        ("DROP-001", "mid-window idea"), ("DROP-002", "rotate the key"),
+    ]
+    assert token not in json.dumps(drained, default=str)
     assert dropbox.items(manager, record.session_id) == []
     promo = planning.promotion(manager, record.session_id)
     assert promo["pending_captures"] == "[]", "drained exactly once"
+    assert api.ancillary.calls == [
+        (coordination_id, "DROP-001"), (coordination_id, "DROP-002"),
+    ], "a drained capture starts its scout exactly like a direct capture"
 
     # After finalize, the same endpoint captures straight into the
     # coordination session.
     payload = api.capture_drop({}, {"session": record.session_id, "prompt": "late idea"})
-    assert payload["item"]["drop_id"] == "DROP-002"
+    assert payload["item"]["drop_id"] == "DROP-003"
     assert [e["drop_id"] for e in dropbox.items(manager, coordination_id)] == [
-        "DROP-001", "DROP-002",
+        "DROP-001", "DROP-002", "DROP-003",
     ]
+
+
+def test_the_approval_capture_race_is_atomic_across_threads(manager, repo, monkeypatch):
+    """Two real request threads at the approval boundary.
+
+    The capture's routing decision and its insert are one transaction,
+    serialized with approval's reserve and finalize by the shared
+    connection's write lock — so a capture racing an approval queues or
+    routes, and is never bounced with ``session_finished`` or
+    ``dropbox_frozen`` because approval completed in a gap between a read
+    and the insert.
+    """
+    import threading
+
+    from synchri.ui.api import Api
+
+    record, _ = _ready(manager, repo)
+    api = Api(manager.broker, manager)
+
+    in_window = threading.Event()
+    finish = threading.Event()
+    real_provision = planning._provision
+
+    def paused_provision(*args, **kwargs):
+        in_window.set()
+        assert finish.wait(30), "the capture thread never released provisioning"
+        return real_provision(*args, **kwargs)
+
+    monkeypatch.setattr(planning, "_provision", paused_provision)
+
+    results: dict = {}
+
+    def approver():
+        results["approve"] = planning.approve(manager, record.session_id)
+
+    thread = threading.Thread(target=approver)
+    thread.start()
+    try:
+        assert in_window.wait(30), "approve never reached provisioning"
+        # The promotion is reserved on another thread, mid-provisioning: the
+        # capture endpoint queues durably — no error, and no deadlock against
+        # the approval's transactions.
+        payload = api.capture_drop(
+            {}, {"session": record.session_id, "prompt": "raced idea"}
+        )
+        assert payload["queued"] is True and payload["item"] is None
+    finally:
+        finish.set()
+        thread.join(60)
+    assert not thread.is_alive(), "approve never finished"
+    coordination_id = results["approve"]["coordination_session_id"]
+    drained = dropbox.items(manager, coordination_id)
+    assert [(e["drop_id"], e["prompt"]) for e in drained] == [("DROP-001", "raced idea")]
+    assert dropbox.items(manager, record.session_id) == []
 
 
 def test_worktrees_can_branch_from_an_exact_start_point(repo):

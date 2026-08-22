@@ -15,10 +15,12 @@ under the maintained ``planning_command``: for Codex that is ``--sandbox
 read-only``, an **OS-enforced** sandbox (Seatbelt / Landlock, read-only
 filesystem, no network); for Claude Code it is **provider enforcement**, not
 an OS sandbox — the CLI's permission engine in plan mode, hardened with
-``--safe-mode`` (hooks, plugins, MCP servers, and other configuration
-surfaces disabled), ``--strict-mcp-config`` with no MCP config (no servers
-at all), and an explicit read-only ``--tools`` allowlist. Trusting that
-boundary means trusting the Claude Code binary itself. Runtimes without a
+``--safe-mode`` (user-configurable hooks, plugins, and other configuration
+surfaces disabled; managed-policy hooks remain active by design),
+``--strict-mcp-config`` with no MCP config (no servers at all), and an
+explicit read-only ``--tools`` allowlist. Trusting that boundary means
+trusting the Claude Code binary and the managed policy it enforces, not an
+operating-system guarantee. Runtimes without a
 verified enforcement mechanism are unavailable, and custom commands are
 refused outright. The agents are given no sanctioned write path, so the plan
 document travels through the reply protocol
@@ -841,7 +843,9 @@ def render_status(manager: "SessionManager", record: "SessionRecord") -> str | N
         f"{limits['revisions_used']}/{limits['revision_budget']} revisions · "
         f"{limits['minutes_budget']} minutes wall clock",
         "submit revisions between SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END lines "
-        "in your reply — you have no write access anywhere, by enforcement",
+        "in your reply — planning offers no sanctioned write path: your CLI "
+        "runs read-only by its own enforcement, inside a disposable "
+        "inspection clone",
     ]
     idea = plan["idea"]
     lines.append("")
@@ -915,6 +919,12 @@ def queue_capture(
             f"a side task is capped at {dropbox_module.MAX_PROMPT_CHARS:,} characters"
         )
     text, _hit = dropbox_module._screened(text, dropbox_module.MAX_PROMPT_CHARS)
+    # The title is screened and bounded here, at queue time, not only when the
+    # drain re-captures it: the queued entry itself persists on the promotion
+    # row — indefinitely, after a crash — and must never carry a raw secret.
+    heading = (title or "").strip() or None
+    if heading is not None:
+        heading, _hit = dropbox_module._screened(heading, 200)
     with db.transaction(manager.conn):
         row = manager.conn.execute(
             "SELECT coordination_session_id, pending_captures FROM session_promotions "
@@ -929,7 +939,7 @@ def queue_capture(
         pending.append(
             {
                 "prompt": text,
-                "title": (title or "").strip() or None,
+                "title": heading,
                 "skip_review": bool(skip_review),
                 "queued_at": utc_now(),
             }
@@ -1054,13 +1064,15 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
         )
         existing = promotion(manager, session_id)
     elif existing["status"] == "provisioned" and existing["coordination_session_id"]:
-        # Duplicate approval: idempotent, never a second session.
+        # Duplicate approval: idempotent, never a second session. Any window
+        # captures were drained by the approval that finalized.
         return {
             "promoted": True,
             "already_promoted": True,
             "coordination_session_id": existing["coordination_session_id"],
             "plan_id": existing["plan_id"],
             "plan_digest": existing["plan_digest"],
+            "window_captures": [],
         }
 
     coordination = _provision(manager, record, existing, staffing)
@@ -1091,7 +1103,7 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
         window_captures = json.loads(
             (pending_row["pending_captures"] if pending_row else "[]") or "[]"
         )
-        for entry in window_captures:
+        drained = [
             dropbox_module.capture(
                 manager,
                 coordination.session_id,
@@ -1099,6 +1111,8 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
                 title=entry.get("title"),
                 skip_review=bool(entry.get("skip_review")),
             )
+            for entry in window_captures
+        ]
         if window_captures:
             manager.conn.execute(
                 "UPDATE session_promotions SET pending_captures = '[]', updated_at = ? "
@@ -1129,6 +1143,9 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
         "coordination_session_id": coordination.session_id,
         "plan_id": existing["plan_id"],
         "plan_digest": existing["plan_digest"],
+        # Window captures drained at finalize: the caller starts their scouts
+        # exactly as it would for a directly captured item.
+        "window_captures": drained,
     }
 
 

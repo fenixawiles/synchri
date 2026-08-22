@@ -661,11 +661,13 @@ def insert_turn_usage(
     cached_input_tokens: int = 0,
     cost_usd: float | None = None,
     duration_seconds: float | None = None,
+    origin_kind: str = "main",
+    drop_id: str | None = None,
 ) -> None:
     conn.execute(
         "INSERT INTO agent_turn_usage (session_id, room_id, participant, runtime, model, "
         "input_tokens, output_tokens, cached_input_tokens, cost_usd, duration_seconds, "
-        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "created_at, origin_kind, drop_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             session_id,
             room_id,
@@ -678,19 +680,41 @@ def insert_turn_usage(
             cost_usd,
             duration_seconds,
             utc_now(),
+            origin_kind or "main",
+            drop_id,
         ),
     )
 
 
 def usage_for_session(conn: sqlite3.Connection, session_id: str) -> list[dict]:
-    """Per-participant usage totals plus how many invocations were measured."""
+    """Per-participant usage totals plus how many invocations were measured.
+
+    Main-room work only: ancillary (dropbox scout/reviewer) invocations are
+    reported by :func:`ancillary_usage_for_session` and are never merged into
+    an ordinary participant's totals.
+    """
     rows = conn.execute(
         "SELECT participant, runtime, MAX(model) AS model, COUNT(*) AS invocations, "
         "SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, "
         "SUM(cached_input_tokens) AS cached_input_tokens, SUM(cost_usd) AS cost_usd, "
         "SUM(duration_seconds) AS duration_seconds "
-        "FROM agent_turn_usage WHERE session_id = ? GROUP BY participant, runtime "
-        "ORDER BY participant",
+        "FROM agent_turn_usage WHERE session_id = ? AND origin_kind = 'main' "
+        "GROUP BY participant, runtime ORDER BY participant",
+        (session_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def ancillary_usage_for_session(conn: sqlite3.Connection, session_id: str) -> list[dict]:
+    """Dropbox scout/reviewer usage, grouped per item — reported separately."""
+    rows = conn.execute(
+        "SELECT drop_id, participant, runtime, MAX(model) AS model, "
+        "COUNT(*) AS invocations, SUM(input_tokens) AS input_tokens, "
+        "SUM(output_tokens) AS output_tokens, "
+        "SUM(cached_input_tokens) AS cached_input_tokens, SUM(cost_usd) AS cost_usd, "
+        "SUM(duration_seconds) AS duration_seconds "
+        "FROM agent_turn_usage WHERE session_id = ? AND origin_kind = 'ancillary' "
+        "GROUP BY drop_id, participant, runtime ORDER BY drop_id, participant",
         (session_id,),
     ).fetchall()
     return [dict(row) for row in rows]

@@ -1,0 +1,29 @@
+# The full suite on every push and pull request, so a PR head always carries
+# a green (or honestly red) check. Release signing/notarization stays in
+# release.yml, gated on v* tags.
+name: tests
+
+# push covers main (post-merge); pull_request covers every PR head — the
+# split avoids double runs on PR branches.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Configure git identity for worktree tests
+        run: |
+          git config --global user.email "ci@synchri.test"
+          git config --global user.name "Synchri CI"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q

@@ -23,7 +23,10 @@ from ..broker import Broker, Credential
 from ..errors import SynchriError, ValidationError
 from ..models.enums import MessageType, ResponseStatus, RoomStatus, TurnState
 from ..models.envelope import MessageDraft
+from ..session import dropbox as dropbox_module
+from ..session import planning as planning_module
 from ..session.manager import SessionManager
+from . import recovery
 from .agent_command import AgentCommand, parse_directives
 
 #: Why the conductor handed control back.
@@ -47,6 +50,10 @@ class ConductorReport:
     warnings: list[str] = field(default_factory=list)
     #: Set when ``reason == "agent_failed"``: who tripped the breaker.
     failed_participant: str | None = None
+    #: How the failed participant failed (see :mod:`recovery`), so supervision
+    #: can pick the right rung: ladder kinds get a replacement chance, auth
+    #: failures and provider refusals go straight to the human.
+    failure_kind: str | None = None
 
     @property
     def turn_count(self) -> int:
@@ -78,8 +85,10 @@ class Conductor:
         role_guidance: dict[str, str] | None = None,
         session_id: str | None = None,
         cancel_event=None,
+        cancel_events: dict[str, object] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
         max_consecutive_failures: int = 2,
+        initial_failures: dict[str, int] | None = None,
     ) -> None:
         if not agents:
             raise ValidationError("at least one --agent is required")
@@ -99,10 +108,20 @@ class Conductor:
         self.role_guidance = dict(role_guidance or {})
         self.session_id = session_id
         self.cancel_event = cancel_event
+        #: Optional per-participant cancel signals (composed with the session
+        #: event by the caller) so restarting one agent never touches another
+        #: agent's invocation.
+        self.cancel_events = dict(cancel_events or {})
         self.on_event = on_event or (lambda event, payload: None)
         self.max_consecutive_failures = max(1, int(max_consecutive_failures))
-        self._failures: dict[str, int] = {}
+        #: Seeded from durable per-agent counts so the breaker composes across
+        #: idle/resume boundaries: a crash before an idle stop still counts
+        #: against the same agent when supervision picks the room back up.
+        self._failures: dict[str, int] = {
+            name: int(count) for name, count in (initial_failures or {}).items() if count
+        }
         self._low_signal: dict[str, int] = {}
+        self._failure_kinds: dict[str, str] = {}
 
     # ------------------------------------------------------------------
 
@@ -155,21 +174,39 @@ class Conductor:
 
             # Circuit breaker: an agent failing turn after turn must not keep
             # receiving the floor forever — after the limit, hand the problem
-            # to the human instead of burning further invocations.
+            # to the human instead of burning further invocations. Auth
+            # failures and provider refusals break immediately: retrying an
+            # expired sign-in or a refusal only burns invocations.
             if outcome.get("status") == "failed":
+                kind = outcome.get("failure_kind") or recovery.CRASH
+                self._failure_kinds[speaker] = kind
                 count = self._failures.get(speaker, 0) + 1
                 self._failures[speaker] = count
-                if count >= self.max_consecutive_failures:
+                if kind not in recovery.LADDER_KINDS or count >= self.max_consecutive_failures:
                     report.reason = STOP_AGENT_FAILED
                     report.failed_participant = speaker
+                    report.failure_kind = kind
                     report.warnings.append(
-                        f"{speaker} failed {count} consecutive turn(s); supervision stopped"
+                        f"{speaker} failed {count} consecutive turn(s) ({kind}); "
+                        "supervision stopped"
                     )
                     return report
             elif outcome.get("status") in {"spoke", "passed"}:
                 self._failures[speaker] = 0
+                self._failure_kinds.pop(speaker, None)
 
     # ------------------------------------------------------------------
+
+    def _resolve_agent(self, name: str) -> AgentCommand:
+        """Resolve one participant's command for this turn.
+
+        A plain :class:`AgentCommand` behaves as before. A callable is a
+        factory the supervising registry provides so per-turn decisions —
+        like resuming a provider session after a failure — read durable state
+        at the moment the turn starts, not at conductor construction.
+        """
+        agent = self.agents[name]
+        return agent() if callable(agent) else agent
 
     def _take_turn(self, name: str) -> dict:
         credential = self.credentials[name]
@@ -193,10 +230,16 @@ class Conductor:
             # post path will re-check room state and report the actual outcome.
             pass
 
-        prompt = self.build_prompt(name, status)
+        agent = self._resolve_agent(name)
+        prompt = self.build_prompt(name, status, agent=agent)
         self.on_event("agent.invoking", {"participant": name, "prompt_chars": len(prompt)})
 
-        result = self.agents[name].invoke(prompt, cancel_event=self.cancel_event)
+        result = agent.invoke(
+            prompt, cancel_event=self.cancel_events.get(name) or self.cancel_event
+        )
+        classification = None
+        if not result.ok:
+            classification = recovery.classify_failure(result)
         self.on_event(
             "agent.returned",
             {
@@ -205,9 +248,19 @@ class Conductor:
                 "timed_out": result.timed_out,
                 "cancelled": result.cancelled,
                 "output_chars": len(result.stdout),
+                "classification": classification,
+                "failure_detail": (
+                    recovery.failure_detail(classification, result)
+                    if classification and classification != recovery.NORMAL_STOP
+                    else None
+                ),
+                "provider_session_id": result.provider_session_id,
             },
         )
-        return self._post(name, result)
+        outcome = self._post(name, result)
+        if outcome.get("status") == "failed" and classification:
+            outcome["failure_kind"] = classification
+        return outcome
 
     def _note_low_signal(self, name: str, result, body: str, directives) -> bool:
         """Warn-only heuristic for clean exits that did no visible work.
@@ -223,6 +276,7 @@ class Conductor:
             result.tool_events == 0
             and len(body.strip()) < 200
             and not directives.gate_updates
+            and not directives.drop_evaluations
             and not directives.to
             and not directives.handoff
             and not directives.complete_requested
@@ -276,6 +330,8 @@ class Conductor:
             # a pass.  Recording it first keeps a terse evidence report from
             # disappearing just because the agent had no prose to add.
             gate_updates = self._record_gate_updates(name, directives, warnings)
+            drop_evaluations = self._record_drop_evaluations(name, directives, warnings)
+            plan_actions = self._record_planning(name, directives, warnings)
             low_signal = self._note_low_signal(name, result, body, directives)
 
             if directives.passed or not body.strip():
@@ -295,6 +351,10 @@ class Conductor:
                     outcome["low_signal"] = True
                 if gate_updates:
                     outcome["gate_updates"] = gate_updates
+                if drop_evaluations:
+                    outcome["drop_evaluations"] = drop_evaluations
+                if plan_actions:
+                    outcome["planning"] = plan_actions
                 if directives.complete_requested:
                     outcome["completion_requested"] = self._try_complete(name, warnings)
                 return outcome
@@ -336,6 +396,10 @@ class Conductor:
                 outcome["low_signal"] = True
             if gate_updates:
                 outcome["gate_updates"] = gate_updates
+            if drop_evaluations:
+                outcome["drop_evaluations"] = drop_evaluations
+            if plan_actions:
+                outcome["planning"] = plan_actions
             if directives.complete_requested:
                 outcome["completion_requested"] = self._try_complete(name, warnings)
             return outcome
@@ -368,6 +432,68 @@ class Conductor:
                 warnings.append(f"{name}: could not update gate {update.gate_id}: {exc.message}")
         return saved
 
+    def _record_drop_evaluations(self, name: str, directives, warnings: list[str]) -> list[dict]:
+        """Persist appendix evaluations the agent recorded in its reply.
+
+        The manager stays the authority: an evaluation outside the
+        ``appendix_evaluation`` phase, from an agent without a main role, or
+        approving an item that only carries a failure report is refused there
+        and surfaces here as a warning, never as silently recorded state.
+        """
+        if not directives.drop_evaluations or not self.session_id:
+            if directives.drop_evaluations:
+                warnings.append(
+                    "drop evaluations ignored: this room is not attached to a session"
+                )
+            return []
+        manager = SessionManager(self.broker)
+        saved = []
+        for evaluation in directives.drop_evaluations:
+            try:
+                saved.append(
+                    dropbox_module.evaluate(
+                        manager,
+                        self.session_id,
+                        evaluation.drop_id,
+                        actor=name,
+                        verdict=evaluation.verdict,
+                        rationale=evaluation.rationale,
+                    )
+                )
+            except SynchriError as exc:
+                warnings.append(
+                    f"{name}: could not record the evaluation of "
+                    f"{evaluation.drop_id}: {exc.message}"
+                )
+        return saved
+
+    def _record_planning(self, name: str, directives, warnings: list[str]) -> list[dict]:
+        """Apply planning directives; the planning module stays the authority."""
+        has_any = bool(
+            directives.plan_submitted is not None
+            or directives.plan_review is not None
+            or directives.objections
+            or directives.objection_resolutions
+            or directives.forks
+        )
+        if not has_any:
+            return []
+        if not self.session_id:
+            warnings.append("planning directives ignored: this room is not attached to a session")
+            return []
+        manager = SessionManager(self.broker)
+        try:
+            record = manager.get(self.session_id)
+            if not record.policy.planning:
+                warnings.append(
+                    f"{name}: planning directives ignored — this is not a planning session"
+                )
+                return []
+            return planning_module.handle_turn(manager, record, name, directives, warnings)
+        except SynchriError as exc:
+            warnings.append(f"{name}: could not record planning state: {exc.message}")
+            return []
+
     def _try_complete(self, name: str, warnings: list[str]) -> bool:
         """A Primary Builder may request completion; manager remains the authority."""
         if not self.session_id:
@@ -388,8 +514,10 @@ class Conductor:
 
     # ------------------------------------------------------------------
 
-    def build_prompt(self, name: str, status: dict) -> str:
+    def build_prompt(self, name: str, status: dict, agent: AgentCommand | None = None) -> str:
         """Assemble what a managed agent is told when it gets the floor."""
+        if agent is None:
+            agent = self._resolve_agent(name)
         room = self.broker.room_status(self.room_id, credential=self.observer)
         others = [
             p["name"]
@@ -450,10 +578,24 @@ class Conductor:
         if guidance:
             parts.extend(["--- session agreement and your role ---", guidance.rstrip(), ""])
 
+        # The live planning state — plan status, open objections, the verbatim
+        # idea, budgets — so a planning turn always sees the durable loop, not
+        # its own memory of it.
+        planning = self._planning_section()
+        if planning:
+            parts.extend([planning, ""])
+
+        # The side-task appendix renders after the contract and specification,
+        # never inside them: the canonical spec's bytes and digest stay
+        # untouched, so appendix items can never silently become spec text.
+        appendix = self._appendix_section()
+        if appendix:
+            parts.extend([appendix, ""])
+
         # ``SYNCHRI_CLI`` is a shell fragment constructed by the managed
         # launcher (and may be ``'/Applications/…/Synchri'``).  It is only
         # rendered into an instructional prompt; it is never executed here.
-        activity_command = self.agents[name].env.get("SYNCHRI_CLI", "synchri")
+        activity_command = agent.env.get("SYNCHRI_CLI", "synchri")
 
         parts.extend(
             [
@@ -487,6 +629,33 @@ class Conductor:
             ]
         )
         return "\n".join(parts)
+
+    def _appendix_section(self) -> str | None:
+        """The dropbox appendix for this room's session, phase-appropriate.
+
+        Best-effort: a prompt must still build for a room that has no session
+        or whose session vanished mid-run.
+        """
+        if not self.session_id:
+            return None
+        try:
+            manager = SessionManager(self.broker)
+            return dropbox_module.render_appendix(manager, manager.get(self.session_id))
+        except SynchriError:
+            return None
+
+    def _planning_section(self) -> str | None:
+        """The planning loop's durable state, for planning sessions only."""
+        if not self.session_id:
+            return None
+        try:
+            manager = SessionManager(self.broker)
+            record = manager.get(self.session_id)
+            if not record.policy.planning:
+                return None
+            return planning_module.render_status(manager, record)
+        except SynchriError:
+            return None
 
 
 def _response_status(requested: str | None, is_task: bool) -> str | None:

@@ -79,6 +79,12 @@ class SessionDraft:
         for key, label in STEPS:
             if key == "deadline" and self.policy and not self.policy.supports_deadline:
                 continue
+            if key == "spec" and self.policy and self.policy.planning:
+                # Planning Mode's spec on-ramp: the user articulates the idea,
+                # in as much or as little detail as they want; the planner
+                # turns it into the first plan draft.
+                steps.append((key, "Articulate the idea"))
+                continue
             if key == "spec" and self.policy and not self.policy.requires_spec:
                 # Still offered, just relabelled: an optional brief is useful.
                 steps.append((key, "Describe the work (optional)"))
@@ -257,6 +263,17 @@ class SessionDraft:
                 problems.append(
                     f"select at least {minimum} agent{'s' if minimum != 1 else ''}"
                 )
+            if self.policy and self.policy.planning:
+                from .modes import planning_workspace_supported
+
+                for plan in self.participants:
+                    if not planning_workspace_supported(plan.runtime):
+                        problems.append(
+                            f"{plan.name} ({plan.runtime}) does not support the "
+                            "read-only planning workspace"
+                        )
+        if step == "spec" and self.policy and self.policy.planning and not self.spec:
+            problems.append("articulate the idea; the planner turns it into the first plan draft")
         if step == "spec" and self.policy and self.policy.requires_spec and not self.spec:
             problems.append(f"{self.policy.label} needs a product specification")
         if step == "deadline" and self.policy and self.policy.requires_deadline and not self.deadline:

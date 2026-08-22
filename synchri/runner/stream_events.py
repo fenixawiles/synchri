@@ -121,6 +121,10 @@ class BaseStreamParser:
         self.tool_events = 0
         self.model: str | None = None
         self.usage: dict | None = None
+        #: The provider's own session/thread id, when the stream exposes one.
+        #: This is what makes resume possible: the connection doctor proves it
+        #: and the recovery ladder passes it back to the CLI.
+        self.provider_session_id: str | None = None
         #: True once at least one JSON object line was seen — the caller only
         #: trusts the parser's reconstruction when the CLI really streamed.
         self.saw_stream = False
@@ -161,6 +165,9 @@ class ClaudeStreamParser(BaseStreamParser):
     """``claude -p --verbose --output-format stream-json`` (message-level JSONL)."""
 
     def _map(self, data: dict):
+        session_id = data.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            self.provider_session_id = session_id
         kind = data.get("type")
         if kind == "system":
             subtype = str(data.get("subtype") or "")
@@ -276,6 +283,9 @@ class CodexStreamParser(BaseStreamParser):
             return
         kind = str(data.get("type") or "")
         if kind in {"thread.started", "turn.started"}:
+            thread_id = data.get("thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                self.provider_session_id = thread_id
             yield LiveEvent("status", title="Started")
             return
         if kind == "turn.completed":
@@ -366,6 +376,10 @@ class CodexStreamParser(BaseStreamParser):
 
     def _map_legacy(self, msg: dict):
         kind = str(msg.get("type") or "")
+        if kind == "session_configured":
+            session_id = msg.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                self.provider_session_id = session_id
         if kind == "task_started":
             yield LiveEvent("status", title="Started")
         elif kind == "agent_reasoning":

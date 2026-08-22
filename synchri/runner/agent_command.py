@@ -30,7 +30,9 @@ DEFAULT_TIMEOUT_SECONDS = 900.0
 #: Trailing control lines an agent may emit to steer the room.  Documented in
 #: docs/single-terminal.md and included in every generated prompt.
 _DIRECTIVE = re.compile(
-    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT|COMPLETE|APPROVAL)\s*:?\s*(?P<value>.*?)\s*$",
+    r"^\s*SYNCHRI[-_](?P<key>TO|HANDOFF|PASS|STATUS|CONFIDENCE|GATE|EVIDENCE|TEST|COMMIT"
+    r"|COMPLETE|APPROVAL|DROP|PLAN[-_]SUBMIT|PLAN[-_]REVIEW|OBJECTION[-_]RESOLVED"
+    r"|OBJECTION|FORK)\s*:?\s*(?P<value>.*?)\s*$",
     re.IGNORECASE,
 )
 
@@ -196,6 +198,7 @@ class AgentCommand:
         stdout = stdout_buffer.text()
         stderr = stderr_buffer.text()
         tool_events = None
+        provider_session_id = None
         if parser is not None and getattr(parser, "saw_stream", False):
             # The stream was real JSONL: hand downstream code the agent's
             # reconstructed reply, not the event soup. When the stream never
@@ -208,17 +211,23 @@ class AgentCommand:
             if final:
                 stdout = final
             tool_events = getattr(parser, "tool_events", None)
+            provider_session_id = getattr(parser, "provider_session_id", None)
         if outcome == "cancelled":
             return AgentResult(
                 self.name, stdout, stderr, process.returncode,
                 cancelled=True, tool_events=tool_events,
+                provider_session_id=provider_session_id,
             )
         if outcome == "timed_out":
             return AgentResult(
                 self.name, stdout, stderr or f"timed out after {self.timeout:g}s",
                 process.returncode, timed_out=True, tool_events=tool_events,
+                provider_session_id=provider_session_id,
             )
-        return AgentResult(self.name, stdout, stderr, process.returncode, tool_events=tool_events)
+        return AgentResult(
+            self.name, stdout, stderr, process.returncode,
+            tool_events=tool_events, provider_session_id=provider_session_id,
+        )
 
 
 @dataclass
@@ -234,6 +243,10 @@ class AgentResult:
     #: How many tool/command/file events the stream carried; ``None`` when the
     #: runtime does not stream. ``0`` on a clean exit is the low-signal marker.
     tool_events: int | None = None
+    #: The provider's own session/thread id when the stream exposed one —
+    #: stored durably per participant so recovery can resume instead of
+    #: relaunching cold.
+    provider_session_id: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -250,9 +263,22 @@ class Directives:
     status: str | None = None
     confidence: float | None = None
     gate_updates: list["GateUpdate"] = field(default_factory=list)
+    drop_evaluations: list["DropEvaluation"] = field(default_factory=list)
     complete_requested: bool = False
     approval_capability: str | None = None
     approval_request: str | None = None
+    #: Planning Mode: a submitted revision's one-line summary plus the full
+    #: plan document, carried between SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END
+    #: in the same reply (planning agents run read-only — the plan travels
+    #: through the reply, never through a file write); reviewer objections as
+    #: (classification, text), planner dispositions as (objection_id, text),
+    #: recorded forks, and the reviewer's closing (verdict, note).
+    plan_submitted: str | None = None
+    plan_body: str | None = None
+    objections: list[tuple[str, str]] = field(default_factory=list)
+    objection_resolutions: list[tuple[str, str]] = field(default_factory=list)
+    forks: list[str] = field(default_factory=list)
+    plan_review: tuple[str, str] | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -268,14 +294,53 @@ class GateUpdate:
     commits: list[str] = field(default_factory=list)
 
 
+#: Verdict spellings accepted from an agent; anything else is a warning, not a
+#: guess — an evaluation must never be recorded as the wrong verdict.
+_DROP_VERDICTS = {
+    "approve": "approve", "approved": "approve",
+    "decline": "decline", "declined": "decline",
+    "reject": "decline", "rejected": "decline",
+}
+
+
+@dataclass
+class DropEvaluation:
+    """One main role's judgment of a dropbox appendix item, from its turn."""
+
+    drop_id: str
+    verdict: str
+    rationale: str
+
+
+#: The plan-document block. Unlike single control lines it is not trailing —
+#: a plan is large and sits mid-reply — but both markers must stand alone on
+#: their own lines, so quoted prose cannot open a block by accident.
+_PLAN_BLOCK = re.compile(
+    r"^[ \t]*SYNCHRI[-_]PLAN[-_]BEGIN[ \t]*\r?\n(?P<body>.*?)\r?\n?[ \t]*SYNCHRI[-_]PLAN[-_]END[ \t]*$",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+
+
 def parse_directives(text: str) -> tuple[str, Directives]:
     """Split trailing ``SYNCHRI-*`` control lines off an agent's reply.
 
     Only *trailing* lines count, so an agent quoting the convention in the
-    middle of a review does not accidentally redirect the room.
+    middle of a review does not accidentally redirect the room. The one
+    multi-line construct is the plan-document block, extracted first.
     """
     directives = Directives()
-    lines = (text or "").splitlines()
+    text = text or ""
+    blocks = list(_PLAN_BLOCK.finditer(text))
+    if blocks:
+        directives.plan_body = blocks[0].group("body")
+        if len(blocks) > 1:
+            directives.warnings.append(
+                "multiple plan blocks in one reply; using the first"
+            )
+        # Remove every block from the transcript body — the stored revision is
+        # the durable copy, and a 100 KB plan is not a room message.
+        text = _PLAN_BLOCK.sub("", text)
+    lines = text.splitlines()
     end = len(lines)
     consumed: list[re.Match] = []
 
@@ -327,6 +392,61 @@ def parse_directives(text: str) -> tuple[str, Directives]:
             if value:
                 field_name = {"EVIDENCE": "evidence", "TEST": "tests", "COMMIT": "commits"}[key]
                 getattr(directives.gate_updates[-1], field_name).append(value)
+        elif key == "DROP":
+            drop_id, separator, remainder = value.partition("|")
+            drop_id = drop_id.strip().upper()
+            verdict_text, _, rationale = remainder.partition("|") if separator else ("", "", "")
+            verdict = _DROP_VERDICTS.get(verdict_text.strip().lower())
+            if not drop_id:
+                directives.warnings.append("ignored a drop evaluation with no item id")
+                continue
+            if verdict is None:
+                directives.warnings.append(
+                    f"ignored the evaluation of {drop_id}: the verdict must be "
+                    f"approve or decline, got {verdict_text.strip()!r}"
+                )
+                continue
+            directives.drop_evaluations.append(
+                DropEvaluation(drop_id=drop_id, verdict=verdict, rationale=rationale.strip())
+            )
+        elif key in {"PLAN-SUBMIT", "PLAN_SUBMIT"}:
+            directives.plan_submitted = value
+        elif key in {"PLAN-REVIEW", "PLAN_REVIEW"}:
+            verdict_text, _, note = value.partition("|")
+            verdict = verdict_text.strip().lower()
+            if verdict in {"approve", "approved"}:
+                directives.plan_review = ("approve", note.strip())
+            elif verdict in {"revise", "reject", "rejected", "revision"}:
+                directives.plan_review = ("revise", note.strip())
+            else:
+                directives.warnings.append(
+                    f"ignored the plan review: the verdict must be approve or revise, "
+                    f"got {verdict_text.strip()!r}"
+                )
+        elif key == "OBJECTION":
+            classification_text, separator, text = value.partition("|")
+            classification = classification_text.strip().lower()
+            if not separator or classification not in {"blocking", "nonblocking", "advisory"}:
+                directives.warnings.append(
+                    "ignored an objection: use SYNCHRI-OBJECTION: "
+                    f"blocking|nonblocking|advisory | <text>, got {value[:80]!r}"
+                )
+            elif not text.strip():
+                directives.warnings.append("ignored an objection with no text")
+            else:
+                directives.objections.append((classification, text.strip()))
+        elif key in {"OBJECTION-RESOLVED", "OBJECTION_RESOLVED"}:
+            objection_id, separator, disposition = value.partition("|")
+            objection_id = objection_id.strip().upper()
+            if not objection_id:
+                directives.warnings.append("ignored a resolution with no objection id")
+            else:
+                directives.objection_resolutions.append((objection_id, disposition.strip()))
+        elif key == "FORK":
+            if value.strip():
+                directives.forks.append(value.strip())
+            else:
+                directives.warnings.append("ignored a fork with no description")
         elif key == "COMPLETE":
             directives.complete_requested = True
         elif key == "APPROVAL":

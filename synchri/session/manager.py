@@ -36,6 +36,8 @@ from ..protocol import events as ev
 from ..storage import db
 from . import contract as contract_module
 from . import changelog as changelog_module
+from . import dropbox as dropbox_module
+from . import planning as planning_module
 from . import worktree as worktree_module
 from .deadline import Deadline
 from .escalation import EscalationPolicy
@@ -109,6 +111,9 @@ class SessionRecord:
     metadata: dict = field(default_factory=dict)
     contract_revision: int = 0
     participants: list[ParticipantPlan] = field(default_factory=list)
+    #: The durable phase: original_work -> appendix_evaluation ->
+    #: extension_work -> closing. Only closing invokes terminal room-closing.
+    phase: str = "original_work"
 
     @property
     def policy(self) -> ModePolicy:
@@ -125,6 +130,11 @@ class SessionRecord:
             base_branch=self.base_branch,
             repo_root=self.repo_root,
         )
+
+    @property
+    def planning_workspace(self) -> dict:
+        """The disposable planning workspace entry, for planning sessions."""
+        return (self.metadata or {}).get("planning_workspace") or {}
 
     @property
     def is_terminal(self) -> bool:
@@ -155,6 +165,7 @@ class SessionRecord:
             "deadline": self.deadline.to_dict() if self.deadline else None,
             "escalation": self.escalation.to_dict(),
             "contract_revision": self.contract_revision,
+            "phase": self.phase,
             "participants": [p.to_dict() for p in self.participants],
             "metadata": dict(self.metadata),
         }
@@ -186,6 +197,7 @@ class SessionManager:
         worktree_parent: str | None = None,
         worktree_name: str | None = None,
         existing_worktree_path: str | None = None,
+        worktree_start_point: str | None = None,
         metadata: dict | None = None,
     ) -> SessionRecord:
         """Validate the configuration, cut the worktree, and create the room.
@@ -220,41 +232,88 @@ class SessionManager:
         if deadline and not policy.supports_deadline:
             raise ValidationError(f"{policy.label} does not use deadlines")
 
+        idea = ((metadata or {}).get("idea") or "").strip()
+        if policy.planning:
+            if spec is not None:
+                raise ValidationError(
+                    "Planning Mode takes no product specification — articulate the "
+                    "idea instead; the approved plan becomes the specification"
+                )
+            if not idea:
+                raise ValidationError(
+                    "articulate the idea; the planner turns it into the first plan draft"
+                )
+            # Capability-based isolation, never contract-only: Planning Mode is
+            # offered only on runtimes whose adapter declares the read-only
+            # planning workspace. Others are unavailable, not downgraded.
+            from .modes import planning_workspace_supported
+
+            for plan in plans:
+                if not planning_workspace_supported(plan.runtime):
+                    raise ValidationError(
+                        f"{plan.name} ({plan.runtime}) does not support the read-only "
+                        "planning workspace; choose a supported runtime"
+                    )
+                if plan.command and plan.command.strip():
+                    raise ValidationError(
+                        f"{plan.name}: Planning Mode always launches the maintained "
+                        "planning command, which carries the CLI's own read-only "
+                        "enforcement — a custom command cannot guarantee it"
+                    )
+
         grants = policy.apply_forced_denials(permissions or PermissionSet.defaults())
         rules = escalation or EscalationPolicy()
 
-        # A fresh isolated worktree is the default. A user may deliberately
-        # select an existing non-primary worktree for a follow-up session.
-        # Both paths use the same validation; neither can target the primary
-        # checkout.
-        created_worktree = not bool(existing_worktree_path)
-        if existing_worktree_path:
-            selected = Path(existing_worktree_path).expanduser().resolve()
-            tree = worktree_module.validate(status.root, selected, selected.name, branch)
-        else:
-            tree = worktree_module.create(
-                status.root,
-                branch,
-                mode=policy.mode.value,
-                name=worktree_name,
-                parent_dir=worktree_parent,
-            )
-
         session_id = new_id("sess")
+        tree = None
+        created_worktree = False
+        workspace_entry = None
+        if policy.planning:
+            # A disposable planning workspace instead of a worktree: a local
+            # clone anchored to the branch tip, remotes removed. It is never
+            # reused for coordination.
+            workspace_path, inspection_sha = planning_module.create_workspace(
+                self.broker.workspace.home, status.root, branch, session_id
+            )
+            workspace_entry = {"path": workspace_path, "inspection_sha": inspection_sha}
+        else:
+            # A fresh isolated worktree is the default. A user may deliberately
+            # select an existing non-primary worktree for a follow-up session.
+            # Both paths use the same validation; neither can target the primary
+            # checkout.
+            created_worktree = not bool(existing_worktree_path)
+            if existing_worktree_path:
+                selected = Path(existing_worktree_path).expanduser().resolve()
+                tree = worktree_module.validate(status.root, selected, selected.name, branch)
+            else:
+                tree = worktree_module.create(
+                    status.root,
+                    branch,
+                    mode=policy.mode.value,
+                    name=worktree_name,
+                    parent_dir=worktree_parent,
+                    start_point=worktree_start_point,
+                )
+
         try:
             room = self.broker.create_room(
                 name,
                 agents=[p.name for p in plans],
-                goal=(spec.text.strip().splitlines()[0][:200] if spec else None),
+                goal=(
+                    idea.splitlines()[0][:200] if policy.planning
+                    else (spec.text.strip().splitlines()[0][:200] if spec else None)
+                ),
                 max_consecutive_agent_turns=policy.max_consecutive_agent_turns,
-                workspace_root=tree.path,
+                workspace_root=workspace_entry["path"] if workspace_entry else tree.path,
                 invite_ttl_seconds=0,  # invites live as long as the session room
             )
         except Exception:
             # Only a brand-new tree is ours to clean up. A selected existing
             # worktree remains exactly where the user left it.
-            if created_worktree:
+            if created_worktree and tree is not None:
                 worktree_module.remove(tree, force=True, delete_branch=True)
+            if workspace_entry:
+                planning_module.remove_workspace(workspace_entry["path"])
             raise
 
         now = utc_now()
@@ -270,24 +329,57 @@ class SessionManager:
             repo_name=status.name,
             repo_remote=status.remote,
             base_branch=branch,
-            worktree_name=tree.name,
-            worktree_path=tree.path,
-            worktree_branch=tree.branch,
+            worktree_name=tree.name if tree else None,
+            worktree_path=tree.path if tree else None,
+            worktree_branch=tree.branch if tree else None,
             permissions=grants,
             spec=spec,
             deadline=deadline,
             escalation=rules,
             metadata={
-                **(metadata or {}),
+                **{k: v for k, v in (metadata or {}).items() if k != "idea"},
                 "invites": room["invites"],
                 "observer_token": room["observer_token"],
                 "human": room["human"],
                 "primary_tree_dirty": status.is_dirty,
                 "worktree_strategy": "new" if created_worktree else "existing",
+                **({"planning_workspace": workspace_entry} if workspace_entry else {}),
             },
             participants=plans,
         )
-        self._insert(record)
+        try:
+            self._insert(record)
+        except Exception:
+            # The insert can be refused — notably by the unique promotion
+            # provenance index when two promotion retries race. The loser
+            # must leak nothing: the room rows, the room directory and ledger
+            # that create_room already wrote to disk, the tree, and the
+            # workspace all go.
+            with db.transaction(self.conn):
+                self.conn.execute(
+                    "DELETE FROM rooms WHERE room_id = ?", (room["room_id"],)
+                )
+            shutil.rmtree(
+                self.broker.workspace.room_dir(room["room_id"]), ignore_errors=True
+            )
+            if self.broker.workspace.sessions_dir.exists():
+                for path in self.broker.workspace.sessions_dir.glob(
+                    f"{room['room_id']}.*.json"
+                ):
+                    path.unlink(missing_ok=True)
+            if created_worktree and tree is not None:
+                worktree_module.remove(tree, force=True, delete_branch=True)
+            if workspace_entry:
+                planning_module.remove_workspace(workspace_entry["path"])
+            raise
+        if workspace_entry:
+            # The durable plan: the idea verbatim, the inspected baseline, and
+            # the loop state the review will drive.
+            planning_module.initialize(
+                self, record, idea=idea,
+                workspace_path=workspace_entry["path"],
+                inspection_sha=workspace_entry["inspection_sha"],
+            )
         # Propose gates from the spec so the user does not restate their own
         # acceptance criteria. They land PENDING with no evidence -- a proposal,
         # not an authority.
@@ -298,7 +390,8 @@ class SessionManager:
         self._log(
             record,
             ev.SESSION_CREATED,
-            {"mode": record.mode, "worktree": tree.name,
+            {"mode": record.mode,
+             "worktree": tree.name if tree else "planning-workspace",
              "gates_detected": len(self.gates(session_id))},
         )
         return record
@@ -312,13 +405,30 @@ class SessionManager:
         record = self.get(session_id)
         if record.is_terminal:
             raise StateError(f"session is {record.status}", code="session_finished")
-        if not record.worktree:
-            raise StateError("a session needs its worktree before a contract", code="no_worktree")
-        if not worktree_module.exists(record.worktree):
-            raise StateError(
-                f"the authorized worktree is missing: {record.worktree_path}",
-                code="worktree_missing",
+        if record.policy.planning:
+            workspace = record.planning_workspace
+            if not workspace.get("path") or not Path(workspace["path"]).exists():
+                raise StateError(
+                    "the planning workspace is missing", code="planning_workspace_missing"
+                )
+            # The contract's authorized-workspace section points at the
+            # disposable clone; the Worktree here is descriptive fields only.
+            contract_tree = Worktree(
+                name="planning-workspace",
+                path=workspace["path"],
+                branch=f"(read-only planning at {(workspace.get('inspection_sha') or '')[:12]})",
+                base_branch=record.base_branch,
+                repo_root=record.repo_root,
             )
+        else:
+            if not record.worktree:
+                raise StateError("a session needs its worktree before a contract", code="no_worktree")
+            if not worktree_module.exists(record.worktree):
+                raise StateError(
+                    f"the authorized worktree is missing: {record.worktree_path}",
+                    code="worktree_missing",
+                )
+            contract_tree = record.worktree
 
         revision = record.contract_revision + 1
         created_at = utc_now()
@@ -330,7 +440,7 @@ class SessionManager:
             repo_root=record.repo_root,
             repo_remote=record.repo_remote,
             base_branch=record.base_branch,
-            worktree=record.worktree,
+            worktree=contract_tree,
             participants=record.participants,
             permissions=record.permissions,
             spec=record.spec,
@@ -479,12 +589,20 @@ class SessionManager:
         if record.is_terminal:
             raise StateError(f"session is {record.status}", code="session_finished")
 
-        # 1. worktree exists and is not the primary tree
-        if not record.worktree:
-            raise StateError("no authorized worktree for this session", code="no_worktree")
-        worktree_module.validate(
-            record.repo_root, record.worktree_path, record.worktree_name, record.base_branch
-        )
+        # 1. the authorized workspace exists — a validated non-primary worktree,
+        # or the disposable planning workspace for a planning session
+        if record.policy.planning:
+            workspace = record.planning_workspace
+            if not workspace.get("path") or not Path(workspace["path"]).exists():
+                raise StateError(
+                    "the planning workspace is missing", code="planning_workspace_missing"
+                )
+        else:
+            if not record.worktree:
+                raise StateError("no authorized worktree for this session", code="no_worktree")
+            worktree_module.validate(
+                record.repo_root, record.worktree_path, record.worktree_name, record.base_branch
+            )
         # 2. contract issued and unanimously acknowledged at the current revision
         if record.contract_revision < 1:
             raise StateError("no contract has been issued yet", code="no_contract")
@@ -554,7 +672,21 @@ class SessionManager:
             if reviewer
             else "Then continue with the first evidence checkpoint."
         )
-        if record.mode == "review_audit":
+        if record.policy.planning:
+            plan = planning_module.get_plan(self, record.session_id) or {}
+            opening = (
+                "Begin Planning Mode. Read the human's idea articulation below and "
+                "inspect the repository copy in the planning workspace. Produce "
+                "PLAN-DRAFT revision 1 before the reviewer sees anything: put the "
+                "complete ordered implementation plan in your reply between "
+                "SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END lines, include an "
+                "'## Acceptance criteria' section with explicit gate ids, and end "
+                "the reply with SYNCHRI-PLAN-SUBMIT: <one-line summary>. The "
+                "review loop and its budgets are described in your contract.\n\n"
+                "--- the idea, verbatim ---\n"
+                + (plan.get("idea") or "")
+            )
+        elif record.mode == "review_audit":
             opening = (
                 "Begin the audit. Read the target, the canonical criteria, and the authorized "
                 "worktree. Publish the first evidence-backed review approach: scope, likely risks, "
@@ -852,6 +984,9 @@ class SessionManager:
                 reviewer_assessment=row["reviewer_assessment"],
                 updated_at=row["updated_at"],
                 updated_by=row["updated_by"],
+                origin_kind=(row["origin_kind"] if "origin_kind" in row.keys() else None) or "main",
+                drop_id=row["drop_id"] if "drop_id" in row.keys() else None,
+                extension_id=row["extension_id"] if "extension_id" in row.keys() else None,
             )
             for row in rows
         ]
@@ -864,7 +999,8 @@ class SessionManager:
         """Durable supervision state per agent (state is None until launched)."""
         rows = self.conn.execute(
             "SELECT name, runtime_status, runtime_detail, consecutive_failures, "
-            "runtime_updated_at FROM session_participants WHERE session_id = ?",
+            "runtime_updated_at, join_phase, join_detail, join_updated_at "
+            "FROM session_participants WHERE session_id = ?",
             (session_id,),
         ).fetchall()
         return {
@@ -873,9 +1009,96 @@ class SessionManager:
                 "detail": row["runtime_detail"],
                 "failures": row["consecutive_failures"] or 0,
                 "updated_at": row["runtime_updated_at"],
+                "join_phase": row["join_phase"],
+                "join_detail": row["join_detail"],
+                "join_updated_at": row["join_updated_at"],
             }
             for row in rows
         }
+
+    def set_participant_resume_id(self, session_id: str, name: str, resume_id: str | None) -> None:
+        """Store (or clear) the provider's own session id for one agent.
+
+        Captured after every completed invocation that exposed one; recovery
+        reads it to resume the provider session instead of relaunching cold.
+        """
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET resume_id = ? WHERE session_id = ? AND name = ?",
+                (resume_id, session_id, name),
+            )
+
+    def participant_recovery(self, session_id: str, name: str) -> dict:
+        row = self.conn.execute(
+            "SELECT resume_id, recovery_generation, runtime_status, metadata "
+            "FROM session_participants WHERE session_id = ? AND name = ?",
+            (session_id, name),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"{name!r} is not a participant in this session")
+        return {
+            "resume_id": row["resume_id"],
+            "recovery_generation": row["recovery_generation"] or 0,
+            "runtime_status": row["runtime_status"],
+            "metadata": json.loads(row["metadata"] or "{}"),
+        }
+
+    def bump_recovery_generation(self, session_id: str, name: str, action: str) -> int:
+        """One recovery action happened (resume, replace, restart): count it.
+
+        The generation is provenance — an approval or a gate report recorded
+        by generation 2 of an agent is distinguishable from generation 0.
+        """
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET recovery_generation = recovery_generation + 1 "
+                "WHERE session_id = ? AND name = ?",
+                (session_id, name),
+            )
+            row = self.conn.execute(
+                "SELECT recovery_generation FROM session_participants "
+                "WHERE session_id = ? AND name = ?",
+                (session_id, name),
+            ).fetchone()
+        generation = row["recovery_generation"] if row else 0
+        self._log(
+            self.get(session_id),
+            "session.participant_recovery",
+            {"participant": name, "action": action, "generation": generation},
+        )
+        return generation
+
+    def mark_participant_replaced(self, session_id: str, name: str) -> None:
+        """Record the one automatic replacement incarnation durably.
+
+        Exactly one automatic replace per participant: a second breaker trip
+        goes to the human instead of looping fail → replace → fail forever.
+        """
+        recovery_state = self.participant_recovery(session_id, name)
+        metadata = {**recovery_state["metadata"], "auto_replaced": utc_now()}
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET metadata = ?, resume_id = NULL, "
+                "consecutive_failures = 0 WHERE session_id = ? AND name = ?",
+                (json.dumps(metadata), session_id, name),
+            )
+
+    def set_participant_join_phase(
+        self, session_id: str, name: str, phase: str, detail: str | None = None
+    ) -> None:
+        """Record what an agent is doing to join — real transitions, no spinner.
+
+        The launch UI renders these durable phases from Start until the room
+        is live: launching -> injecting_bootstrap -> awaiting_acknowledgment
+        -> ready, or failed with the reason. A retry targets only the failed
+        participant, so phases survive per agent rather than per team.
+        """
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE session_participants SET join_phase = ?, join_detail = ?, "
+                "join_updated_at = ? WHERE session_id = ? AND name = ?",
+                (phase, detail, utc_now(), session_id, name),
+            )
 
     def set_participant_state(
         self,
@@ -920,14 +1143,218 @@ class SessionManager:
         )
 
     def complete(self, session_id: str, *, force: bool = False) -> SessionRecord:
-        """Close a verified session and preserve its final changelog.
+        """Drive the completion phase machine; only ``closing`` ends the room.
 
-        Completion is deliberately unlike ``stop``: it proves every required
-        gate, closes the room so no more work can be accepted, and writes a
-        permanent human-readable delivery record. ``force`` is the human
-        override: every gate still blocking is waived, and the waiver is
-        recorded on the gate itself and in the session's ended reason — the
-        changelog stays honest about what was verified versus waived.
+        Completion is deliberately unlike ``stop``, and it is no longer one
+        transition. A valid completion request in ``original_work`` does not
+        close a session whose dropbox holds side tasks: it atomically freezes
+        capture, snapshots the appendix, and advances to
+        ``appendix_evaluation``, where both main roles owe every item an
+        explicit evaluation. Approvals materialize extension gates, and
+        completion advances to ``extension_work`` until they pass. Only then
+        does the terminal transition run, exactly as it always has: every
+        required gate proven with evidence and both sign-offs, the room
+        closed, a permanent delivery record written.
+
+        ``force`` stays the human override at any phase: blocking gates are
+        waived and every open appendix item is recorded ``waived`` — explicit
+        dispositions on the record, never a silent drop.
+        """
+        record = self.get(session_id)
+        if record.is_terminal:
+            raise StateError(f"session is already {record.status}", code="session_finished")
+        if not record.room_id:
+            raise StateError("cannot complete a session without a room", code="no_room")
+        if not self.gates(session_id):
+            raise StateError(
+                "cannot complete a session with no acceptance gates defined",
+                code="no_gates",
+            )
+        if record.phase == dropbox_module.PHASE_ORIGINAL:
+            return self._complete_original_work(record, force=force)
+        if record.phase == dropbox_module.PHASE_EVALUATION:
+            return self._complete_appendix_evaluation(record, force=force)
+        return self._close_completed(record, force=force)
+
+    def _complete_original_work(self, record: SessionRecord, *, force: bool) -> SessionRecord:
+        """A valid completion in ``original_work`` advances the phase, not the end.
+
+        The phase flip, the capture freeze, and the appendix snapshot happen
+        in one ``BEGIN IMMEDIATE`` transaction — the capture/completion race
+        point. A racing capture either lands inside the snapshot or is
+        refused as frozen; it is never lost in between.
+        """
+        session_id = record.session_id
+        if force:
+            # The human override closes now: the terminal transition waives
+            # the blocking gates and records a waiver on every open item.
+            return self._close_completed(record, force=True)
+        report = summarize(self.gates(session_id))
+        if not report["complete"]:
+            raise StateError(
+                "cannot complete: " + "; ".join(report["blockers"]),
+                code="gates_unsatisfied",
+            )
+        if not dropbox_module.items(self, session_id):
+            # No side tasks were ever captured: completion behaves exactly as
+            # it always has.
+            return self._close_completed(record, force=False)
+        with db.transaction(self.conn):
+            record = self.get(session_id)
+            if record.is_terminal:
+                raise StateError(f"session is already {record.status}", code="session_finished")
+            if record.phase != dropbox_module.PHASE_ORIGINAL:
+                raise StateError(
+                    f"completion is already underway: the session moved to {record.phase}",
+                    code="phase_advanced",
+                )
+            report = summarize(self.gates(session_id))
+            if not report["complete"]:
+                raise StateError(
+                    "cannot complete: " + "; ".join(report["blockers"]),
+                    code="gates_unsatisfied",
+                )
+            # The cutoff ends investigation first — an item whose scout or
+            # review never finished gets a timed-out failure report the pair
+            # can decline on — and the reconcile that follows appends every
+            # now-ready item, inside this same freeze transaction, so the
+            # snapshot is total and evaluation never waits on work that will
+            # not arrive.
+            cutoff = dropbox_module.freeze_incomplete_locked(self.conn, session_id)
+            dropbox_module._reconcile_locked(self.conn, session_id)
+            snapshot = [
+                row["drop_id"]
+                for row in self.conn.execute(
+                    "SELECT drop_id FROM session_appendix WHERE session_id = ? "
+                    "ORDER BY position",
+                    (session_id,),
+                )
+            ]
+            metadata = {
+                **record.metadata,
+                "dropbox_snapshot": {"items": snapshot, "frozen_at": utc_now()},
+            }
+            self._update(
+                session_id,
+                phase=dropbox_module.PHASE_EVALUATION,
+                metadata=json.dumps(metadata),
+            )
+            self._log(
+                record,
+                ev.SESSION_PHASE_ADVANCED,
+                {
+                    "phase": dropbox_module.PHASE_EVALUATION,
+                    "snapshot": snapshot,
+                    "cutoff_timed_out": cutoff,
+                },
+            )
+            # The conductor exits on idle, so the transition itself enqueues
+            # the turn that restarts the loop — atomically with the flip.
+            self._send_phase_task(
+                record,
+                source="appendix_evaluation",
+                content=(
+                    "The original specification is complete — every required gate "
+                    "passed with evidence and both sign-offs. Before the session can "
+                    "close, the side-task appendix needs its explicit evaluations: "
+                    + ", ".join(snapshot)
+                    + ". Read the appendix section of your prompt, judge each item on "
+                    "its recorded proposal or failure report, and record your verdict "
+                    "with a SYNCHRI-DROP control line. Both of you must evaluate every "
+                    "item. When every item has both evaluations, the Primary Builder "
+                    "requests completion again with SYNCHRI-COMPLETE."
+                ),
+            )
+        return self.get(session_id)
+
+    def _complete_appendix_evaluation(self, record: SessionRecord, *, force: bool) -> SessionRecord:
+        """All snapshot items terminal → extension work, or straight to closing."""
+        session_id = record.session_id
+        if force:
+            return self._close_completed(record, force=True)
+        open_items = dropbox_module.pending(self, record)
+        if open_items:
+            raise StateError(
+                "cannot complete: appendix items still need both evaluations: "
+                + ", ".join(open_items),
+                code="appendix_unevaluated",
+            )
+        gates = {gate.gate_id: gate for gate in self.gates(session_id)}
+        outstanding = [
+            entry
+            for entry in dropbox_module.approved_extensions(self, session_id)
+            if entry["extension_id"] in gates
+            and gates[entry["extension_id"]].blocks_completion()
+        ]
+        if not outstanding:
+            return self._close_completed(record, force=False)
+        with db.transaction(self.conn):
+            record = self.get(session_id)
+            if record.is_terminal:
+                raise StateError(f"session is already {record.status}", code="session_finished")
+            if record.phase != dropbox_module.PHASE_EVALUATION:
+                raise StateError(
+                    f"the session already moved to {record.phase}",
+                    code="phase_advanced",
+                )
+            ordered = ", ".join(
+                f"{entry['extension_id']} (from {entry['drop_id']})" for entry in outstanding
+            )
+            self._update(session_id, phase=dropbox_module.PHASE_EXTENSION)
+            self._log(
+                record,
+                ev.SESSION_PHASE_ADVANCED,
+                {
+                    "phase": dropbox_module.PHASE_EXTENSION,
+                    "extensions": [entry["extension_id"] for entry in outstanding],
+                },
+            )
+            self._send_phase_task(
+                record,
+                source="extension_work",
+                content=(
+                    "Every appendix item has its disposition. The approved extensions "
+                    f"are now part of the work, in appendix order: {ordered}. Implement "
+                    "each one in the authorized worktree and record evidence on its "
+                    "extension gate exactly as you did for the main gates; the session "
+                    "closes when every gate passes."
+                ),
+            )
+        return self.get(session_id)
+
+    def _send_phase_task(self, record: SessionRecord, *, source: str, content: str) -> None:
+        """Wake the main pair for a phase's work.
+
+        Sent with the human credential and a durable ``human_direction``
+        marker, so the lead acts first and the reviewer is guaranteed the
+        following turn — the same discipline a human message enforces.
+        """
+        lead, reviewer = collaboration_pair(record.participants)
+        if lead is None or not record.room_id:
+            return
+        metadata: dict = {"source": source}
+        if reviewer is not None:
+            metadata["human_direction"] = {"lead": lead.name, "reviewer": reviewer.name}
+        self.broker.send(
+            record.room_id,
+            credential=self._human_credential(record),
+            draft=MessageDraft(
+                message_type="task",
+                target=lead.name,
+                metadata=metadata,
+                content=content,
+            ),
+        )
+
+    def _close_completed(self, record: SessionRecord, *, force: bool) -> SessionRecord:
+        """The terminal transition: close a verified session, preserve its record.
+
+        This is the only code path that ends a completed room — the
+        ``closing`` phase. It proves every required gate (main and
+        extension), refuses while any appendix item still owes its
+        disposition, closes the room so no more work can be accepted, and
+        writes a permanent human-readable delivery record. ``force`` waives
+        blocking gates and open appendix items, recorded on each.
 
         Validation and git work (change summary) run before the write
         transaction so the database lock is never held across subprocess
@@ -935,18 +1362,8 @@ class SessionManager:
         transaction, so a racing ``stop`` and ``complete`` can never both
         finish the session and a forced waiver cannot outlive a failed finish.
         """
-        record = self.get(session_id)
-        if record.is_terminal:
-            raise StateError(f"session is already {record.status}", code="session_finished")
-        if not record.room_id:
-            raise StateError("cannot complete a session without a room", code="no_room")
-        gates = self.gates(session_id)
-        if not gates:
-            raise StateError(
-                "cannot complete a session with no acceptance gates defined",
-                code="no_gates",
-            )
-        report = summarize(gates)
+        session_id = record.session_id
+        report = summarize(self.gates(session_id))
         if not report["complete"]:
             if not force:
                 raise StateError(
@@ -994,6 +1411,34 @@ class SessionManager:
                             "cannot complete: " + "; ".join(report["blockers"]),
                             code="gates_unsatisfied",
                         )
+                # Every appendix item owes an explicit disposition before the
+                # room may close — a capture that raced this close is caught
+                # here, under the same write lock capture takes.
+                open_items = [
+                    row["drop_id"]
+                    for row in self.conn.execute(
+                        "SELECT drop_id FROM session_drops WHERE session_id = ? "
+                        "AND disposition IS NULL ORDER BY rowid",
+                        (session_id,),
+                    )
+                ]
+                waived_items: list[str] = []
+                if open_items:
+                    if not force:
+                        hint = (
+                            " — complete again to begin the appendix evaluation"
+                            if record.phase == dropbox_module.PHASE_ORIGINAL
+                            else ""
+                        )
+                        raise StateError(
+                            "cannot complete: appendix items still need evaluation: "
+                            + ", ".join(open_items)
+                            + hint,
+                            code="appendix_unevaluated",
+                        )
+                    waived_items = dropbox_module.waive_pending_locked(
+                        self.conn, session_id, "Waived by the user at forced completion"
+                    )
                 markdown = changelog_module.render(
                     record,
                     gates,
@@ -1008,6 +1453,10 @@ class SessionManager:
                 )
                 write_private(changelog_path, markdown)
                 wrote_changelog = True
+
+                # Only ``closing`` invokes the terminal room-closing behavior;
+                # the flip and the close commit together.
+                self._update(session_id, phase=dropbox_module.PHASE_CLOSING)
 
                 # The broker owns terminal room state. Because it shares this
                 # connection, its stop is part of this same BEGIN IMMEDIATE
@@ -1041,6 +1490,7 @@ class SessionManager:
                         "final_changelog": str(changelog_path),
                         "commits": changes.get("commits", 0),
                         "waived_gates": waived,
+                        "waived_items": waived_items,
                     },
                 )
         except Exception:
@@ -1143,6 +1593,18 @@ class SessionManager:
         else:
             worktree_note = "no worktree on disk"
 
+        # Ancillary scratch trees and branches are ephemeral by contract:
+        # session deletion always releases them, wherever retention stood.
+        scratch_trees = [
+            (row["scratch_path"], row["scratch_branch"])
+            for row in self.conn.execute(
+                "SELECT scratch_path, scratch_branch FROM session_drops "
+                "WHERE session_id = ? AND (scratch_path IS NOT NULL "
+                "OR scratch_branch IS NOT NULL)",
+                (session_id,),
+            )
+        ]
+
         with db.transaction(self.conn):
             self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             if record.room_id:
@@ -1152,6 +1614,10 @@ class SessionManager:
             )
 
         # Post-commit, best-effort disk cleanup; the durable rows are gone.
+        for scratch_path, scratch_branch in scratch_trees:
+            worktree_module.remove_scratch(record.repo_root, scratch_path, scratch_branch)
+        # A planning workspace is disposable by definition: no push check.
+        planning_module.remove_workspace(record.planning_workspace.get("path"))
         worktree_removed = False
         if remove_tree:
             try:
@@ -1408,6 +1874,16 @@ class SessionManager:
             "activities": (room_status or {}).get("activities", []),
             "activity_entries": (room_status or {}).get("activity_entries", []),
             "gates": {"summary": report, "items": [g.to_dict() for g in gates]},
+            "dropbox": {
+                "phase": record.phase,
+                "summary": dropbox_module.summarize(self, session_id),
+                "items": dropbox_module.items(self, session_id),
+            },
+            "plan": (
+                planning_module.payload(self, session_id)
+                if record.policy.planning and planning_module.get_plan(self, session_id)
+                else None
+            ),
             "participant_states": self.participant_states(session_id),
             "tests": (record.metadata or {}).get("last_test_run"),
             "test_command": self.detected_test_command(session_id),
@@ -1553,18 +2029,20 @@ class SessionManager:
         self.conn.execute(
             "INSERT INTO session_gates (session_id, gate_id, description, status, required, "
             "evidence, tests, commits, builder_assessment, reviewer_assessment, updated_at, "
-            "updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+            "updated_by, origin_kind, drop_id, extension_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(session_id, gate_id) DO UPDATE SET description=excluded.description, "
             "status=excluded.status, required=excluded.required, evidence=excluded.evidence, "
             "tests=excluded.tests, commits=excluded.commits, "
             "builder_assessment=excluded.builder_assessment, "
             "reviewer_assessment=excluded.reviewer_assessment, updated_at=excluded.updated_at, "
-            "updated_by=excluded.updated_by",
+            "updated_by=excluded.updated_by, origin_kind=excluded.origin_kind, "
+            "drop_id=excluded.drop_id, extension_id=excluded.extension_id",
             (
                 session_id, gate.gate_id, gate.description, gate.status, int(gate.required),
                 json.dumps(gate.evidence), json.dumps(gate.tests), json.dumps(gate.commits),
                 gate.builder_assessment, gate.reviewer_assessment, gate.updated_at,
-                gate.updated_by,
+                gate.updated_by, gate.origin_kind or "main", gate.drop_id, gate.extension_id,
             ),
         )
 
@@ -1616,4 +2094,5 @@ class SessionManager:
             metadata=json.loads(data["metadata"] or "{}"),
             contract_revision=data["contract_revision"],
             participants=participants,
+            phase=data["phase"] if "phase" in data.keys() and data["phase"] else "original_work",
         )

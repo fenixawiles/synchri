@@ -1890,3 +1890,85 @@ def test_launch_payload_reports_runtime_connection_state(ui, repo):
 
     boot = call(ui, "/api/bootstrap")
     assert boot["runtime_connections"]["codex"]["state"] == "connected"
+
+
+# ----------------------------------------------------------------------
+# the redesigned shell
+# ----------------------------------------------------------------------
+
+
+def test_the_shell_is_a_global_collapsible_sidebar():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '<aside id="sidebar"' in source
+    assert 'id="side-toggle"' in source and 'id="side-reveal"' in source
+    assert "S.sidebarCollapsed" in source
+    assert "function applySidebar(" in source and "function toggleSidebar(" in source
+    # Collapse removes the sidebar from layout and the accessibility tree.
+    assert ".shell.collapsed #sidebar{display:none}" in source
+    assert 'aria-controls="sidebar"' in source
+    # The old top header chrome is gone; its controls live in the sidebar.
+    assert "<header>" not in source
+    assert 'id="nav-new"' in source and 'id="github-account"' in source
+    assert 'id="theme-menu"' in source and 'id="app-update"' in source
+
+
+def test_the_sidebar_carries_workflows_recent_sessions_and_the_session_rail():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "function renderSideContext(" in source
+    assert "function renderSessionRail(" in source
+    # Inside a session the sidebar becomes that session's rail.
+    assert 'if (S.view === "session" && S.dash) { renderSessionRail(box); return; }' in source
+    # Browsing shows workflows and the compact recent-session list instead.
+    assert "Show all ${list.length} sessions" in source
+    assert "S.showAllSessions ? list : list.slice(0, 6)" in source
+
+
+def test_the_chrome_is_neutral_ink_with_semantic_color():
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # Primary actions are inverted ink, not a hue; success needs an explicit
+    # modifier instead of being the pill default.
+    assert "button.primary{background:var(--btn);" in source
+    assert ".pill.ok{background:var(--ok-soft);" in source
+    root = re.search(r"\n:root\{(.*?)\n\}", source, re.S).group(1)
+    for token in ("--btn:", "--btn-ink:", "--ok:", "--ok-soft:", "--ok-line:"):
+        assert token in root
+    # The blinking terminal cursor is retired along with the terminal look.
+    assert "cursorblink" not in source
+
+
+def test_the_new_session_flow_asks_progressively():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    for question in ("What are we working on?", "Where should the agents work?",
+                     "What do you want done?", "Who should work on it?", "Ready."):
+        assert question in source
+    assert "Help me make a plan" in source
+    # A saved workflow is recommended, never required: the recommended team
+    # can launch a build directly, and planning routes through the draft API.
+    assert "RECOMMENDED_BUILD_TEAM" in source and "RECOMMENDED_PLAN_TEAM" in source
+    assert '{draft: "quick-plan", mode: "planning"' in source
+    assert 'await api("start", {draft: "quick-plan"})' in source
+    # Changing the repository invalidates the repository-scoped answers.
+    assert "S.quick.workspace_choice = null;\n  S.quick.editStep = null;" in source
+
+
+def test_the_quick_plan_route_creates_a_planning_session(ui, repo):
+    call(ui, "/api/draft/reset", {"draft": "quick-plan"})
+    call(ui, "/api/draft", {"draft": "quick-plan", "mode": "planning",
+                            "repo_path": str(repo), "spec": "A small idea to plan.",
+                            "agents": [
+                                {"runtime": "claude_code", "role": "planner"},
+                                {"runtime": "codex", "role": "plan_reviewer"}]})
+    started = call(ui, "/api/start", {"draft": "quick-plan"})
+    session_id = started["session"]["session_id"]
+    session = call(ui, f"/api/session?session={session_id}")
+    assert session["mode"] == "planning"
+    assert [p["name"] for p in session["participants"]] == ["Claude", "Codex"]

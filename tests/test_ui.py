@@ -1939,7 +1939,7 @@ def test_the_chrome_is_neutral_ink_with_semantic_color():
     # Primary actions are inverted ink, not a hue; success needs an explicit
     # modifier instead of being the pill default.
     assert "button.primary{background:var(--btn);" in source
-    assert ".pill.ok{background:var(--ok-soft);" in source
+    assert ".pill.ok{color:var(--ok)}" in source
     root = re.search(r"\n:root\{(.*?)\n\}", source, re.S).group(1)
     for token in ("--btn:", "--btn-ink:", "--ok:", "--ok-soft:", "--ok-line:", "--frame:"):
         assert token in root

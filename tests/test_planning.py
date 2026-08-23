@@ -1028,6 +1028,10 @@ def test_planning_commands_carry_the_clis_own_enforcement():
         assert "--safe-mode" in claude[key]
         assert "--strict-mcp-config" in claude[key]
         assert '--tools "Read,Glob,Grep"' in claude[key]
+        # --tools is variadic in current Claude CLIs. Prompts travel over
+        # stdin so they cannot be swallowed as another tool-list value.
+        assert "{prompt}" not in claude[key]
+        assert AgentCommand.parse(f"claude={claude[key]}").takes_prompt_in_argv is False
     codex = KNOWN_RUNTIMES["codex"]
     assert "--sandbox read-only" in codex["planning_command"]
     assert "--sandbox read-only" in codex["plain_planning_command"]

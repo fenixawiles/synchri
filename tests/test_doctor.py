@@ -13,6 +13,7 @@ import pytest
 
 from synchri.errors import ValidationError
 from synchri.runner import doctor
+from synchri.runner.agent_command import AgentCommand
 from synchri.runner.stream_events import ClaudeStreamParser, CodexStreamParser
 
 
@@ -331,9 +332,13 @@ def test_real_adapters_declare_enforced_canary_commands():
         assert "--safe-mode" in claude[key]
         assert "--strict-mcp-config" in claude[key]
         assert '--tools ""' in claude[key], "the canary needs no tools at all"
+        assert "{prompt}" not in claude[key]
+        assert AgentCommand.parse(f"claude={claude[key]}").takes_prompt_in_argv is False
     codex = KNOWN_RUNTIMES["codex"]
     assert "--sandbox read-only" in codex["connection_test_command"]
     assert "--sandbox read-only" in codex["plain_connection_test_command"]
+    assert "--skip-git-repo-check" in codex["connection_test_command"]
+    assert "--skip-git-repo-check" in codex["plain_connection_test_command"]
     # Copilot has no verified enforcement flag: no canary command at all.
     assert KNOWN_RUNTIMES["copilot"].get("connection_test_command") is None
 

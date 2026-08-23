@@ -100,6 +100,13 @@ def test_update_payload_is_notarized_assessed_and_published_safely():
     assert "spctl --assess --type exec" in workflow
     assert "spctl --assess --type open" in workflow
 
+    # Stapling modifies the DMG, so the public checksum must be regenerated
+    # afterward and verified before upload rather than describing the
+    # pre-stapled bytes produced by the build script.
+    regenerate_checksum = 'shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"'
+    assert workflow.index('xcrun stapler staple "$DMG"') < workflow.index(regenerate_checksum)
+    assert 'shasum -a 256 -c "$(basename "$DMG").sha256"' in workflow
+
     assert 'gh release upload "$TAG" $payload --clobber' in workflow
     assert workflow.index('gh release upload "$TAG" $payload --clobber') < workflow.index(
         'gh release upload "$TAG" "$manifest" --clobber'

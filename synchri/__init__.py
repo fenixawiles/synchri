@@ -17,7 +17,7 @@ from .errors import (
 )
 from .models import MessageDraft, MessageEnvelope
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 __all__ = [
     "SynchriError",

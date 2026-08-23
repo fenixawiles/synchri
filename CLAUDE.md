@@ -37,4 +37,4 @@ on one task in one room, each in an isolated git worktree.
 ## Current in-flight update
 
 See `docs/updates/` for the active update's baseline, scope checklist, and
-decisions — currently `docs/updates/v0.4.3.md`.
+decisions — currently `docs/updates/v0.4.4.md`.

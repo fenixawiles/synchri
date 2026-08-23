@@ -1829,6 +1829,26 @@ def test_local_discovery_finds_a_repository(repo, monkeypatch):
     assert entry["name"] == "marnie" and entry["branch"] == "main"
 
 
+def test_packaged_app_discovery_includes_desktop_repositories(repo, tmp_path, monkeypatch):
+    from synchri.session import discovery
+
+    home = tmp_path / "person"
+    desktop = home / "Desktop"
+    desktop.mkdir(parents=True)
+    checkout = desktop / "visible-project"
+    subprocess.run(
+        ["git", "clone", str(repo), str(checkout)], check=True, capture_output=True
+    )
+    app_cwd = tmp_path / "packaged-app"
+    app_cwd.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(app_cwd)
+
+    found = discovery.local_repositories()
+
+    assert str(checkout.resolve()) in [entry["path"] for entry in found]
+
+
 def test_discovery_skips_synchri_worktrees(repo, monkeypatch):
     from synchri.session import discovery
 
@@ -1961,7 +1981,7 @@ def test_macos_keychain_credentials_round_trip_without_a_token_bearing_subproces
     assert "subprocess" not in source
 
 
-def test_github_status_represents_identity_separately_from_repository_access(workspace, monkeypatch):
+def test_github_status_explains_that_repository_browsing_follows_sign_in(workspace, monkeypatch):
     from synchri.session import discovery, github_auth
 
     monkeypatch.setattr(
@@ -1974,10 +1994,10 @@ def test_github_status_represents_identity_separately_from_repository_access(wor
 
     assert status["authenticated"] is True
     assert status["account"] == {"login": "fenixawiles"}
-    assert "separately" in status["message"]
+    assert "browse the repositories" in status["message"]
 
 
-def test_github_repository_access_distinguishes_an_empty_grant_from_sign_in(workspace, monkeypatch):
+def test_github_repository_access_keeps_public_browsing_without_an_installation(workspace, monkeypatch):
     from synchri.session import discovery, github_auth
 
     monkeypatch.setattr(github_auth, "credentials", lambda _workspace: {"access_token": "ghu_private"})
@@ -1985,13 +2005,14 @@ def test_github_repository_access_distinguishes_an_empty_grant_from_sign_in(work
 
     access = discovery.github_repository_access(workspace)
 
-    assert access["authorized"] is False
+    assert access["authorized"] is True
     assert access["installations"] == 0
-    assert access["install_url"].endswith("/installations/new")
-    assert "Choose the repositories" in access["message"]
+    assert access["private_access"] is False
+    assert access["install_url"] is None
+    assert "Public GitHub repositories are ready" in access["message"]
 
 
-def test_github_repository_listing_uses_app_installations(workspace, monkeypatch):
+def test_github_repository_listing_uses_the_signed_in_users_repository_feed(workspace, monkeypatch):
     from synchri.session import discovery, github_auth
 
     monkeypatch.setattr(github_auth, "credentials", lambda _workspace: {"access_token": "ghu_private"})
@@ -1999,21 +2020,51 @@ def test_github_repository_listing_uses_app_installations(workspace, monkeypatch
 
     def fake_get(path, token):
         calls.append((path, token))
-        if path.startswith("/user/installations?"):
-            return {"installations": [{"id": 41}]}
-        return {"repositories": [{
+        return [{
             "name": "private-repo", "full_name": "fenixawiles/private-repo",
             "html_url": "https://github.com/fenixawiles/private-repo", "clone_url": "https://github.com/fenixawiles/private-repo.git",
             "description": "private", "updated_at": "2026-08-13T00:00:00Z", "private": True,
-        }]}
+        }]
 
     monkeypatch.setattr(discovery, "_github_get", fake_get)
     repos = discovery.github_repositories(local=[], workspace=workspace)
 
     assert repos[0]["full_name"] == "fenixawiles/private-repo"
     assert repos[0]["private"] is True
-    assert calls[0][0].startswith("/user/installations")
-    assert "/user/installations/41/repositories" in calls[1][0]
+    assert calls[0][0].startswith("/user/repos?")
+    assert "sort=updated" in calls[0][0]
+
+
+def test_github_repository_listing_falls_back_to_the_public_profile(workspace, monkeypatch):
+    from synchri.session import discovery, github_auth
+
+    monkeypatch.setattr(
+        github_auth,
+        "credentials",
+        lambda _workspace: {
+            "access_token": "ghu_private", "account": {"login": "fenixawiles"}
+        },
+    )
+    calls = []
+
+    def fake_get(path, _token):
+        calls.append(path)
+        if path.startswith("/user/repos?"):
+            return []
+        return [{
+            "name": "synchri", "full_name": "fenixawiles/synchri",
+            "html_url": "https://github.com/fenixawiles/synchri",
+            "clone_url": "https://github.com/fenixawiles/synchri.git",
+            "description": "public", "updated_at": "2026-08-23T00:00:00Z",
+            "private": False,
+        }]
+
+    monkeypatch.setattr(discovery, "_github_get", fake_get)
+
+    repos = discovery.github_repositories(local=[], workspace=workspace)
+
+    assert [repo["full_name"] for repo in repos] == ["fenixawiles/synchri"]
+    assert calls[1].startswith("/users/fenixawiles/repos?")
 
 
 def test_quick_clone_puts_a_github_project_in_the_desktop_folder(

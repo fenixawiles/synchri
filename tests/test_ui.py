@@ -193,6 +193,8 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     runtimes = {runtime["key"]: runtime for runtime in boot["runtimes"]}
     assert runtimes["claude_code"]["connection_test_available"] is True
     assert runtimes["copilot"]["connection_test_available"] is True
+    assert runtimes["claude_code"]["tool_permissions"]["state"] in {"pass", "fail"}
+    assert "/permissions" in runtimes["claude_code"]["tool_permissions"]["instructions"]
     assert boot["runtime_connection_tests"]["claude_code"]["state"] == "not_connected"
     assert boot["appearance"] == {"theme": ""}
 
@@ -214,12 +216,14 @@ def test_connection_ui_distinguishes_readiness_from_connected_state():
     assert "Not connected yet" in source
     assert "Testing connection" in source
     assert "Connection failed" in source
-    assert "Fully connected" in source
+    assert "Connection verified" in source
+    assert "The protected canary intentionally used no tools." in source
+    assert "tool permissions still need setup" in source
     assert "One step remains: run the protected connection test." in source
-    assert "Nothing you can do locally will mark it fully connected" in source
+    assert "Nothing you can do locally will verify this connection" in source
     assert "A previously verified part of this connection changed" in source
     assert source.count("renderAgentConnections(") == 3  # definition + first-run and regular homes
-    assert 'button.textContent = "Connected"' in source
+    assert 'button.textContent = "Connection verified"' in source
     assert 'if (S.view === "home") await home();' in source
     assert "Re-run connection test" not in source
 
@@ -294,17 +298,29 @@ def test_the_client_refreshes_a_stale_github_sign_in_click_instead_of_reauthoriz
     assert "is already signed in." in source
 
 
-def test_the_client_separates_github_profile_sign_in_from_repository_access():
+def test_the_client_browses_github_without_the_broken_installation_page():
     from pathlib import Path
 
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
 
     assert 'id="github-account"' in source
     assert "Create your Synchri profile" in source
-    assert "Choose repository access" in source
-    assert "openRepositoryAccess" in source
+    assert "Your repositories are loading now." in source
+    assert "openRepositoryAccess" not in source
+    assert "installations/new" not in source
+    assert "Repository link or local folder" in source
+    assert "Paste a GitHub URL, owner/repository" in source
     assert "GITHUB ACCOUNT" in source
     assert "Disconnect GitHub" in source
+
+
+def test_session_dashboard_offers_a_bounded_whole_session_restart():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert 'id="c-restart">Restart session' in source
+    assert 'runSessionControl(restart, "restart")' in source
+    assert "Conversation, contract, worktree, and files stay exactly where they are." in source
 
 
 def test_the_packaged_engine_includes_the_public_root_store_for_github_tls():
@@ -1300,6 +1316,45 @@ def test_stopping_from_the_ui_ends_the_session(ui, repo):
     call(ui, "/api/control", {"session": session_id, "action": "stop", "reason": "changed my mind"})
     session = call(ui, f"/api/session?session={session_id}")
     assert session["status"] == "stopped" and session["ended_reason"] == "changed my mind"
+
+
+def test_restarting_a_session_relaunches_only_managed_supervision(ui, repo):
+    session_id = _active(ui, repo)
+    SessionManager(ui["broker"]).record_participant_failure(
+        session_id, "claude", "failed", "permission prompt could not be answered"
+    )
+    before = call(ui, f"/api/session?session={session_id}")
+
+    class _RestartRegistry:
+        def __init__(self):
+            self.restarted = []
+
+        def readiness(self, record):
+            return {"available": True, "agents": []}
+
+        def restart(self, record):
+            self.restarted.append(record.session_id)
+            return {"phase": "resuming", "alive": True}
+
+    registry = _RestartRegistry()
+    original_registry = ui["server"].api.managed
+    ui["server"].api.managed = registry
+    dashboard = call(ui, "/api/control", {"session": session_id, "action": "restart"})
+    after = call(ui, f"/api/session?session={session_id}")
+
+    assert registry.restarted == [session_id]
+    assert dashboard["session"]["status"] == "active"
+    assert dashboard["participant_states"]["claude"]["state"] == "active"
+    assert dashboard["participant_states"]["claude"]["failures"] == 0
+    assert after["room_id"] == before["room_id"]
+    assert after["worktree"]["path"] == before["worktree"]["path"]
+    assert after["contract_revision"] == before["contract_revision"]
+
+    ui["server"].api.managed = original_registry
+    call(ui, "/api/control", {"session": session_id, "action": "pause"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/control", {"session": session_id, "action": "restart"})
+    assert "Only an active session" in json.loads(exc.value.read())["error"]["message"]
 
 
 class _RecordingRegistry:

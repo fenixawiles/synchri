@@ -8,9 +8,11 @@ new entry in ``POLICIES``, not a redesign of startup.
 
 from __future__ import annotations
 
+import json
 import shutil
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 from ..errors import ValidationError
 from .permissions import Decision, PermissionSet
@@ -484,6 +486,16 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "stream_format": "claude",
         "min_version": (1, 0, 0),
         "auth_indicators": ["~/.claude/.credentials.json", "~/.claude/credentials.json"],
+        "tool_permission_setup": {
+            "kind": "claude_settings",
+            "paths": ["~/.claude/settings.json", "~/.claude/settings.local.json"],
+            "title": "Allow Claude's tools",
+            "instructions": (
+                "Before the first session, open Terminal and run claude. Inside Claude, type "
+                "/permissions and finish the tool setup. Synchri automatically uses those saved "
+                "CLI permissions; you do not need to repeat the connection test."
+            ),
+        },
         "resume_command": "claude -p --verbose --output-format stream-json --resume {resume_id} {prompt}",
         # Planning launches under the CLI's own enforcement, hardened:
         # permission-mode plan denies edits, writes, and mutating commands;
@@ -533,6 +545,14 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "stream_format": "codex",
         "min_version": (0, 20, 0),
         "auth_indicators": ["~/.codex/auth.json"],
+        "tool_permission_setup": {
+            "kind": "provider_managed",
+            "title": "Codex tool controls still apply",
+            "instructions": (
+                "The connection test intentionally does not exercise tools. Codex's own sandbox "
+                "and approval settings still control what it may do during a session."
+            ),
+        },
         "resume_command": None,
         # Codex's sandbox is OS-enforced (Seatbelt / Landlock): read-only
         # filesystem, no network — the strongest confinement available here.
@@ -558,6 +578,15 @@ KNOWN_RUNTIMES: dict[str, dict] = {
             "~/.config/github-copilot/hosts.json",
             "~/.config/github-copilot/apps.json",
         ],
+        "tool_permission_setup": {
+            "kind": "provider_managed",
+            "title": "Allow Copilot's tools",
+            "instructions": (
+                "Before the first session, open Terminal and run copilot once. Finish its "
+                "permission prompts for the tools and folders you want it to use. Synchri uses "
+                "the CLI's own permissions during orchestration."
+            ),
+        },
         "resume_command": None,
         # Copilot 1.0.80's --available-tools filter removes every tool not in
         # its allowlist before the model sees them. The explicit empty value
@@ -599,6 +628,67 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "suggested_command": None,
     },
 }
+
+
+def runtime_tool_permission_status(runtime: str) -> dict:
+    """A passive, honest signal for provider-owned operational permissions.
+
+    The protected connection canary deliberately exposes no tools, so it can
+    never prove that an unattended orchestration turn may read, edit, or run
+    commands. Claude persists explicit allow rules in a small local settings
+    document, which gives us a useful (but not exhaustive) readiness signal.
+    Other providers retain control but do not expose an equally reliable local
+    proof, so their state remains unknown instead of receiving a false green.
+    """
+    definition = KNOWN_RUNTIMES.get(runtime, KNOWN_RUNTIMES["generic"])
+    setup = definition.get("tool_permission_setup") or {}
+    kind = setup.get("kind")
+    result = {
+        "state": "unknown",
+        "title": setup.get("title") or "CLI tool permissions",
+        "detail": (
+            "The protected connection test does not exercise tools; provider permissions still apply."
+        ),
+        "instructions": setup.get("instructions") or "",
+    }
+    if kind != "claude_settings":
+        return result
+
+    allow_count = 0
+    found_settings = False
+    for raw_path in setup.get("paths") or ():
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            continue
+        found_settings = True
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        permissions = value.get("permissions") if isinstance(value, dict) else None
+        allow = permissions.get("allow") if isinstance(permissions, dict) else None
+        if isinstance(allow, list):
+            allow_count += len([rule for rule in allow if isinstance(rule, str) and rule.strip()])
+    if allow_count:
+        result.update(
+            state="pass",
+            detail=(
+                f"Claude has {allow_count} saved tool permission rule"
+                f"{'s' if allow_count != 1 else ''}; its provider controls still apply."
+            ),
+        )
+    else:
+        result.update(
+            state="fail",
+            detail=(
+                "No saved Claude tool allow rules were found. The connection can pass, but "
+                "orchestration tool calls may be refused until Claude's permission setup is finished."
+                if found_settings
+                else "Claude's permission settings were not found. The connection can pass, but "
+                "orchestration tool calls may be refused until first-run setup is finished."
+            ),
+        )
+    return result
 
 
 def default_agent_name(runtime: str, taken: set[str] | None = None) -> str:
@@ -653,6 +743,7 @@ def runtime_status(runtime: str) -> dict:
         # on runtimes whose maintained adapter confines writes to the
         # disposable planning workspace. Others are shown unavailable.
         "planning_supported": planning_workspace_supported(runtime),
+        "tool_permissions": runtime_tool_permission_status(runtime),
     }
 
 

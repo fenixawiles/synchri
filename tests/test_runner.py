@@ -326,6 +326,50 @@ def test_restart_participant_kills_only_that_agents_process_group(workspace):
                 process.kill()
 
 
+@posix_only
+def test_restart_session_replaces_only_that_sessions_managed_run(workspace, monkeypatch):
+    """Whole-session restart keeps its kill scope below the durable room."""
+    from synchri.runner.managed import ManagedRunnerRegistry
+
+    registry = ManagedRunnerRegistry(workspace)
+    victim = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
+    )
+    bystander = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
+    )
+    spawned = []
+
+    class _Record:
+        session_id = "session-to-restart"
+        status = "active"
+
+    monkeypatch.setattr(registry, "readiness", lambda _record: {"available": True})
+    monkeypatch.setattr(
+        registry,
+        "_spawn",
+        lambda session_id, phase, detail: spawned.append((session_id, phase, detail))
+        or {"phase": phase, "alive": True},
+    )
+    try:
+        registry._track_pid(_Record.session_id, "builder", victim.pid)
+        registry._track_pid("other-session", "builder", bystander.pid)
+
+        result = registry.restart(_Record())
+
+        victim.wait(timeout=10)
+        assert victim.returncode is not None
+        assert bystander.poll() is None
+        assert result["phase"] == "resuming"
+        assert spawned == [
+            (_Record.session_id, "resuming", "Restarting the agent team.")
+        ]
+    finally:
+        for process in (victim, bystander):
+            if process.poll() is None:
+                process.kill()
+
+
 # ----------------------------------------------------------------------
 # the conductor
 # ----------------------------------------------------------------------

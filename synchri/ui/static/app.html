@@ -928,7 +928,7 @@ async function showGitHubCode(login) {
     <button class="detail-close" aria-label="Close">×</button>
     <div class="kicker">CONNECT GITHUB</div>
     <h2>Enter this code in GitHub</h2>
-    <p class="muted small" style="margin:.2rem 0 0">GitHub opened in your browser. Sign in if needed, then enter this one-time code to link your Synchri profile. Repository access is chosen separately.</p>
+    <p class="muted small" style="margin:.2rem 0 0">GitHub opened in your browser. Sign in if needed, then enter this one-time code to link your Synchri profile and load the repositories visible to you.</p>
     <div class="code-big">${esc(login.user_code)}</div>
     <div class="small muted">Waiting for GitHub — this closes on its own after approval. Expires in about ${expiresIn} seconds.</div>
     <div class="row"><button class="primary" data-open>Open GitHub again</button><button data-close>Cancel</button></div>
@@ -951,7 +951,7 @@ async function showGitHubCode(login) {
       code.remove(); S.repos = null; S.githubReposRequest = null;
       S.boot = await api("bootstrap"); renderGitHubAccount();
       const login = result.account?.login ? `Signed in as @${result.account.login}.` : "GitHub is signed in.";
-      confirmNotice(`${login} Choose repository access when you are ready.`);
+      confirmNotice(`${login} Your repositories are loading now.`);
       if (S.view === "quick") { await loadQuickRepositories(); renderQuick(); }
       if (S.view === "wizard" && S.step === "repository") renderWizard();
       return;
@@ -986,7 +986,7 @@ function showGitHubAccount() {
     <button class="detail-close" aria-label="Close">×</button>
     <div class="kicker">GITHUB ACCOUNT</div>
     <h2>${esc(account.login ? `@${account.login}` : "GitHub connected")}</h2>
-    <p class="muted small" style="margin:.2rem 0 0">Signed in with GitHub. Repository access stays under your control on GitHub.</p>
+    <p class="muted small" style="margin:.2rem 0 0">Signed in with GitHub. Synchri can list public repositories and any private repositories this GitHub connection is allowed to see.</p>
     <div class="row"><button data-close>Done</button><button class="ghost" data-disconnect>Disconnect GitHub</button></div>
   </div>`);
   document.body.append(details);
@@ -998,15 +998,6 @@ function showGitHubAccount() {
     S.repos = null; S.githubReposRequest = null; S.boot = await api("bootstrap");
     close(); renderGitHubAccount(); confirmNotice("GitHub was disconnected.");
   });
-}
-
-async function openRepositoryAccess(access) {
-  const destination = access?.install_url;
-  if (!destination) {
-    flash({message:"Repository selection is being finished for Synchri. You are already signed in; your existing repositories remain available in the meantime.", resolution:{kind:"github_app_settings"}});
-    return;
-  }
-  await openGitHub(destination);
 }
 
 /* --------------------------------------------------------- application update */
@@ -1230,14 +1221,18 @@ function renderAgentConnections(page) {
       : testing ? `<span class="pill warn">testing</span>`
       : failed ? `<span class="pill bad">failed</span>`
       : `<span class="pill dim">not connected</span>`;
+    const toolPermissions = runtime.tool_permissions || {};
+    const toolSummary = toolPermissions.state === "pass" ? "saved tool permissions found"
+      : toolPermissions.state === "fail" ? "tool permissions still need setup"
+      : "CLI tool permissions still apply";
     const summary = stored?.state === "connected"
-      ? `Fully connected${stored.version ? ` · v${stored.version}` : ""}`
+      ? `Connection verified${stored.version ? ` · v${stored.version}` : ""} · ${toolSummary}`
       : testing ? (test.detail || "Protected connection test in progress — no action needed.")
       : failed ? (stored?.detail || test?.detail || "The last connection test failed.")
       : !runtime.installed ? runtime.detail
       : !canTest ? "Installed, but this Synchri version cannot safely verify it."
       : "One step remains: run the protected connection test.";
-    const action = stored?.state === "connected" ? "Details"
+    const action = stored?.state === "connected" ? "Review setup"
       : testing ? "View progress"
       : failed ? "Fix connection"
       : !canTest ? "Why unavailable?" : "Finish setup";
@@ -1309,13 +1304,13 @@ async function showConnectDialog(runtimeKey) {
     if (!entry) return;
     const state = connectionDisplayState(currentConnection, currentTest);
     const stateView = {
-      connected:["connected", "Fully connected"],
+      connected:["connected", "Connection verified"],
       testing:["warn", "Testing connection"],
       failed:["bad", "Connection failed"],
       not_connected:["dim", "Not connected yet"],
     }[state];
     dialog.querySelector("#connect-title").textContent = state === "connected"
-      ? `${entry.label} is connected` : entry.label;
+      ? `${entry.label} connection is verified` : entry.label;
     dialog.querySelector("#connect-state").innerHTML =
       `<span class="pill ${stateView[0]}">${stateView[1]}</span>`;
     renderChecks("#connect-checks", entry.doctor);
@@ -1323,11 +1318,12 @@ async function showConnectDialog(runtimeKey) {
 
     if (state === "connected") {
       dialog.querySelector("#connect-explanation").textContent =
-        "Synchri verified installation, sign-in, prompt delivery, and structured output.";
+        "Synchri verified installation, sign-in, prompt delivery, and structured output. The protected canary intentionally used no tools.";
+      const permissions = entry.tool_permissions || {};
       dialog.querySelector("#connect-next").textContent =
-        "Complete — nothing else to do. Synchri can launch this agent without a paste step.";
+        permissions.instructions || "Connection is ready. Your CLI's own tool permissions still control what the agent may read, edit, or run during orchestration.";
       button.disabled = true;
-      button.textContent = "Connected";
+      button.textContent = "Connection verified";
     } else if (state === "testing") {
       dialog.querySelector("#connect-explanation").textContent =
         "Synchri is running the protected canary now. The state will finish as Connected or Failed.";
@@ -1346,7 +1342,7 @@ async function showConnectDialog(runtimeKey) {
       dialog.querySelector("#connect-explanation").textContent =
         "The green setup checks do not mean connected. This Synchri version has no enforced canary for this CLI.";
       dialog.querySelector("#connect-next").textContent =
-        "Nothing you can do locally will mark it fully connected in this version. Do not retry; Synchri must add a protected adapter first.";
+        "Nothing you can do locally will verify this connection in this version. Do not retry; Synchri must add a protected adapter first.";
       button.disabled = true;
       button.textContent = "Test unavailable";
     } else if (currentConnection?.state === "reconnect_needed") {
@@ -1673,12 +1669,13 @@ function renderQuick() {
         <div class="repo-row"><b>${esc(repo.full_name)}</b><span class="small muted">${repo.local_path ? "cloned" : "will clone"}</span></div>
         ${repo.description ? `<span class="small muted">${esc(repo.description)}</span>` : ""}</button>`)].join("");
   const githubState = !repos.github_status?.authenticated
-    ? `<div class="note small" style="margin-top:.55rem"><b>Sign in with GitHub</b><div style="margin-top:.15rem">${esc(repos.github_status?.message || "Create your Synchri profile, then decide which repositories it may access.")}</div><button id="quick-connect-github" style="margin-top:.55rem">Sign in with GitHub</button></div>`
+    ? `<div class="note small" style="margin-top:.55rem"><b>Sign in with GitHub</b><div style="margin-top:.15rem">${esc(repos.github_status?.message || "Sign in to browse your GitHub repositories. Local folders and pasted links work without it.")}</div><button id="quick-connect-github" style="margin-top:.55rem">Sign in with GitHub</button></div>`
     : repos.github_access?.unavailable
       ? `<div class="note warn small" style="margin-top:.55rem"><b>GitHub did not answer</b><div style="margin-top:.15rem">${esc(repos.github_access.message || "GitHub could not load your repositories. Try again in a moment.")}</div><button id="quick-retry-github" style="margin-top:.55rem">Try again</button></div>`
-      : !repos.github_access?.authorized
-        ? `<div class="note small" style="margin-top:.55rem"><b>Choose repository access</b><div style="margin-top:.15rem">You are signed in${repos.github_status?.account?.login ? ` as @${esc(repos.github_status.account.login)}` : ""}. Select the repositories Synchri may open; this is separate from your account sign-in.</div><button id="quick-connect-repositories" style="margin-top:.55rem">Choose repositories</button></div>`
-        : "";
+      : "";
+  const repoList = repoChoices || (S.githubReposLoading
+    ? `<div class="small muted">Scanning this Mac and loading GitHub repositories…</div>`
+    : `<div class="note small"><b>No repositories were found automatically.</b><div style="margin-top:.15rem">Paste a GitHub link or a local folder below. This path is fully supported.</div></div>`);
   const planRepo = selectedRepo
     ? (selectedRepo.name || selectedRepo.full_name)
     : (q.repo_path ? q.repo_path.split("/").filter(Boolean).pop() : "");
@@ -1698,10 +1695,10 @@ function renderQuick() {
     <div class="fieldset"><div class="fieldset-head"><span class="fieldset-num">02</span><span class="fieldset-title">Repository</span></div>
       ${selectedRepo ? `<div class="sel-repo"><div style="min-width:0"><b style="font-size:12.5px">${esc(selectedRepo.name || selectedRepo.full_name || q.repo_path)}</b>
         <div class="mono small muted" style="margin-top:.18rem">${esc(q.repo_path)}</div></div><span class="pill">selected</span></div>` : ""}
-      <div id="quick-repositories" class="repo-grid">${repoChoices || `<div class="small muted">Scanning for repositories…</div>`}</div>
+      <div id="quick-repositories" class="repo-grid">${repoList}</div>
       ${repos.github_status?.authenticated && S.githubReposLoading ? `<div class="small muted" style="margin-top:.45rem">Loading GitHub repositories…</div>` : ""}
       ${githubState}
-      <details class="adv"><summary class="small muted">Paste a repository link or path instead</summary><div class="row" style="margin-top:.5rem;flex-wrap:nowrap"><input id="quick-repo" class="mono" value="${esc(q.repo_path)}" placeholder="owner/repository, GitHub URL, or folder path"><button id="quick-use-repo">Use</button></div></details></div>
+      <div class="stack" style="gap:.35rem;margin-top:.7rem"><label class="small" for="quick-repo"><b>Repository link or local folder</b></label><div class="row" style="flex-wrap:nowrap"><input id="quick-repo" class="mono" value="${esc(q.repo_path)}" placeholder="github.com/owner/repository or /Users/you/project"><button id="quick-use-repo">Use repository</button></div><div class="small faint">Paste a GitHub URL, owner/repository, or the full path to a repository already on this Mac.</div></div></div>
 
     ${workspaceChoice}
 
@@ -1736,7 +1733,6 @@ function renderQuick() {
     S.repos = null; S.githubReposRequest = null;
     await loadQuickRepositories(); renderQuick();
   }));
-  document.getElementById("quick-connect-repositories")?.addEventListener("click", guard(() => openRepositoryAccess(repos.github_access)));
   document.getElementById("quick-use-repo")?.addEventListener("click", guard(async () => {
     await selectQuickRepository(document.getElementById("quick-repo").value.trim());
   }));
@@ -2044,8 +2040,8 @@ async function stepRepo() {
       ${cur.is_dirty ? `<div class="small" style="margin-top:.4rem">
         ${cur.dirty_files.length} uncommitted change(s) — left exactly as they are.</div>` : ""}</div>`));
   }
-  const manual = $(`<div class="row"><input id="rp" placeholder="/path/to/repository"
-    value="${esc(S.draft.draft.repo_path||"")}"><button id="use">Use</button></div>`);
+  const manual = $(`<div class="stack" style="gap:.35rem"><label class="small" for="rp"><b>Repository link or local folder</b></label><div class="row" style="flex-wrap:nowrap"><input id="rp" placeholder="github.com/owner/repository or /Users/you/project"
+    value="${esc(S.draft.draft.repo_path||"")}"><button id="use">Use repository</button></div><div class="small faint">Paste a GitHub URL, owner/repository, or the full path to a repository already on this Mac.</div></div>`);
   box.append(manual);
   manual.querySelector("#use").onclick = guard(async () => {
     await patch({ repo_path: document.getElementById("rp").value });
@@ -2102,12 +2098,8 @@ async function stepRepo() {
     const notice = $(`<div class="note small"><b>Sign in with GitHub</b><div>${esc(status.message || "Create your Synchri profile before browsing GitHub repositories. Local repositories work without it.")}</div><button style="margin-top:.55rem">Sign in with GitHub</button></div>`);
     notice.querySelector("button").onclick = guard(connectGitHub);
     box.append(notice);
-  } else if (!S.repos.github_access?.authorized) {
-    const access = S.repos.github_access || {};
-    const account = S.repos.github_status?.account?.login;
-    const notice = $(`<div class="note small"><b>Choose repository access</b><div>${account ? `Signed in as @${esc(account)}. ` : ""}Select the repositories Synchri may open. This does not change your sign-in.</div><button style="margin-top:.55rem">Choose repositories</button></div>`);
-    notice.querySelector("button").onclick = guard(() => openRepositoryAccess(access));
-    box.append(notice);
+  } else if (!S.repos.github.length) {
+    box.append($(`<div class="note small"><b>No GitHub repositories were returned.</b><div>Use the visible link or folder field above; public GitHub links and existing local checkouts remain fully supported.</div></div>`));
   }
 }
 
@@ -2464,7 +2456,7 @@ function renderSession() {
         `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
       ).join("")}</nav>
       <div class="rail-team"><div class="kicker" style="margin-bottom:.35rem">Team</div>${team}</div>
-      <div class="rail-controls">${s.status === "active" && d.managed?.readiness?.available && !d.managed?.run?.alive ? `<button id="c-continue">Continue agents</button>` : ""}${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${["active", "paused"].includes(s.status) ? `<button class="control-complete" id="c-complete">Complete session</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button class="control-stop" id="c-stop">Stop session</button>` : ""}</div>
+      <div class="rail-controls">${s.status === "active" && d.managed?.readiness?.available ? `<button id="c-restart">Restart session</button>` : ""}${["active", "paused"].includes(s.status) ? `<button id="c-pause">${s.status==="active"?"Pause":"Resume"}</button>` : ""}${["active", "paused"].includes(s.status) ? `<button class="control-complete" id="c-complete">Complete session</button>` : ""}${!['complete','stopped','failed','timed_out'].includes(s.status) ? `<button class="control-stop" id="c-stop">Stop session</button>` : ""}</div>
     </aside><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
       <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.worktree?.branch || s.repository.base_branch || "")}</div></div>
       <div class="chat-time">${esc(g.satisfied + "/" + g.required)} gates verified</div></div>
@@ -2490,12 +2482,12 @@ function renderSession() {
   layout.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => {
     S.tab = button.dataset.tab; renderSession();
   });
-  const resumeManaged = document.getElementById("c-continue");
-  if (resumeManaged) resumeManaged.onclick = guard(async () => {
-    await api("managed/start", {session:S.session});
-    S.dash = await api("dashboard?session=" + encodeURIComponent(S.session));
-    renderSession();
-  });
+  const restart = document.getElementById("c-restart");
+  if (restart) restart.onclick = () => guard(async () => {
+    if (!confirm("Restart this session's agents? Synchri stops only the managed agent run, then relaunches it in the same room. Conversation, contract, worktree, and files stay exactly where they are.")) return;
+    await runSessionControl(restart, "restart");
+    confirmNotice("Session agents restarted. The room, history, and worktree were preserved.");
+  })();
   paint("conversation", document.getElementById("conversation-panel"))
     .catch(error => document.getElementById("conversation-panel").innerHTML = `<span class="muted">${esc(error.message)}</span>`);
   if (S.tab !== "conversation") {

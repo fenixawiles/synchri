@@ -553,15 +553,33 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         "executable": "copilot",
         "managed_command": "copilot -sp {prompt}",
         "suggested_command": "copilot -sp {prompt}",
-        "min_version": (0, 1, 0),
+        "min_version": (1, 0, 80),
         "auth_indicators": [
             "~/.config/github-copilot/hosts.json",
             "~/.config/github-copilot/apps.json",
         ],
         "resume_command": None,
-        # No verified read-only enforcement flag in the maintained adapter
-        # yet: Planning Mode and the consented connection test are both
-        # unavailable on Copilot rather than run without a technical sandbox.
+        # Copilot 1.0.80's --available-tools filter removes every tool not in
+        # its allowlist before the model sees them. The explicit empty value
+        # therefore leaves the sentinel canary with no file, shell, web, MCP,
+        # or delegation tools. COPILOT_HOME is relative to the connection
+        # doctor's fresh temporary working directory: personal configuration,
+        # plugins, skills, saved permissions, and MCP servers cannot load, and
+        # the directory is removed with the canary. The remaining flags turn
+        # off built-in MCP, custom instructions, remote control/export,
+        # auto-update, experimental features, BASH_ENV, and temp-directory
+        # access. This is the provider's enforced tool boundary, not an OS
+        # sandbox; the maintained adapter trusts the Copilot binary itself.
+        "connection_test_command": (
+            "/usr/bin/env COPILOT_HOME=.synchri-copilot-canary "
+            "copilot --available-tools= --disable-builtin-mcps "
+            "--no-custom-instructions --no-auto-update --no-remote "
+            "--no-remote-export --no-ask-user --no-experimental --no-bash-env "
+            "--disallow-temp-dir --log-level none --output-format text "
+            "--stream off -sp {prompt}"
+        ),
+        # Planning remains unavailable: the no-tools canary proves connection,
+        # but a useful planner needs a separately verified read-only tool set.
     },
     "gemini": {
         "label": "Gemini CLI",

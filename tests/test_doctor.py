@@ -339,8 +339,23 @@ def test_real_adapters_declare_enforced_canary_commands():
     assert "--sandbox read-only" in codex["plain_connection_test_command"]
     assert "--skip-git-repo-check" in codex["connection_test_command"]
     assert "--skip-git-repo-check" in codex["plain_connection_test_command"]
-    # Copilot has no verified enforcement flag: no canary command at all.
-    assert KNOWN_RUNTIMES["copilot"].get("connection_test_command") is None
+    copilot = KNOWN_RUNTIMES["copilot"]
+    command = copilot["connection_test_command"]
+    assert "COPILOT_HOME=.synchri-copilot-canary" in command
+    assert "--available-tools=" in command
+    assert "--disable-builtin-mcps" in command
+    assert "--no-custom-instructions" in command
+    assert "--no-auto-update" in command
+    assert "--no-remote" in command
+    assert "--no-remote-export" in command
+    assert "--no-experimental" in command
+    assert "--no-bash-env" in command
+    assert "--disallow-temp-dir" in command
+    assert "--allow-all" not in command
+    assert copilot["min_version"] == (1, 0, 80)
+    parsed = AgentCommand.parse(f"copilot={command}")
+    assert "--available-tools=" in parsed.argv
+    assert parsed.takes_prompt_in_argv is True
 
 
 # ----------------------------------------------------------------------

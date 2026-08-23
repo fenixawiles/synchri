@@ -192,14 +192,14 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     assert boot["github"]["authenticated"] is False
     runtimes = {runtime["key"]: runtime for runtime in boot["runtimes"]}
     assert runtimes["claude_code"]["connection_test_available"] is True
-    assert runtimes["copilot"]["connection_test_available"] is False
+    assert runtimes["copilot"]["connection_test_available"] is True
     assert boot["runtime_connection_tests"]["claude_code"]["state"] == "not_connected"
     assert boot["appearance"] == {"theme": ""}
 
 
 def test_an_unverifiable_runtime_cannot_start_an_impossible_connection_test(ui):
     with pytest.raises(urllib.error.HTTPError) as exc:
-        call(ui, "/api/runtimes/connect", {"runtime": "copilot"})
+        call(ui, "/api/runtimes/connect", {"runtime": "gemini"})
     payload = json.loads(exc.value.read())
     assert payload["error"]["code"] == "validation_error"
     assert "cannot be marked connected" in payload["error"]["message"]

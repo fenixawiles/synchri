@@ -125,7 +125,8 @@ def test_planning_is_offered_and_capability_gated():
     assert runtime_status("generic")["planning_supported"] is False
     assert runtime_status("claude_code")["connection_test_available"] is True
     assert runtime_status("codex")["connection_test_available"] is True
-    assert runtime_status("copilot")["connection_test_available"] is False
+    assert runtime_status("copilot")["connection_test_available"] is True
+    assert runtime_status("copilot")["planning_supported"] is False
 
 
 def test_a_planning_session_gets_a_disposable_remoteless_clone(manager, repo):

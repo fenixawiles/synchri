@@ -1,8 +1,10 @@
 """Row-level data access.
 
-Every function here takes an explicit ``room_id`` and filters on it.  That is
-the enforcement point for cross-room isolation invariant: there is no query in
-this module that can return rows belonging to a room the caller did not name.
+Room-scoped functions take an explicit ``room_id`` and filter on it.  That is
+the enforcement point for the cross-room isolation invariant: there is no
+room query in this module that can return rows belonging to a room the caller
+did not name.  Application preferences are deliberately global and live in
+their own table.
 """
 
 from __future__ import annotations
@@ -15,6 +17,28 @@ from ..ids import new_id, utc_now
 from ..models.entities import Event, Invite, Participant, QueueEntry, Room, Task, Turn
 from ..models.enums import ParticipantStatus, TaskStatus, TurnStatus
 from ..models.envelope import MessageEnvelope
+
+
+# --------------------------------------------------------------------------
+# application preferences
+# --------------------------------------------------------------------------
+
+
+def get_app_preference(conn: sqlite3.Connection, key: str, default: str = "") -> str:
+    row = conn.execute("SELECT value FROM app_preferences WHERE key = ?", (key,)).fetchone()
+    return str(row["value"]) if row is not None else default
+
+
+def set_app_preference(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    if value is None:
+        conn.execute("DELETE FROM app_preferences WHERE key = ?", (key,))
+        return
+    conn.execute(
+        "INSERT INTO app_preferences(key, value, updated_at) VALUES(?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (key, value, utc_now()),
+    )
+
 
 # --------------------------------------------------------------------------
 # sequence

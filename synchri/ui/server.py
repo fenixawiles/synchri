@@ -133,7 +133,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # Move the token out of the URL bar into a same-site cookie so it
             # does not linger in history or get pasted around.
-            body = _read_static("app.html").replace("__SYNCHRI_TOKEN__", self.server.token)
+            body = (
+                _read_static("app.html")
+                .replace("__SYNCHRI_TOKEN__", self.server.token)
+                .replace("__SYNCHRI_THEME__", self.server.api.appearance_theme())
+            )
             encoded = body.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")

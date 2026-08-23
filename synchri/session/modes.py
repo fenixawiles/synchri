@@ -620,11 +620,20 @@ def runtime_status(runtime: str) -> dict:
         "executable": executable,
         "path": path,
         "detail": detail,
+        # The green passive doctor checks do not prove a managed connection.
+        # Only adapters with an enforced canary command may offer that action.
+        "connection_test_available": connection_test_available(runtime),
         # Capability-based, never contract-only: Planning Mode is offered only
         # on runtimes whose maintained adapter confines writes to the
         # disposable planning workspace. Others are shown unavailable.
         "planning_supported": planning_workspace_supported(runtime),
     }
+
+
+def connection_test_available(runtime: str) -> bool:
+    """Whether this adapter can safely prove and store a connection."""
+    definition = KNOWN_RUNTIMES.get(runtime, KNOWN_RUNTIMES["generic"])
+    return bool(definition.get("connection_test_command"))
 
 
 def planning_workspace_supported(runtime: str) -> bool:

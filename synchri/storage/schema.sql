@@ -467,6 +467,15 @@ CREATE TABLE IF NOT EXISTS runtime_connections (
     updated_at       TEXT NOT NULL
 );
 
+-- v7: local application preferences must survive a desktop relaunch. The UI
+-- server uses an ephemeral loopback port, so browser localStorage belongs to
+-- a different origin on every launch and cannot be the source of truth.
+CREATE TABLE IF NOT EXISTS app_preferences (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- v6: Planning Mode. One plan per planning session, produced by a planner and
 -- an adversarial plan reviewer working in a disposable read-only planning
 -- workspace anchored to inspection_sha. The plan is durable, revisioned, and

@@ -494,28 +494,32 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         # to read-only inspection. This is provider enforcement (the CLI's
         # permission engine plus its managed policy), not an OS sandbox — the
         # honest limit of what this adapter can guarantee.
+        # Claude's --tools option is variadic. A positional prompt after it is
+        # consumed as another tool name by current CLIs, leaving --print with
+        # no input. Omitting {prompt} deliberately makes AgentCommand deliver
+        # the prompt over stdin, which Claude documents for print mode.
         "planning_command": (
             "claude -p --verbose --output-format stream-json --permission-mode plan "
-            '--safe-mode --strict-mcp-config --tools "Read,Glob,Grep" {prompt}'
+            '--safe-mode --strict-mcp-config --tools "Read,Glob,Grep"'
         ),
         "plain_planning_command": (
             'claude -p --permission-mode plan --safe-mode --strict-mcp-config '
-            '--tools "Read,Glob,Grep" {prompt}'
+            '--tools "Read,Glob,Grep"'
         ),
         # The connection-test canary answers a sentinel prompt and needs no
         # tools at all: --tools "" disables every built-in tool on top of the
         # same hardening, so the canary technically cannot read or write.
         "connection_test_command": (
             "claude -p --verbose --output-format stream-json --permission-mode plan "
-            '--safe-mode --strict-mcp-config --tools "" {prompt}'
+            '--safe-mode --strict-mcp-config --tools ""'
         ),
         "plain_connection_test_command": (
             'claude -p --permission-mode plan --safe-mode --strict-mcp-config '
-            '--tools "" {prompt}'
+            '--tools ""'
         ),
         "connection_test_resume_command": (
             "claude -p --verbose --output-format stream-json --permission-mode plan "
-            '--safe-mode --strict-mcp-config --tools "" --resume {resume_id} {prompt}'
+            '--safe-mode --strict-mcp-config --tools "" --resume {resume_id}'
         ),
         "read_only_planning_workspace": True,
     },
@@ -535,8 +539,12 @@ KNOWN_RUNTIMES: dict[str, dict] = {
         # The connection-test canary runs under the same sandbox.
         "planning_command": "codex exec --json --sandbox read-only {prompt}",
         "plain_planning_command": "codex exec --sandbox read-only {prompt}",
-        "connection_test_command": "codex exec --json --sandbox read-only {prompt}",
-        "plain_connection_test_command": "codex exec --sandbox read-only {prompt}",
+        "connection_test_command": (
+            "codex exec --json --sandbox read-only --skip-git-repo-check {prompt}"
+        ),
+        "plain_connection_test_command": (
+            "codex exec --sandbox read-only --skip-git-repo-check {prompt}"
+        ),
         "read_only_planning_workspace": True,
     },
     "copilot": {

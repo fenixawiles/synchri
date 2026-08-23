@@ -20,21 +20,22 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
    block also sets color-scheme for native controls. */
 :root{
   color-scheme:dark;
-  --bg:#101214; --panel:#15181b; --panel2:#191d21; --raise:#1f242a;
-  --line:#23272d; --line2:#323841;
-  --ink:#d3d7dd; --dim:#8b929d; --faint:#5f6672;
-  --accent:#8fb2cc; --accent-ink:#0d161d;
-  --accent-soft:rgba(143,178,204,.09); --accent-line:rgba(143,178,204,.32);
-  --ok:#5fb389; --ok-soft:rgba(95,179,137,.1); --ok-line:rgba(95,179,137,.3);
-  --btn:#e4e7eb; --btn-ink:#15181b;
-  --warn:#cfa75c; --warn-ink:#221805; --warn-soft:rgba(207,167,92,.1); --warn-line:rgba(207,167,92,.32);
-  --bad:#d98077; --bad-soft:rgba(217,128,119,.1); --bad-line:rgba(217,128,119,.32);
+  --bg:#0b0c0e; --panel:#131518; --panel2:#1a1d22; --raise:#20242b;
+  --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.17);
+  --frame:#39414e;
+  --ink:#e7eaee; --dim:#9aa3af; --faint:#666e7a;
+  --accent:#10b981; --accent-ink:#052e21;
+  --accent-soft:rgba(16,185,129,.1); --accent-line:rgba(16,185,129,.35);
+  --ok:#10b981; --ok-soft:rgba(16,185,129,.1); --ok-line:rgba(16,185,129,.32);
+  --btn:#e7eaee; --btn-ink:#131518;
+  --warn:#fbbf24; --warn-ink:#241a02; --warn-soft:rgba(251,191,36,.12); --warn-line:rgba(251,191,36,.38);
+  --bad:#e5837a; --bad-soft:rgba(229,131,122,.1); --bad-line:rgba(229,131,122,.34);
   --info:#82b3d6;
-  --sel:rgba(143,178,204,.22);
-  --shadow:0 12px 32px rgba(4,6,9,.5);
+  --sel:rgba(16,185,129,.24);
+  --shadow:0 20px 40px -15px rgba(0,0,0,.55);
   --a0:#7fb3ce; --a1:#a99fd8; --a2:#c9a878; --a3:#7cbfa5; --a4:#c996b4;
-  --diff-add:#84c9a4; --diff-add-bg:rgba(95,179,137,.12);
-  --diff-del:#e09d95; --diff-del-bg:rgba(217,128,119,.12);
+  --diff-add:#7fd6ab; --diff-add-bg:rgba(16,185,129,.12);
+  --diff-del:#eb9d94; --diff-del-bg:rgba(229,131,122,.12);
   --gh-bg:#eef1f4; --gh-ink:#1f2328; --gh-line:#eef1f4;
   --radius:12px; --radius-s:8px;
   --sans:"SF Pro Text","Avenir Next",Inter,ui-sans-serif,system-ui,sans-serif;
@@ -45,39 +46,41 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
    explicit theme. Keep the two blocks identical. */
 @media (prefers-color-scheme:light){:root:not([data-theme]){
   color-scheme:light;
-  --bg:#f1f1ef; --panel:#fafaf9; --panel2:#f4f4f2; --raise:#ffffff;
-  --line:#e3e3e0; --line2:#c9c9c4;
-  --ink:#22262b; --dim:#5f656d; --faint:#82868d;
-  --accent:#40688c; --accent-ink:#ffffff;
-  --accent-soft:rgba(64,104,140,.08); --accent-line:rgba(64,104,140,.3);
-  --ok:#2c7350; --ok-soft:rgba(44,115,80,.09); --ok-line:rgba(44,115,80,.3);
-  --btn:#23282e; --btn-ink:#f7f8f8;
-  --warn:#82610e; --warn-ink:#ffffff; --warn-soft:rgba(130,97,14,.09); --warn-line:rgba(130,97,14,.3);
+  --bg:#f9f9fb; --panel:#ffffff; --panel2:#f1f2f5; --raise:#ffffff;
+  --line:rgba(17,24,39,.07); --line2:rgba(17,24,39,.16);
+  --frame:#111827;
+  --ink:#1a1f2b; --dim:#575f6b; --faint:#818894;
+  --accent:#047857; --accent-ink:#ffffff;
+  --accent-soft:rgba(4,120,87,.08); --accent-line:rgba(4,120,87,.3);
+  --ok:#047857; --ok-soft:rgba(4,120,87,.08); --ok-line:rgba(4,120,87,.3);
+  --btn:#111827; --btn-ink:#f9fafb;
+  --warn:#8a600b; --warn-ink:#ffffff; --warn-soft:rgba(245,158,11,.12); --warn-line:rgba(245,158,11,.45);
   --bad:#b2493f; --bad-soft:rgba(178,73,63,.08); --bad-line:rgba(178,73,63,.3);
-  --info:#33698f;
-  --sel:rgba(64,104,140,.16);
-  --shadow:0 12px 30px rgba(24,28,34,.12);
-  --a0:#2a7295; --a1:#6a5bb8; --a2:#82610e; --a3:#2b7a5b; --a4:#a34a76;
-  --diff-add:#1f6b47; --diff-add-bg:rgba(55,129,93,.1);
+  --info:#2d6787;
+  --sel:rgba(4,120,87,.14);
+  --shadow:0 20px 40px -15px rgba(0,0,0,.07);
+  --a0:#2a7295; --a1:#6a5bb8; --a2:#8a600b; --a3:#047857; --a4:#a34a76;
+  --diff-add:#116b4c; --diff-add-bg:rgba(4,120,87,.1);
   --diff-del:#9c3b32; --diff-del-bg:rgba(178,73,63,.1);
   --gh-bg:#24292f; --gh-ink:#ffffff; --gh-line:#24292f;
 }}
 :root[data-theme="daylight"]{
   color-scheme:light;
-  --bg:#f1f1ef; --panel:#fafaf9; --panel2:#f4f4f2; --raise:#ffffff;
-  --line:#e3e3e0; --line2:#c9c9c4;
-  --ink:#22262b; --dim:#5f656d; --faint:#82868d;
-  --accent:#40688c; --accent-ink:#ffffff;
-  --accent-soft:rgba(64,104,140,.08); --accent-line:rgba(64,104,140,.3);
-  --ok:#2c7350; --ok-soft:rgba(44,115,80,.09); --ok-line:rgba(44,115,80,.3);
-  --btn:#23282e; --btn-ink:#f7f8f8;
-  --warn:#82610e; --warn-ink:#ffffff; --warn-soft:rgba(130,97,14,.09); --warn-line:rgba(130,97,14,.3);
+  --bg:#f9f9fb; --panel:#ffffff; --panel2:#f1f2f5; --raise:#ffffff;
+  --line:rgba(17,24,39,.07); --line2:rgba(17,24,39,.16);
+  --frame:#111827;
+  --ink:#1a1f2b; --dim:#575f6b; --faint:#818894;
+  --accent:#047857; --accent-ink:#ffffff;
+  --accent-soft:rgba(4,120,87,.08); --accent-line:rgba(4,120,87,.3);
+  --ok:#047857; --ok-soft:rgba(4,120,87,.08); --ok-line:rgba(4,120,87,.3);
+  --btn:#111827; --btn-ink:#f9fafb;
+  --warn:#8a600b; --warn-ink:#ffffff; --warn-soft:rgba(245,158,11,.12); --warn-line:rgba(245,158,11,.45);
   --bad:#b2493f; --bad-soft:rgba(178,73,63,.08); --bad-line:rgba(178,73,63,.3);
-  --info:#33698f;
-  --sel:rgba(64,104,140,.16);
-  --shadow:0 12px 30px rgba(24,28,34,.12);
-  --a0:#2a7295; --a1:#6a5bb8; --a2:#82610e; --a3:#2b7a5b; --a4:#a34a76;
-  --diff-add:#1f6b47; --diff-add-bg:rgba(55,129,93,.1);
+  --info:#2d6787;
+  --sel:rgba(4,120,87,.14);
+  --shadow:0 20px 40px -15px rgba(0,0,0,.07);
+  --a0:#2a7295; --a1:#6a5bb8; --a2:#8a600b; --a3:#047857; --a4:#a34a76;
+  --diff-add:#116b4c; --diff-add-bg:rgba(4,120,87,.1);
   --diff-del:#9c3b32; --diff-del-bg:rgba(178,73,63,.1);
   --gh-bg:#24292f; --gh-ink:#ffffff; --gh-line:#24292f;
 }
@@ -86,6 +89,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:dark;
   --bg:#0d1119; --panel:#131826; --panel2:#171d2e; --raise:#1c2436;
   --line:#212c45; --line2:#2e3c5c;
+  --frame:#3b4a68;
   --ink:#d5dcec; --dim:#8a94ad; --faint:#5c6680;
   --accent:#89a8dd; --accent-ink:#0a1426;
   --accent-soft:rgba(137,168,221,.1); --accent-line:rgba(137,168,221,.34);
@@ -106,6 +110,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:light;
   --bg:#f4f2ee; --panel:#fbfaf8; --panel2:#f3f1ec; --raise:#ffffff;
   --line:#e5e2da; --line2:#cdc8bc;
+  --frame:#23251f;
   --ink:#25241f; --dim:#68655c; --faint:#848076;
   --accent:#54755f; --accent-ink:#ffffff;
   --accent-soft:rgba(84,117,95,.09); --accent-line:rgba(84,117,95,.3);
@@ -126,6 +131,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:dark;
   --bg:#141110; --panel:#1a1614; --panel2:#1f1a18; --raise:#26201d;
   --line:#2b2420; --line2:#3c332d;
+  --frame:#4a3a33;
   --ink:#e0d8d2; --dim:#a3968c; --faint:#71675e;
   --accent:#cd8478; --accent-ink:#26100b;
   --accent-soft:rgba(205,132,120,.1); --accent-line:rgba(205,132,120,.34);
@@ -146,6 +152,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:dark;
   --bg:#131110; --panel:#191613; --panel2:#1e1a16; --raise:#251f1a;
   --line:#2a241d; --line2:#3b3227;
+  --frame:#453928;
   --ink:#e0d9cf; --dim:#a2978a; --faint:#70685c;
   --accent:#c69566; --accent-ink:#241304;
   --accent-soft:rgba(198,149,102,.1); --accent-line:rgba(198,149,102,.34);
@@ -166,6 +173,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:light;
   --bg:#f4f1e8; --panel:#fbf9f3; --panel2:#f2efe5; --raise:#ffffff;
   --line:#e6e1d1; --line2:#cec6ad;
+  --frame:#262115;
   --ink:#26221a; --dim:#6d675a; --faint:#8a8170;
   --accent:#776334; --accent-ink:#ffffff;
   --accent-soft:rgba(119,99,52,.09); --accent-line:rgba(119,99,52,.3);
@@ -186,6 +194,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:light;
   --bg:#eff2f5; --panel:#f9fafc; --panel2:#f0f3f7; --raise:#ffffff;
   --line:#e0e4ea; --line2:#c3cad6;
+  --frame:#15202c;
   --ink:#1d242d; --dim:#5a6472; --faint:#7a8594;
   --accent:#44709a; --accent-ink:#ffffff;
   --accent-soft:rgba(68,112,154,.08); --accent-line:rgba(68,112,154,.3);
@@ -206,6 +215,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:light;
   --bg:#f2f1f7; --panel:#fafafc; --panel2:#f2f1f8; --raise:#ffffff;
   --line:#e3e1ee; --line2:#cac7dd;
+  --frame:#201e2c;
   --ink:#232130; --dim:#615e75; --faint:#807c93;
   --accent:#6b64ae; --accent-ink:#ffffff;
   --accent-soft:rgba(107,100,174,.08); --accent-line:rgba(107,100,174,.3);
@@ -226,6 +236,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
   color-scheme:dark;
   --bg:#121016; --panel:#17141d; --panel2:#1c1823; --raise:#231e2c;
   --line:#282232; --line2:#382f47;
+  --frame:#3c3150;
   --ink:#ddd6e6; --dim:#998fad; --faint:#6a6179;
   --accent:#a892d2; --accent-ink:#1c0f30;
   --accent-soft:rgba(168,146,210,.1); --accent-line:rgba(168,146,210,.34);
@@ -249,8 +260,8 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
 ::-webkit-scrollbar-track{background:transparent}
 ::selection{background:var(--sel)}
 body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.55 var(--sans);
-  -webkit-font-smoothing:antialiased;--sidebar-w:16rem}
-h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.012em}
+  -webkit-font-smoothing:antialiased;--sidebar-w:13.75rem}
+h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.02em}
 h2{margin:0;font-size:14.5px;font-weight:650;letter-spacing:-.005em}
 h3{margin:0;font-size:13px;font-weight:600}
 p{margin:.45rem 0}
@@ -269,7 +280,7 @@ button.ghost{background:transparent;border-color:transparent;color:var(--dim)}
 button.ghost:hover{background:var(--panel2);color:var(--ink)}
 
 input,textarea,select{font:13px/1.45 var(--sans);width:100%;padding:.5rem .65rem;
-  border-radius:var(--radius-s);border:1px solid var(--line2);background:var(--panel);color:var(--ink)}
+  border-radius:var(--radius-s);border:1px solid var(--line2);background:var(--panel2);color:var(--ink)}
 input.mono{font-family:var(--mono);font-size:12px}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 textarea{min-height:12rem;resize:vertical}
@@ -277,7 +288,7 @@ label>b{display:block;margin-bottom:.3rem;font-size:12px;font-weight:600}
 ::placeholder{color:var(--faint)}
 
 code,pre,.mono{font-family:var(--mono);font-size:12px}
-pre{overflow:auto;background:var(--panel);border:1px solid var(--line);
+pre{overflow:auto;background:var(--panel2);border:1px solid var(--line);
   border-radius:var(--radius-s);padding:.8rem .9rem;margin:0;line-height:1.55}
 .muted{color:var(--dim)}
 .faint{color:var(--faint)}
@@ -306,7 +317,7 @@ pre{overflow:auto;background:var(--panel);border:1px solid var(--line);
 .led.bad{background:var(--bad)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
 
-.note{border:1px solid var(--line);border-left:2px solid var(--accent);background:var(--panel);
+.note{border:1px solid var(--line);border-left:2px solid var(--accent);background:var(--panel2);
   padding:.6rem .8rem;border-radius:var(--radius-s);font-size:12.5px}
 .note.warn{border-left-color:var(--warn);background:var(--warn-soft)}
 .note.bad{border-left-color:var(--bad);background:var(--bad-soft)}
@@ -323,9 +334,9 @@ th{font:600 10px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;co
 .shell.collapsed{grid-template-columns:minmax(0,1fr)}
 .shell.collapsed #sidebar{display:none}
 .shell.collapsed .chat-header{padding-left:3.2rem}
-.shell.in-session .side-cta,.shell.in-session #ctx{display:none}
+.side-item.on{background:var(--panel2);color:var(--ink)}
 #sidebar{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:.85rem;
-  padding:.85rem .7rem .7rem;background:var(--panel);
+  padding:.85rem .7rem .7rem;background:transparent;
   overflow:hidden;min-width:0}
 .side-head{display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:0 .3rem}
 .brand{font:650 13.5px/1 var(--sans);letter-spacing:.01em;display:inline-flex;align-items:center;gap:.5rem}
@@ -393,27 +404,31 @@ details.menu>div>button:hover{background:var(--panel2)}
 .share-link{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-s);
   padding:.45rem .6rem;font:600 12.5px var(--mono);color:var(--accent);text-align:center;letter-spacing:.02em}
 
-/* ------------------------------------------------------------------ pages */
-.wrap{max-width:62rem;margin:0 auto;padding:2.2rem 2.2rem 4rem}
-.wrap.session-app{max-width:none;margin:0;padding:0}
+/* ------------------------------------------------------------------ pages
+   The workspace floats as a distinct volume on the canvas: one bordered,
+   softly-shadowed panel, centered. The session view stays full-bleed. */
+.wrap{max-width:54rem;margin:1.7rem auto 3rem;padding:2.1rem 2.4rem 2.5rem;background:var(--panel);
+  border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}
+.wrap.session-app{max-width:none;margin:0;padding:0;background:transparent;border:0;
+  border-radius:0;box-shadow:none}
 .page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem;margin-bottom:1.4rem}
 .page-head .row button{white-space:nowrap}
 .page-head .sub{font-size:12.5px;color:var(--dim);margin-top:.4rem;max-width:44rem}
 .section-head{display:flex;align-items:center;gap:.7rem;margin:2rem 0 .7rem}
 .section-head::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
-.hero{max-width:34rem;margin:16vh auto 0}
+.hero{max-width:34rem;margin:3.5rem auto 2.5rem}
 
 /* home: an attention strip, then the start surface */
 .attn{display:grid;gap:.35rem;margin-bottom:2rem}
 .attn-row{display:flex;align-items:center;gap:.7rem;padding:.6rem .95rem;min-width:0;
-  background:var(--panel);border-radius:12px}
+  background:var(--panel2);border-radius:12px}
 .attn-row b{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .attn-row .side-meta{font:11px var(--mono);color:var(--faint)}
 .attn-row button{margin-left:auto;flex:none}
 .wf-grid{display:grid;gap:.25rem;margin-top:.2rem}
 .wf-row{display:flex;align-items:center;gap:1rem;padding:.7rem .95rem;min-width:0;
   border-radius:12px;transition:background-color .12s ease}
-.wf-row:hover{background:var(--panel)}
+.wf-row:hover{background:var(--panel2)}
 .wf-main{min-width:0;flex:1;cursor:pointer;border:0;background:none;text-align:left;padding:0;font:inherit;color:inherit}
 .wf-main b{font-size:13px;font-weight:600}
 .workflow-chain{font:11.5px var(--mono);color:var(--faint);margin-top:.25rem;overflow:hidden;
@@ -428,7 +443,7 @@ details.menu>div>button:hover{background:var(--panel2)}
 .conn-list{display:grid;gap:.15rem}
 .conn-row{display:flex;align-items:center;gap:.6rem;padding:.5rem .95rem;min-width:0;
   border-radius:10px;transition:background-color .12s ease}
-.conn-row:hover{background:var(--panel)}
+.conn-row:hover{background:var(--panel2)}
 .conn-row b{font-weight:600;flex:none}
 .conn-row .conn-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:12px;color:var(--faint)}
@@ -438,14 +453,20 @@ details.menu>div>button:hover{background:var(--panel2)}
    the current one is expanded, upcoming ones are titles only */
 .asks{max-width:46rem}
 .ask{padding:.65rem .2rem}
-.ask.on{background:var(--panel);border-radius:16px;padding:1.15rem 1.3rem 1.25rem;margin:.4rem 0}
+.ask.on{background:var(--panel);border:1px solid var(--frame);border-radius:14px;
+  padding:1.5rem;margin:.5rem 0;animation:ask-in .18s ease-out;
+  box-shadow:0 14px 30px -20px rgba(0,0,0,.3)}
+@keyframes ask-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .ask-head{display:flex;align-items:baseline;gap:.7rem;min-width:0}
 .ask-num{font:600 10.5px var(--mono);color:var(--faint);flex:none;width:1.3rem}
 .ask-q{font-size:13.5px;font-weight:650;letter-spacing:-.005em}
 .ask.todo .ask-q,.ask.todo .ask-num{color:var(--faint);font-weight:500}
-.ask.on textarea,.ask.on input,.ask.on select{background:var(--bg)}
-.ask.on .choice{background:var(--bg)}
-.ask.on .choice:hover{background:var(--panel2)}
+/* completed steps read as single-line monospace breadcrumbs */
+.ask-check{color:var(--ok);font-size:11px;flex:none}
+.ask.done .ask-q{font:600 11.5px var(--mono);color:var(--dim);letter-spacing:.02em}
+.ask.done .ask-answer,.ask.done .ask-answer b{font:500 11.5px var(--mono)}
+.ask.on .choice{background:var(--panel2)}
+.ask.on .choice:hover{background:var(--panel2);border-color:var(--line2)}
 .ask.on .choice.on{background:var(--accent-soft)}
 .ask-answer{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:12.5px;color:var(--dim);margin-left:auto;text-align:right}
@@ -506,12 +527,22 @@ details.adv summary:hover{color:var(--ink)}
 /* preflight: one flat surface — status, agent checklist, isolated action bar */
 .preflight{max-width:46rem}
 .statusline{display:flex;gap:.7rem;align-items:baseline;padding:.6rem .85rem;margin-top:1rem;
-  background:var(--panel);border-radius:12px}
+  background:var(--panel2);border-radius:12px}
 .statusline b{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
 .checklist{margin-top:.7rem}
 .check-row{display:flex;gap:.9rem;padding:.7rem 0;align-items:flex-start}
 .check-status{flex:none;width:8.5rem;padding-top:.1rem}
 .check-main{min-width:0;flex:1}
+/* luminescent status nodes: avatar + ambient connection beacon */
+.agent-avatar{position:relative;flex:none;width:30px;height:30px;border-radius:50%;
+  background:var(--panel2);border:1px solid var(--line2);display:inline-flex;align-items:center;
+  justify-content:center;font:650 12px var(--sans);color:var(--dim);text-transform:uppercase}
+.beacon{position:absolute;right:-2px;bottom:-2px;width:8px;height:8px;border-radius:50%;
+  background:var(--line2);border:2px solid var(--panel)}
+.beacon.ok{background:var(--ok)}
+.beacon.bad{background:var(--bad)}
+.beacon.warn{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft);
+  animation:pulse 1.6s ease-in-out infinite}
 .check-main pre{margin-top:.5rem;white-space:pre-wrap;word-break:break-word;background:var(--bg);max-height:16rem}
 .check-main details.adv{margin-top:.35rem}
 .actionbar{margin-top:.5rem;padding-top:.7rem}
@@ -537,12 +568,19 @@ details.adv summary:hover{color:var(--ink)}
   background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius-s)}
 
 /* ---------------------------------------------------------------- session
-   The sidebar carries the session rail; the main column is the conversation. */
-.session-rail{display:flex;flex-direction:column;gap:.9rem;flex:1;min-height:0}
+   Conversation in the center; a collapsible right telemetry rail carries the
+   session's status, gates, tools, team, and controls. The left rail stays
+   global navigation. */
+.session-layout{display:grid;grid-template-columns:minmax(0,1fr) 16.25rem;height:100vh;background:var(--bg)}
+.session-layout.rail-hidden{grid-template-columns:minmax(0,1fr)}
+.session-layout.rail-hidden .session-rail-side{display:none}
+.session-rail-side{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;
+  overflow-x:hidden;padding:1rem .9rem;min-width:0}
+.session-rail{display:flex;flex-direction:column;gap:.9rem;min-height:100%}
 .rail-title{font-size:13.5px;font-weight:650;line-height:1.35}
 .rail-status{font:11.5px var(--mono);color:var(--dim);display:flex;align-items:center;gap:.45rem;padding:0 .1rem}
 .rail-clock{font-size:11.5px;color:var(--dim);margin-top:-.55rem;letter-spacing:.02em;padding:0 .1rem}
-.rail-progress{display:grid;gap:.4rem;padding:.6rem .7rem;background:var(--bg);border-radius:10px}
+.rail-progress{display:grid;gap:.4rem;padding:.6rem .7rem;background:var(--panel2);border-radius:10px}
 .rail-progress-line{display:flex;justify-content:space-between;gap:.5rem;
   font:600 10px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
 .rail-progress-line b{color:var(--ink);font-family:var(--mono)}
@@ -557,7 +595,7 @@ details.adv summary:hover{color:var(--ink)}
 .rail-team{padding-top:.75rem;margin-top:auto}
 .team-line{display:flex;align-items:center;justify-content:space-between;gap:.45rem;
   font-size:12px;padding:.18rem .1rem}
-.team-line [data-team-state]{font:11px var(--mono);color:var(--faint)}
+.team-line [data-team-state]{font:11px var(--mono);color:var(--faint);transition:color .2s ease}
 .presence{display:inline-flex;align-items:center;gap:.45rem;min-width:0;
   font:11.5px var(--mono);overflow:hidden;text-overflow:ellipsis}
 .presence i{width:6px;height:6px;border-radius:50%;background:var(--line2);display:inline-block;flex:none}
@@ -576,7 +614,7 @@ details.adv summary:hover{color:var(--ink)}
   border-color:var(--ok-line);color:var(--ok);font-weight:650}
 .rail-controls .control-stop{color:var(--bad);border-color:var(--bad-line)}
 
-.conversation-shell{position:relative;min-width:0;min-height:100vh;height:100vh;display:grid;
+.conversation-shell{position:relative;min-width:0;min-height:0;height:100%;display:grid;
   grid-template-rows:auto minmax(0,1fr);background:var(--bg)}
 .chat-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;
   padding:.7rem clamp(1.25rem,3vw,2.5rem);border-bottom:1px solid var(--line);background:var(--panel)}
@@ -595,10 +633,12 @@ details.adv summary:hover{color:var(--ink)}
 .msg.system .who{color:var(--faint)}
 .msg .to{font:600 10.5px var(--mono);letter-spacing:.05em;color:var(--faint)}
 .msg .when{margin-left:auto;font-size:10.5px;color:var(--faint)}
-.msg .body{margin-top:.3rem;line-height:1.6;font-size:13.5px;white-space:normal;overflow-wrap:anywhere}
+.msg .body{margin-top:.3rem;line-height:1.6;font-size:14px;white-space:normal;overflow-wrap:anywhere}
 .msg.system .body{color:var(--dim);font-size:12.5px}
 .who.a0{color:var(--a0)}.who.a1{color:var(--a1)}.who.a2{color:var(--a2)}.who.a3{color:var(--a3)}.who.a4{color:var(--a4)}
-.handoff{margin:.5rem 0 0;font:650 10px var(--mono);letter-spacing:.08em;color:var(--accent)}
+.handoff{margin:.6rem 0 0;font:650 10px var(--mono);letter-spacing:.08em;color:var(--accent);
+  display:flex;align-items:center;gap:.7rem;max-width:56rem}
+.handoff::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--accent-line),transparent)}
 .response-state{margin-top:.4rem;font:650 10px var(--mono);letter-spacing:.07em;color:var(--faint)}
 .decision-actions{display:flex;gap:.7rem;margin-top:.6rem;align-items:center;flex-wrap:wrap;
   justify-content:space-between;border:1px solid var(--warn-line);background:var(--warn-soft);
@@ -633,8 +673,9 @@ details.adv summary:hover{color:var(--ink)}
 .feed-lines{display:grid;gap:.16rem;max-height:12rem;overflow-y:auto}
 .feed-line{font-size:12.5px;line-height:1.45;overflow-wrap:anywhere;min-width:0}
 .feed-line.thinking{color:var(--dim);font-style:italic}
-.feed-line.command,.feed-line.file{font-family:var(--mono);font-size:11.5px}
-.feed-line.file{color:var(--dim)}
+.feed-line.command{font-family:var(--mono);font-size:11.5px;background:var(--bg);
+  border:1px solid var(--line);border-radius:8px;padding:.4rem .65rem;margin:.15rem 0}
+.feed-line.file{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
 .feed-line.tool{color:var(--dim)}
 .feed-line.error{color:var(--bad)}
 .feed-line.compaction{padding:.12rem 0}
@@ -721,17 +762,19 @@ pre.diff{background:var(--bg)}
 
 /* --------------------------------------------------------------- responsive */
 @media(max-width:940px){
-  .wrap{padding:1.6rem 1.4rem 3rem}
+  .wrap{margin:1rem;padding:1.6rem 1.4rem 2rem}
 }
 @media(max-width:760px){
   .shell{display:block}
   #sidebar{position:fixed;left:0;top:0;bottom:0;width:min(19rem,86vw);z-index:55;
-    border-right:1px solid var(--line2);box-shadow:var(--shadow)}
+    background:var(--panel);border-right:1px solid var(--line2);box-shadow:var(--shadow)}
   .shell.collapsed #sidebar{display:none}
-  .wrap{padding:2.6rem 1rem 3rem}
+  .wrap{margin:0;padding:2.6rem 1rem 3rem;background:transparent;border:0;border-radius:0;box-shadow:none}
   .wrap.session-app{padding:0}
   .page-head{flex-direction:column;align-items:flex-start}
-  .conversation-shell{min-height:100vh}
+  .session-layout{height:100vh}
+  .session-layout:not(.rail-hidden) .session-rail-side{position:fixed;right:0;top:0;bottom:0;
+    width:min(17rem,88vw);z-index:50;box-shadow:var(--shadow);border-left:1px solid var(--line2)}
   .message-list,.live-work,.live-feed,.chat-compose,.chat-header,.inspector-head{padding-left:1rem;padding-right:1rem}
   .chat-header{padding-left:3rem}
   .details-panel{padding:1rem 1rem 2rem}
@@ -924,13 +967,13 @@ const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flas
    origin, and swaps the token set via data-theme. "System" clears the choice
    and follows the OS. */
 const THEMES = [
-  {key: "", label: "System", swatch: ["#101214", "#f1f1ef"]},
-  {key: "terminal", label: "Terminal", swatch: ["#101214", "#8fb2cc"]},
+  {key: "", label: "System", swatch: ["#0b0c0e", "#f9f9fb"]},
+  {key: "terminal", label: "Terminal", swatch: ["#0b0c0e", "#10b981"]},
   {key: "midnight", label: "Midnight", swatch: ["#0d1119", "#89a8dd"]},
   {key: "ember", label: "Ember", swatch: ["#141110", "#cd8478"]},
   {key: "copper", label: "Copper", swatch: ["#131110", "#c69566"]},
   {key: "orchid", label: "Orchid", swatch: ["#121016", "#a892d2"]},
-  {key: "daylight", label: "Daylight", swatch: ["#f1f1ef", "#40688c"]},
+  {key: "daylight", label: "Daylight", swatch: ["#f9f9fb", "#047857"]},
   {key: "sage", label: "Sage", swatch: ["#f4f2ee", "#54755f"]},
   {key: "solar", label: "Solar", swatch: ["#f4f1e8", "#776334"]},
   {key: "harbor", label: "Harbor", swatch: ["#eff2f5", "#44709a"]},
@@ -972,7 +1015,8 @@ const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null,
             workflowName:"", workflowOriginal:"", workflowAgents:null,
             workflowPermissions:null, workflowDeadline:"", update:null, dismissedTimebox:null,
-            worktreeChoices:null, worktreeLoading:null, sidebarCollapsed:false, returnToQuick:false,
+            worktreeChoices:null, worktreeLoading:null, sidebarCollapsed:false, railCollapsed:false,
+            returnToQuick:false,
             openFileCards:new Set(), fileCardCache:new Map() };
 const app = () => document.getElementById("app");
 
@@ -1004,10 +1048,8 @@ function toggleSidebar(collapsed) {
 function renderSideContext() {
   const box = document.getElementById("side-context");
   if (!box) return;
-  document.getElementById("shell").classList.toggle("in-session", S.view === "session");
   document.querySelectorAll(".side-nav button").forEach(button =>
     button.classList.toggle("on", S.view === "home" && button.id === "nav-home"));
-  if (S.view === "session" && S.dash) { renderSessionRail(box); return; }
   box.innerHTML = "";
   if (!S.boot) return;
   const workflows = S.boot.presets || [];
@@ -1033,7 +1075,8 @@ function renderSideContext() {
   for (const s of visible) {
     const done = ["complete","timed_out","stopped","failed"].includes(s.status);
     const led = s.status === "active" ? "live" : (done ? "" : "warn");
-    const row = $(`<div class="side-row"><button class="side-item" title="${esc(s.name)} · ${esc(s.repository.name)} · ${esc(s.status.replace("_", " "))}"><i class="led ${led}"></i><b>${esc(s.name)}</b><span class="side-meta">${esc(String(s.created_at || "").slice(5, 10))}</span></button>
+    const open = s.session_id === S.session;
+    const row = $(`<div class="side-row"><button class="side-item${open ? " on" : ""}" title="${esc(s.name)} · ${esc(s.repository.name)} · ${esc(s.status.replace("_", " "))}"><i class="led ${led}"></i><b>${esc(s.name)}</b><span class="side-meta">${esc(String(s.created_at || "").slice(5, 10))}</span></button>
       <details class="menu workflow-menu"><summary aria-label="Session options">⋯</summary><div>
         <button data-open>Open</button>
         <button data-new>New session in this repo</button>
@@ -1604,6 +1647,7 @@ async function quickStart(selectedWorkflow) {
       intent: "build",
       briefDone: false,
       teamDone: false,
+      deadlineCustom: false,
       editStep: null,
     };
     S.worktreeChoices = null;
@@ -1862,10 +1906,10 @@ function renderQuick() {
     : [];
   const existingTree = worktrees.find(tree => tree.path === q.existing_worktree_path);
   const steps = [
-    {key: "repo", question: "What are we working on?",
+    {key: "repo", question: "What are we working on?", short: "Repo",
      answered: !!q.repo_path,
      answer: q.repo_path ? `<b title="${esc(q.repo_path)}">${esc(repoName)}</b>` : ""},
-    {key: "workspace", question: "Where should the agents work?",
+    {key: "workspace", question: "Where should the agents work?", short: "Workspace",
      answered: planIntent || !!q.workspace_choice,
      // Planning supersedes the workspace pick: a disposable read-only
      // planning workspace is managed for you. The earlier answer is kept
@@ -1875,12 +1919,12 @@ function renderQuick() {
        : q.workspace_choice === "new" ? `<b>New isolated worktree</b>`
        : q.workspace_choice === "existing" ? `<b>${esc(existingTree?.name || "existing worktree")}</b>`
        : `<span class="faint">choose a workspace</span>`},
-    {key: "brief", question: "What do you want done?",
+    {key: "brief", question: "What do you want done?", short: "Brief",
      answered: q.briefDone && !!q.goal.trim(),
      answer: q.goal.trim()
        ? `<span>${esc((q.goal.trim().split("\n").find(Boolean) || "").slice(0, 90))}</span>${planIntent ? ` <span class="faint">· plan first</span>` : ""}`
        : ""},
-    {key: "team", question: "Who should work on it?",
+    {key: "team", question: "Who should work on it?", short: "Team",
      answered: q.teamDone,
      answer: `<span class="mono">${esc(chain)}</span>${q.deadline.trim() ? ` <span class="faint">· ${esc(q.deadline.trim())}</span>` : ""}`},
     {key: "ready", question: "Ready.", answered: false, answer: ""},
@@ -2032,7 +2076,10 @@ function renderQuick() {
     for (const blocked of planningBlockers) {
       body.append($(`<div class="note warn small"><b>${esc(blocked.label)}</b> has no planning support in this Synchri version — planning needs a runtime with a read-only planning workspace.</div>`));
     }
-    body.append($(`<div class="row"><input id="quick-deadline" value="${esc(q.deadline||"")}" placeholder="timebox — e.g. 2 hours" style="max-width:16rem"></div>`));
+    const TIMEBOX_CHOICES = [["", "Open"], ["30 minutes", "30m"], ["1 hour", "1h"], ["2 hours", "2h"]];
+    body.append($(`<div class="row" style="gap:.6rem"><div class="seg timebox-seg">${TIMEBOX_CHOICES.map(([value, label]) =>
+      `<button type="button" data-tb="${esc(value)}" class="${!q.deadlineCustom && q.deadline.trim() === value ? "on" : ""}">${label}</button>`).join("")}<button type="button" data-tb="custom" class="${q.deadlineCustom ? "on" : ""}">Custom</button></div>
+      ${q.deadlineCustom ? `<input id="quick-deadline" value="${esc(q.deadline||"")}" placeholder="e.g. 2h30m" style="max-width:9rem">` : ""}</div>`));
     body.append($(`<div class="small faint">The clock starts when collaboration begins, and never ends the work by itself.</div>`));
     const foot = $(`<div class="ask-foot"><button class="primary" id="team-continue"${planningBlockers.length ? ` disabled title="Planning needs runtimes with planning support"` : ""}>Continue</button></div>`);
     body.append(foot);
@@ -2043,7 +2090,13 @@ function renderQuick() {
       S.returnToQuick = true;
       configureWorkflow(q.preset);
     });
-    body.querySelector("#quick-deadline").oninput = event => { q.deadline = event.target.value; };
+    body.querySelectorAll("[data-tb]").forEach(button => button.onclick = () => {
+      if (button.dataset.tb === "custom") q.deadlineCustom = true;
+      else { q.deadlineCustom = false; q.deadline = button.dataset.tb; }
+      renderQuick();
+    });
+    const customTimebox = body.querySelector("#quick-deadline");
+    if (customTimebox) customTimebox.oninput = event => { q.deadline = event.target.value; };
     foot.querySelector("#team-continue").onclick = () => { q.teamDone = true; q.editStep = null; renderQuick(); };
     return body;
   };
@@ -2102,12 +2155,12 @@ function renderQuick() {
   steps.forEach((step, index) => {
     const state = step.key === current ? "on" : (step.answered ? "done" : "todo");
     const section = $(`<section class="ask ${state}" data-ask="${step.key}"></section>`);
-    const head = $(`<div class="ask-head"><span class="ask-num">${String(index + 1).padStart(2, "0")}</span>
-      <span class="ask-q">${esc(step.question)}</span></div>`);
+    const head = $(`<div class="ask-head">${state === "done" ? `<span class="ask-check">✓</span>` : ""}<span class="ask-num">${String(index + 1).padStart(2, "0")}</span>
+      <span class="ask-q">${esc(state === "done" && step.short ? step.short : step.question)}</span></div>`);
     if (state === "done") {
       head.append($(`<span class="ask-answer">${step.answer}</span>`));
       if (!step.locked) {
-        const change = $(`<button class="ask-change" type="button">Change</button>`);
+        const change = $(`<button class="ask-change" type="button">Edit</button>`);
         change.onclick = () => { q.editStep = step.key; renderQuick(); };
         head.append(change);
       }
@@ -2198,7 +2251,11 @@ function renderLaunch() {
       }
       const failure = agent.join_phase === "failed" && agent.join_detail
         ? `<div class="small" style="margin-top:.3rem;color:var(--bad)">${esc(agent.join_detail)}</div>` : "";
+      const beacon = agent.join_phase === "ready" || (agent.joined && agent.acknowledged) ? "ok"
+        : agent.join_phase === "failed" ? "bad"
+        : (agent.join_phase || agent.joined) ? "warn" : "";
       list.append($(`<div class="check-row"><div class="check-status">${status}</div>
+        <div class="agent-avatar">${esc((agent.name || "?")[0])}<i class="beacon ${beacon}"></i></div>
         <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
         <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>${failure}</div></div>`));
     }
@@ -2256,10 +2313,12 @@ function renderExternalSetup(l) {
     const status = agent.joined
       ? (agent.acknowledged ? `<span class="pill ok">ready</span>` : `<span class="pill warn">reading agreement</span>`)
       : `<span class="pill dim">not connected</span>`;
+    const beacon = agent.joined ? (agent.acknowledged ? "ok" : "warn") : "";
     const row = $(`<div class="check-row"><div class="check-status">${status}</div>
+      <div class="agent-avatar">${esc((agent.name || "?")[0])}<i class="beacon ${beacon}"></i></div>
       <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
         <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>
-        <details class="adv" ${agent.joined ? "" : "open"}><summary class="small muted">Setup prompt</summary>
+        <details class="adv" ${agent.joined ? "" : "open"}><summary class="small muted">Manual connection fallback</summary>
           <pre>${esc(agent.setup_prompt)}</pre>
           <div class="row" style="margin-top:.55rem"><button class="primary" data-copy>Copy for ${esc(agent.name)}</button></div>
         </details></div></div>`);
@@ -2648,7 +2707,14 @@ function stepReview() {
 async function openSession(id) {
   app().classList.add("session-app");
   S.view = "session"; S.session = id;
-  S.dash = await api("dashboard?session=" + encodeURIComponent(id));
+  if (isNarrow()) S.railCollapsed = true;
+  // Refresh the sidebar's lists too, so a session created moments ago shows
+  // up (and highlights) in Recent sessions.
+  const [boot, dash] = await Promise.all([
+    api("bootstrap"),
+    api("dashboard?session=" + encodeURIComponent(id)),
+  ]);
+  S.boot = boot; S.dash = dash;
   S.tab = S.dash.session.status === "awaiting_ack" ? "contract" : "conversation";
   renderSession();
   listen();
@@ -2820,13 +2886,22 @@ function renderSession() {
   const d = S.dash, s = d.session, g = d.gates.summary;
   app().innerHTML = "";
   renderSideContext();
-  const layout = $(`<main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
+  const layout = $(`<div class="session-layout${S.railCollapsed ? " rail-hidden" : ""}"><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
       <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.worktree?.branch || s.repository.base_branch || "")}</div></div>
-      <div class="chat-time"><span id="chat-gates">${esc(g.satisfied + "/" + g.required)}</span> gates verified</div></div>
+      <div class="row" style="flex-wrap:nowrap;gap:.8rem"><div class="chat-time"><span id="chat-gates">${esc(g.satisfied + "/" + g.required)}</span> gates verified</div>
+      <button class="ghost" id="rail-toggle" aria-controls="session-rail" aria-expanded="${S.railCollapsed ? "false" : "true"}">Details</button></div></div>
       <div id="conversation-panel" class="conversation-feed"><span class="muted small" style="padding:1rem clamp(1.25rem,3vw,2.5rem)">Loading conversation…</span></div>
       <section id="detail-wrap" class="inspector hide"><div class="inspector-head"><div class="detail-heading" id="detail-heading"></div><button class="detail-close">Close</button></div>
-      <section id="detail-panel" class="details-panel"></section></section></main>`);
+      <section id="detail-panel" class="details-panel"></section></section></main>
+      <aside class="session-rail-side" id="session-rail" aria-label="Session telemetry"></aside></div>`);
   app().append(layout);
+  renderSessionRail(document.getElementById("session-rail"));
+  const railToggle = document.getElementById("rail-toggle");
+  railToggle.onclick = () => {
+    S.railCollapsed = !S.railCollapsed;
+    layout.classList.toggle("rail-hidden", S.railCollapsed);
+    railToggle.setAttribute("aria-expanded", S.railCollapsed ? "false" : "true");
+  };
   paint("conversation", document.getElementById("conversation-panel"))
     .catch(error => document.getElementById("conversation-panel").innerHTML = `<span class="muted">${esc(error.message)}</span>`);
   if (S.tab !== "conversation") {

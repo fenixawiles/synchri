@@ -1914,15 +1914,19 @@ def test_the_shell_is_a_global_collapsible_sidebar():
     assert 'id="theme-menu"' in source and 'id="app-update"' in source
 
 
-def test_the_sidebar_carries_workflows_recent_sessions_and_the_session_rail():
+def test_the_sidebar_stays_global_beside_a_right_telemetry_rail():
     from pathlib import Path
 
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
     assert "function renderSideContext(" in source
     assert "function renderSessionRail(" in source
-    # Inside a session the sidebar becomes that session's rail.
-    assert 'if (S.view === "session" && S.dash) { renderSessionRail(box); return; }' in source
-    # Browsing shows workflows and the compact recent-session list instead.
+    # The session's telemetry (status, gates, tools, team, controls) lives in
+    # a collapsible right rail; the left rail keeps global navigation.
+    assert 'id="session-rail"' in source
+    assert "session-rail-side" in source
+    assert 'renderSessionRail(document.getElementById("session-rail"))' in source
+    assert 'id="rail-toggle"' in source
+    # Browsing shows workflows and the compact recent-session list.
     assert "Show all ${list.length} sessions" in source
     assert "S.showAllSessions ? list : list.slice(0, 6)" in source
 
@@ -1937,7 +1941,7 @@ def test_the_chrome_is_neutral_ink_with_semantic_color():
     assert "button.primary{background:var(--btn);" in source
     assert ".pill.ok{background:var(--ok-soft);" in source
     root = re.search(r"\n:root\{(.*?)\n\}", source, re.S).group(1)
-    for token in ("--btn:", "--btn-ink:", "--ok:", "--ok-soft:", "--ok-line:"):
+    for token in ("--btn:", "--btn-ink:", "--ok:", "--ok-soft:", "--ok-line:", "--frame:"):
         assert token in root
     # The blinking terminal cursor is retired along with the terminal look.
     assert "cursorblink" not in source
@@ -1958,6 +1962,11 @@ def test_the_new_session_flow_asks_progressively():
     assert 'await api("start", {draft: "quick-plan"})' in source
     # Changing the repository invalidates the repository-scoped answers.
     assert "S.quick.workspace_choice = null;\n  S.quick.editStep = null;" in source
+    # The timebox is segmented pills, and raw connection prompts stay tucked
+    # inside a collapsed fallback drawer.
+    assert "TIMEBOX_CHOICES" in source and '["2 hours", "2h"]' in source
+    assert "data-tb=" in source
+    assert "Manual connection fallback" in source
 
 
 def test_the_quick_plan_route_creates_a_planning_session(ui, repo):

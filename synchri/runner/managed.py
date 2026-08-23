@@ -253,20 +253,22 @@ class ManagedRunnerRegistry:
         return self._spawn(record.session_id, "resuming", "Your reply reached the agents; continuing the session.")
 
     def restart(self, record: "SessionRecord") -> dict:
-        """Respawn supervision after the user restarts a dropped agent.
+        """Stop and respawn supervision for the same durable session.
 
-        Unlike ``resume``, this actively cancels a live worker first: the
-        point of Restart is a fresh invocation, not joining a wedged one.
+        The room, history, contract, worktree, and participant identities stay
+        untouched. Only the managed worker and its provider process groups are
+        replaced. A slow worker never causes a duplicate run: if it has not
+        stopped by the bounded join, the existing stopping state is returned.
         """
         if not self.readiness(record)["available"] or record.status != "active":
             return self.status(record.session_id)
+        self.cancel(record.session_id, reason="Restarting the session's agents.")
         with self._lock:
             thread = self._threads.get(record.session_id)
-            event = self._cancel.get(record.session_id)
         if thread is not None and thread.is_alive():
-            if event is not None:
-                event.set()
-            thread.join(timeout=4)
+            thread.join(timeout=6)
+        if thread is not None and thread.is_alive():
+            return self.status(record.session_id)
         return self._spawn(record.session_id, "resuming", "Restarting the agent team.")
 
     def restart_participant(self, record: "SessionRecord", name: str) -> dict:

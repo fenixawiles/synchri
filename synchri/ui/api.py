@@ -1147,7 +1147,7 @@ class Api:
         )
 
     def control(self, query: dict, body: dict) -> dict:
-        """Pause, resume, complete, stop, or reconfigure — the human's controls."""
+        """Pause, resume, restart, complete, stop, or reconfigure — human controls."""
         session_id = self._session_id(query, body)
         record = self.manager.get(session_id)
         action = body.get("action")
@@ -1161,6 +1161,29 @@ class Api:
             self.broker.resume_room(record.room_id, credential=credential)
             resumed = self.manager.resume(session_id)
             self.managed.resume(resumed)
+        elif action == "restart":
+            if record.status != "active":
+                raise ValidationError("Only an active session can be restarted. Resume it first.")
+            readiness = self.managed.readiness(record)
+            if not readiness["available"]:
+                raise ValidationError(
+                    "This session includes an agent Synchri cannot relaunch automatically. "
+                    "Restart that CLI from its setup prompt instead."
+                )
+            for plan in record.participants:
+                self.manager.set_participant_state(
+                    session_id, plan.name, "active", "session restarted by the user",
+                    reset_failures=True,
+                )
+                self.manager.bump_recovery_generation(session_id, plan.name, "restart")
+            for escalation in self.manager.open_escalations(session_id):
+                if escalation["rule"] in {
+                    "agent_failed", "agent_auth_failed", "agent_refused"
+                }:
+                    self.manager.resolve_escalation(
+                        escalation["escalation_id"], "session restarted by the user"
+                    )
+            self.managed.restart(record)
         elif action == "restart_agent":
             participant = (body.get("participant") or "").strip()
             plan = next((p for p in record.participants if p.name == participant), None)

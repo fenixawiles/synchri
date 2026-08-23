@@ -37,13 +37,6 @@ from ..errors import StateError
 # intentionally compiled into the client so every downloaded DMG can start the
 # device flow without a user supplying credentials or a Synchri web service.
 GITHUB_APP_CLIENT_ID = "Iv23liG9lp0zV1zzOPcn"
-# Repository access is a second, deliberately explicit decision. The GitHub
-# App install page is where a person chooses the account or organization and
-# the exact repositories Synchri may open. It does not grant an account login.
-# The public page must be enabled in the App registration before this link is
-# usable. Once it is, this canonical URL lets every desktop build send people
-# straight to the selected-repository screen without a separate web service.
-GITHUB_APP_INSTALL_URL = "https://github.com/apps/synchri/installations/new"
 # The GA calendar version GitHub documents for the REST API. Requesting an
 # unsupported version makes api.github.com reject every call with HTTP 400,
 # which this client surfaces as an empty repository list — so this constant

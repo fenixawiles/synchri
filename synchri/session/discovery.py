@@ -4,8 +4,9 @@ Two sources, both optional conveniences over the fully-supported "pick a
 directory" path:
 
 * **local** -- git repositories under the usual code directories;
-* **GitHub** -- repositories the person explicitly granted the Synchri GitHub
-  App access to, through its native device sign-in.
+* **GitHub** -- repositories visible to the signed-in person through Synchri's
+  native device sign-in. GitHub still limits private repositories to resources
+  the app token may access.
 
 GitHub credentials are a local detail of the desktop application.  They do not
 live in room state, are never sent to agents, and no `gh` installation is
@@ -22,6 +23,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from ..config import Workspace, resolve_workspace
@@ -32,7 +34,17 @@ GITHUB_TIMEOUT_SECONDS = 15.0
 SCAN_TIMEOUT_SECONDS = 5.0
 
 #: Where people keep code. Scanned shallowly; never recursive-everything.
-DEFAULT_SEARCH_ROOTS = ("~/code", "~/src", "~/projects", "~/dev", "~/repos", "~/work", "~/git")
+DEFAULT_SEARCH_ROOTS = (
+    "~/Desktop",
+    "~/Documents",
+    "~/code",
+    "~/src",
+    "~/projects",
+    "~/dev",
+    "~/repos",
+    "~/work",
+    "~/git",
+)
 MAX_DEPTH = 3
 MAX_RESULTS = 60
 
@@ -332,7 +344,7 @@ def github_status(workspace: Workspace | None = None) -> dict:
             "installed": True,
             "authenticated": True,
             "account": github_auth.account(active_workspace),
-            "message": "GitHub is signed in. Repository access is managed separately.",
+            "message": "GitHub is signed in. Synchri can browse the repositories this token may see.",
         }
     return {
         "installed": True,
@@ -369,31 +381,45 @@ def github_repositories(
     local: list[dict] | None = None,
     workspace: Workspace | None = None,
 ) -> list[dict]:
-    """Repositories explicitly accessible through the Synchri App installation."""
+    """Repositories visible to the signed-in GitHub App user token.
+
+    Listing through ``/user/repos`` keeps public repositories useful even
+    before a private-resource installation exists. The token itself remains
+    the authority: GitHub returns private repositories only when both the
+    person and the app are allowed to see them.
+    """
     token_bundle = github_auth.credentials(workspace or resolve_workspace().ensure())
     if not token_bundle:
         return []
     token = str(token_bundle.get("access_token") or "")
     if not token:
         return []
-    installations = _github_get("/user/installations?per_page=100", token).get("installations", [])
-    raw: list[dict] = []
-    for installation in installations if isinstance(installations, list) else []:
-        installation_id = installation.get("id") if isinstance(installation, dict) else None
-        if not installation_id:
-            continue
-        try:
-            page = _github_get(
-                f"/user/installations/{installation_id}/repositories?per_page={min(100, limit)}",
-                token,
-            )
-        except StateError:
-            continue
-        items = page.get("repositories", [])
-        if isinstance(items, list):
-            raw.extend(item for item in items if isinstance(item, dict))
-        if len(raw) >= limit:
-            break
+    primary_error: StateError | None = None
+    try:
+        page = _github_get(
+            "/user/repos?affiliation=owner,collaborator,organization_member"
+            f"&sort=updated&per_page={min(100, limit)}",
+            token,
+        )
+    except StateError as exc:
+        # Some GitHub App configurations do not grant the authenticated-user
+        # repository endpoint even though the user token may read public
+        # profile resources. Try that narrower, public-only feed below.
+        primary_error = exc
+        page = []
+    raw = [item for item in page if isinstance(item, dict)] if isinstance(page, list) else []
+    account = token_bundle.get("account") if isinstance(token_bundle, dict) else None
+    login = str(account.get("login") or "") if isinstance(account, dict) else ""
+    if not raw and login:
+        public_page = _github_get(
+            f"/users/{quote(login, safe='')}/repos?type=owner&sort=updated"
+            f"&per_page={min(100, limit)}",
+            token,
+        )
+        if isinstance(public_page, list):
+            raw = [item for item in public_page if isinstance(item, dict)]
+    elif primary_error is not None:
+        raise primary_error
 
     # A user can have the same repository reachable through more than one
     # installation.  The chooser should show it exactly once.
@@ -422,12 +448,12 @@ def github_repositories(
 
 
 def github_repository_access(workspace: Workspace | None = None) -> dict[str, Any]:
-    """Expose the explicit GitHub App grant state without listing repositories.
+    """Describe repository browsing without sending the user to a dead picker.
 
-    A GitHub sign-in identifies the person; the app installation is the second
-    choice that allows a person or organization to select repositories.  This
-    tiny endpoint lets the UI give that missing step a clear resolution instead
-    of silently displaying an empty list.
+    A signed-in user access token can read public resources even when the app
+    has no private-resource installation. The old public installation link was
+    not available and produced a GitHub 404, so repository browsing no longer
+    blocks on that external page.
     """
     token_bundle = github_auth.credentials(workspace or resolve_workspace().ensure())
     token = str((token_bundle or {}).get("access_token") or "")
@@ -435,25 +461,27 @@ def github_repository_access(workspace: Workspace | None = None) -> dict[str, An
         return {
             "authorized": False,
             "installations": 0,
-            "install_url": github_auth.GITHUB_APP_INSTALL_URL,
-            "message": "Choose the repositories Synchri may access in GitHub.",
+            "private_access": False,
+            "install_url": None,
+            "message": "Sign in with GitHub to browse repositories.",
         }
     payload = _github_get("/user/installations?per_page=100", token)
     installations = payload.get("installations", [])
     count = len(installations) if isinstance(installations, list) else 0
     return {
-        "authorized": count > 0,
+        "authorized": True,
         "installations": count,
-        "install_url": github_auth.GITHUB_APP_INSTALL_URL,
+        "private_access": count > 0,
+        "install_url": None,
         "message": (
-            "Repository access is ready."
+            "GitHub repository browsing is ready."
             if count
-            else "Choose the repositories Synchri may access in GitHub."
+            else "Public GitHub repositories are ready. Existing local checkouts work for private repositories."
         ),
     }
 
 
-def _github_get(path: str, token: str) -> dict[str, Any]:
+def _github_get(path: str, token: str) -> dict[str, Any] | list[Any]:
     request = Request(
         f"{github_auth.GITHUB_API_URL}{path}",
         headers={
@@ -489,7 +517,7 @@ def _github_get(path: str, token: str) -> dict[str, Any]:
             code="github_unavailable",
             resolution={"kind": "retry_github_login"},
         ) from exc
-    return value if isinstance(value, dict) else {}
+    return value if isinstance(value, (dict, list)) else {}
 
 
 def _matching_local_clone(full_name: str, *, local: list[dict] | None = None) -> str | None:
@@ -522,8 +550,9 @@ def repositories(
     access = {
         "authorized": False,
         "installations": 0,
-        "install_url": github_auth.GITHUB_APP_INSTALL_URL,
-        "message": "Choose the repositories Synchri may access in GitHub.",
+        "private_access": False,
+        "install_url": None,
+        "message": "Sign in with GitHub to browse repositories.",
     }
     available = bool(include_github and status.get("authenticated") and github_available())
     if available:

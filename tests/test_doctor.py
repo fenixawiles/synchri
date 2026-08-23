@@ -15,6 +15,7 @@ from synchri.errors import ValidationError
 from synchri.runner import doctor
 from synchri.runner.agent_command import AgentCommand
 from synchri.runner.stream_events import ClaudeStreamParser, CodexStreamParser
+from synchri.session.modes import runtime_tool_permission_status
 
 
 # ----------------------------------------------------------------------
@@ -161,6 +162,31 @@ def test_absent_auth_file_is_unknown_never_a_red_x(fake_cli, tmp_path):
     # ...but the underlying fact still records "defined and absent", which is
     # what a later True -> False downgrade compares against.
     assert report["facts"]["auth_indication"] is False
+
+
+def test_claude_tool_permission_readiness_tracks_saved_allow_rules(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    missing = runtime_tool_permission_status("claude_code")
+    assert missing["state"] == doctor.FAIL
+    assert "may be refused" in missing["detail"]
+    assert "/permissions" in missing["instructions"]
+
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        json.dumps({"permissions": {"allow": ["Read", "Edit", "Bash(git status)"]}}),
+        encoding="utf-8",
+    )
+    ready = runtime_tool_permission_status("claude_code")
+    assert ready["state"] == doctor.PASS
+    assert "3 saved tool permission rules" in ready["detail"]
+
+
+def test_providers_without_a_safe_local_permission_proof_stay_unknown():
+    for runtime in ("codex", "copilot"):
+        status = runtime_tool_permission_status(runtime)
+        assert status["state"] == doctor.UNKNOWN
+        assert "does not exercise tools" in status["detail"]
 
 
 # ----------------------------------------------------------------------

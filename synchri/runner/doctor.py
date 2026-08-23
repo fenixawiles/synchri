@@ -33,7 +33,7 @@ from pathlib import Path
 
 from ..errors import ValidationError
 from ..ids import utc_now
-from ..session.modes import KNOWN_RUNTIMES
+from ..session.modes import KNOWN_RUNTIMES, runtime_tool_permission_status
 from ..storage import db
 from .agent_command import AgentCommand
 from .stream_events import parser_for
@@ -221,6 +221,15 @@ def passive_report(
         )
     else:
         checks.append(_check("auth", UNKNOWN, "this adapter has no cached sign-in indicator"))
+
+    tool_permissions = runtime_tool_permission_status(runtime)
+    checks.append(
+        _check(
+            "tool_permissions",
+            tool_permissions["state"],
+            tool_permissions["detail"],
+        )
+    )
 
     return {
         "runtime": runtime,

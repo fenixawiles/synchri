@@ -1985,7 +1985,10 @@ function renderQuick() {
       S.gatePreviewTimer = setTimeout(async () => {
         try {
           const r = await api("gates/preview", {spec: text});
-          const chips = r.gates.slice(0, 8).map(g => esc(g.gate_id)).join(" · ");
+          // The note usually names the detected gates already; the chip list
+          // only earns its place when it does not.
+          const listed = r.gates.length && r.note.includes(r.gates[0].gate_id);
+          const chips = listed ? "" : r.gates.slice(0, 8).map(g => esc(g.gate_id)).join(" · ");
           target.innerHTML = `${esc(r.note)}${chips ? ` <span class="mono">${chips}${r.gates.length > 8 ? " …" : ""}</span>` : ""}`;
         } catch (error) { /* the preview is best-effort */ }
       }, 500);
@@ -2819,7 +2822,7 @@ function renderSession() {
   renderSideContext();
   const layout = $(`<main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
       <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.worktree?.branch || s.repository.base_branch || "")}</div></div>
-      <div class="chat-time">${esc(g.satisfied + "/" + g.required)} gates verified</div></div>
+      <div class="chat-time"><span id="chat-gates">${esc(g.satisfied + "/" + g.required)}</span> gates verified</div></div>
       <div id="conversation-panel" class="conversation-feed"><span class="muted small" style="padding:1rem clamp(1.25rem,3vw,2.5rem)">Loading conversation…</span></div>
       <section id="detail-wrap" class="inspector hide"><div class="inspector-head"><div class="detail-heading" id="detail-heading"></div><button class="detail-close">Close</button></div>
       <section id="detail-panel" class="details-panel"></section></section></main>`);
@@ -3102,6 +3105,8 @@ function refreshSessionChrome() {
   if (dot) dot.classList.toggle("live", s.status === "active");
   const gateText = document.getElementById("rail-gates");
   if (gateText) gateText.textContent = `${g.satisfied}/${g.required}`;
+  const chatGates = document.getElementById("chat-gates");
+  if (chatGates) chatGates.textContent = `${g.satisfied}/${g.required}`;
   const gateBar = document.getElementById("rail-gates-bar");
   if (gateBar) gateBar.style.width = `${g.required ? Math.round((g.satisfied / g.required) * 100) : 0}%`;
   const runtimeStates = d.participant_states || {};

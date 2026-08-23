@@ -404,8 +404,46 @@ def test_the_background_tester_reports_phases_and_a_durable_outcome(
     tester.start("fake", definition=make_definition(fake_cli, auth_file))
     status = tester.wait("fake", timeout=60)
     assert status["phase"] == "done"
+    assert status["state"] == "connected"
     assert status["result"]["state"] == "connected"
     assert doctor.load_connection(broker.conn, "fake")["state"] == "connected"
+
+
+def test_the_background_tester_has_explicit_not_connected_testing_and_failed_states(
+    workspace, monkeypatch
+):
+    tester = doctor.ConnectionTester(workspace)
+    assert tester.status("fake")["state"] == "not_connected"
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def controlled_test(conn, runtime, **kwargs):
+        kwargs["progress"]("invoking", "Running the protected canary.")
+        entered.set()
+        assert release.wait(10)
+        return {
+            "runtime": runtime,
+            "state": "failed",
+            "stored": False,
+            "checks": [{"key": "launch", "state": "fail", "detail": "exit 1"}],
+            "detail": "launch: exit 1",
+        }
+
+    monkeypatch.setattr(doctor, "run_connection_test", controlled_test)
+    started = tester.start("fake")
+    assert started["state"] == "testing"
+    assert entered.wait(10)
+    during = tester.status("fake")
+    assert during["state"] == "testing"
+    assert during["phase"] == "invoking"
+    assert during["alive"] is True
+
+    release.set()
+    finished = tester.wait("fake", timeout=10)
+    assert finished["state"] == "failed"
+    assert finished["phase"] == "failed"
+    assert finished["alive"] is False
 
 
 def test_parsers_capture_the_provider_session_id():

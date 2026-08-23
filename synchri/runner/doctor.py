@@ -329,6 +329,7 @@ def connection_state(
         return {
             "runtime": runtime,
             "state": "not_connected",
+            "checks": [],
             "detail": "Run the connection test so Synchri can launch this agent itself.",
         }
     report = passive_report(runtime, definition=definition, timeout=timeout)
@@ -337,6 +338,7 @@ def connection_state(
         return {
             "runtime": runtime,
             "state": "failed",
+            "checks": stored["checks"],
             "detail": stored["detail"] or "the last connection test failed",
             "tested_at": stored["updated_at"],
         }
@@ -357,6 +359,7 @@ def connection_state(
         return {
             "runtime": runtime,
             "state": "reconnect_needed",
+            "checks": stored["checks"],
             "reasons": reasons,
             "detail": "Reconnect to re-verify: " + "; ".join(reasons) + ".",
             "tested_at": stored["updated_at"],
@@ -364,6 +367,7 @@ def connection_state(
     return {
         "runtime": runtime,
         "state": "connected",
+        "checks": stored["checks"],
         "resume": stored["resume"],
         "version": stored["version"],
         "tested_at": stored["updated_at"],
@@ -692,6 +696,7 @@ class ConnectionTester:
                 return dict(self._runs[runtime])
             run = {
                 "runtime": runtime,
+                "state": "testing",
                 "phase": "starting",
                 "detail": "",
                 "result": None,
@@ -736,17 +741,24 @@ class ConnectionTester:
                     "failed": "failed",
                     "cancelled": "cancelled",
                 }.get(result.get("state"), "failed")
+                run["state"] = {
+                    "connected": "connected",
+                    "failed": "failed",
+                    "cancelled": "not_connected",
+                }.get(result.get("state"), "failed")
                 run["detail"] = result.get("detail", "")
                 run["result"] = result
         except ValidationError as exc:
             with self._lock:
                 run = self._runs.get(runtime) or {}
                 run["phase"] = "failed"
+                run["state"] = "failed"
                 run["detail"] = exc.message
         except Exception as exc:  # pragma: no cover - defensive UI boundary
             with self._lock:
                 run = self._runs.get(runtime) or {}
                 run["phase"] = "failed"
+                run["state"] = "failed"
                 run["detail"] = f"the connection test could not run: {exc}"
         finally:
             with self._lock:
@@ -757,7 +769,10 @@ class ConnectionTester:
         with self._lock:
             run = self._runs.get(runtime)
             if run is None:
-                return {"runtime": runtime, "phase": "idle", "detail": "", "result": None}
+                return {
+                    "runtime": runtime, "state": "not_connected", "phase": "idle",
+                    "detail": "", "result": None,
+                }
             payload = dict(run)
         thread = self._threads.get(runtime)
         payload["alive"] = bool(thread and thread.is_alive())

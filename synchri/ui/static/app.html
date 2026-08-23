@@ -3,17 +3,17 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Synchri</title>
 <script>
-/* Apply the saved theme before first paint so the choice never flashes. */
-try {
-  const savedTheme = localStorage.getItem("synchri-theme");
-  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-} catch (e) { /* storage may be unavailable; the System theme still applies */ }
+/* The server injects the durable preference before first paint. Browser
+   storage cannot own this setting because the desktop app's loopback port —
+   and therefore its origin — changes on every launch. */
+const savedTheme = "__SYNCHRI_THEME__";
+if (savedTheme) document.documentElement.dataset.theme = savedTheme;
 </script>
 <style>
 /* ------------------------------------------------------------------ tokens
    Every theme-dependent value is a token. Bare :root is Terminal (dark).
    With no explicit choice, the OS light preference switches to Daylight.
-   An explicit data-theme (from the header picker, kept in localStorage)
+   An explicit data-theme (from the header picker, kept by Synchri)
    always wins. Each block also sets color-scheme for native controls. */
 :root{
   color-scheme:dark;
@@ -844,8 +844,9 @@ function confirmNotice(message, title = "Saved") {
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e); } };
 
 /* ------------------------------------------------------------------ themes
-   Purely client-side: the choice lives in localStorage and swaps the token
-   set via data-theme. "System" clears the choice and follows the OS. */
+   The choice is persisted by Synchri, independent of the ephemeral loopback
+   origin, and swaps the token set via data-theme. "System" clears the choice
+   and follows the OS. */
 const THEMES = [
   {key: "", label: "System", swatch: ["#0b0d10", "#f4f5f7"]},
   {key: "terminal", label: "Terminal", swatch: ["#0b0d10", "#2fd287"]},
@@ -861,14 +862,12 @@ const THEMES = [
 ];
 
 function currentTheme() {
-  try { return localStorage.getItem("synchri-theme") || ""; } catch (e) { return ""; }
+  return document.documentElement.dataset.theme || "";
 }
 
-function applyTheme(key) {
-  try {
-    if (key) localStorage.setItem("synchri-theme", key);
-    else localStorage.removeItem("synchri-theme");
-  } catch (e) { /* private mode: the choice still applies for this window */ }
+async function applyTheme(key) {
+  const result = await api("appearance", {theme:key});
+  if (S.boot) S.boot.appearance = result.appearance;
   if (key) document.documentElement.dataset.theme = key;
   else delete document.documentElement.dataset.theme;
   renderThemeMenu();
@@ -884,7 +883,10 @@ function renderThemeMenu() {
     const row = $(`<button type="button">
       <span class="swatch" style="background:linear-gradient(135deg, ${theme.swatch[0]} 50%, ${theme.swatch[1]} 50%)"></span>
       <span>${esc(theme.label)}</span>${theme.key === active ? `<span class="theme-check">✓</span>` : ""}</button>`);
-    row.onclick = () => { applyTheme(theme.key); menu.removeAttribute("open"); };
+    row.onclick = guard(async () => {
+      await applyTheme(theme.key);
+      menu.removeAttribute("open");
+    });
     options.append(row);
   }
 }
@@ -1161,6 +1163,7 @@ async function home() {
       app().append($(`<div class="section-head" style="margin-top:2.2rem"><span class="kicker">Sessions</span></div>`));
       app().append(sessionRows());
     }
+    renderAgentConnections(app());
     return;
   }
   const page = $(`<div class="home-page"></div>`);
@@ -1219,20 +1222,40 @@ function renderAgentConnections(page) {
     Synchri owns no provider account, stores no credential or API key, and uses no cloud relay.</div>`));
   for (const runtime of connectable) {
     const stored = (S.boot.runtime_connections || {})[runtime.key];
+    const test = (S.boot.runtime_connection_tests || {})[runtime.key];
+    const canTest = runtime.connection_test_available;
+    const testing = test?.state === "testing" || test?.alive;
+    const failed = stored?.state === "failed" || test?.state === "failed";
     const state = stored?.state === "connected" ? `<span class="pill">connected</span>`
-      : stored?.state === "failed" ? `<span class="pill bad">failed</span>`
-      : runtime.installed ? `<span class="pill dim">not connected</span>`
-      : `<span class="pill dim">not detected</span>`;
+      : testing ? `<span class="pill warn">testing</span>`
+      : failed ? `<span class="pill bad">failed</span>`
+      : `<span class="pill dim">not connected</span>`;
     const summary = stored?.state === "connected"
-      ? `resume ${stored.resume.replaceAll("_", " ")}${stored.version ? ` · v${stored.version}` : ""}`
-      : (stored?.state === "failed" ? stored.detail : runtime.detail);
+      ? `Fully connected${stored.version ? ` · v${stored.version}` : ""}`
+      : testing ? (test.detail || "Protected connection test in progress — no action needed.")
+      : failed ? (stored?.detail || test?.detail || "The last connection test failed.")
+      : !runtime.installed ? runtime.detail
+      : !canTest ? "Installed, but this Synchri version cannot safely verify it."
+      : "One step remains: run the protected connection test.";
+    const action = stored?.state === "connected" ? "Details"
+      : testing ? "View progress"
+      : failed ? "Fix connection"
+      : !canTest ? "Why unavailable?" : "Finish setup";
     const row = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0;gap:.55rem">${state}
       <b style="font-size:12.5px">${esc(runtime.label)}</b><span class="small muted">${esc(summary || "")}</span></div>
-      <button class="ghost" data-connect>${stored?.state === "connected" ? "Details" : "Connect"}</button></div>`);
+      <button class="ghost" data-connect>${action}</button></div>`);
     row.querySelector("[data-connect]").onclick = () => showConnectDialog(runtime.key);
     box.append(row);
   }
   page.append(box);
+}
+
+function connectionDisplayState(connection, test) {
+  if (test?.state === "testing" || test?.alive) return "testing";
+  if (test?.state === "failed" || test?.phase === "failed") return "failed";
+  if (connection?.state === "connected") return "connected";
+  if (["failed", "reconnect_needed"].includes(connection?.state)) return "failed";
+  return "not_connected";
 }
 
 async function showConnectDialog(runtimeKey) {
@@ -1241,13 +1264,17 @@ async function showConnectDialog(runtimeKey) {
     <button class="detail-close" aria-label="Close">×</button>
     <div class="kicker">AGENT CONNECTION</div>
     <h2 id="connect-title">Checking…</h2>
-    <p class="muted small" style="margin:.2rem 0 0">Sign in to this CLI once in your own terminal.
-    The connection test then proves the whole managed path — one real invocation (two where
-    resume is supported) in a fresh temporary folder outside every repository, with a
-    sentinel-only prompt and nothing of yours to read or change.</p>
+    <p class="muted small" id="connect-explanation" style="margin:.2rem 0 0">Checking installation and connection state…</p>
+    <div id="connect-state" aria-live="polite"></div>
+    <div class="note small" id="connect-next"></div>
+    <div class="kicker" style="margin-top:.35rem">SETUP CHECKLIST</div>
     <div id="connect-checks" class="stack" style="gap:.3rem"></div>
+    <div id="connect-test-results" class="stack hide" style="gap:.3rem">
+      <div class="kicker" style="margin-top:.35rem">CONNECTION TEST RESULTS</div>
+      <div id="connect-test-checks" class="stack" style="gap:.3rem"></div>
+    </div>
     <div class="row" id="connect-actions"><button class="primary" data-connect>Run connection test</button><button data-close>Close</button></div>
-    <div class="small muted" id="connect-status"></div>
+    <div class="small muted" id="connect-status" aria-live="polite"></div>
   </div>`);
   document.body.append(dialog);
   const close = () => { dialog.remove(); if (S.view === "home") home().catch(() => {}); };
@@ -1256,8 +1283,8 @@ async function showConnectDialog(runtimeKey) {
 
   const stateChip = state => state === "pass" ? `<span class="pill">pass</span>`
     : state === "fail" ? `<span class="pill bad">fail</span>` : `<span class="pill dim">unknown</span>`;
-  const renderChecks = checks => {
-    const box = dialog.querySelector("#connect-checks");
+  const renderChecks = (selector, checks) => {
+    const box = dialog.querySelector(selector);
     box.innerHTML = "";
     for (const check of checks || []) {
       box.append($(`<div class="row" style="gap:.5rem;align-items:baseline">${stateChip(check.state)}
@@ -1265,32 +1292,109 @@ async function showConnectDialog(runtimeKey) {
     }
   };
 
+  const renderTestChecks = checks => {
+    const section = dialog.querySelector("#connect-test-results");
+    if (!checks?.length) { section.classList.add("hide"); return; }
+    section.classList.remove("hide");
+    renderChecks("#connect-test-checks", checks);
+  };
+
   const payload = await api("runtimes/doctor");
   const entry = (payload.runtimes || []).find(runtime => runtime.key === runtimeKey);
-  if (entry) {
-    dialog.querySelector("#connect-title").textContent = entry.label;
-    renderChecks(entry.doctor);
-    dialog.querySelector("#connect-status").textContent = entry.connection?.detail || "";
-  }
+  const button = dialog.querySelector("[data-connect]");
+  let currentConnection = entry?.connection || {state:"not_connected", checks:[]};
+  let currentTest = entry?.test || {state:"not_connected", phase:"idle"};
 
-  dialog.querySelector("[data-connect]").onclick = guard(async () => {
-    const button = dialog.querySelector("[data-connect]");
-    button.disabled = true; button.textContent = "Testing…";
-    await api("runtimes/connect", {runtime: runtimeKey});
+  const renderState = () => {
+    if (!entry) return;
+    const state = connectionDisplayState(currentConnection, currentTest);
+    const stateView = {
+      connected:["connected", "Fully connected"],
+      testing:["warn", "Testing connection"],
+      failed:["bad", "Connection failed"],
+      not_connected:["dim", "Not connected yet"],
+    }[state];
+    dialog.querySelector("#connect-title").textContent = state === "connected"
+      ? `${entry.label} is connected` : entry.label;
+    dialog.querySelector("#connect-state").innerHTML =
+      `<span class="pill ${stateView[0]}">${stateView[1]}</span>`;
+    renderChecks("#connect-checks", entry.doctor);
+    renderTestChecks(currentTest?.result?.checks || currentConnection?.checks);
+
+    if (state === "connected") {
+      dialog.querySelector("#connect-explanation").textContent =
+        "Synchri verified installation, sign-in, prompt delivery, and structured output.";
+      dialog.querySelector("#connect-next").textContent =
+        "Complete — nothing else to do. Synchri can launch this agent without a paste step.";
+      button.disabled = true;
+      button.textContent = "Connected";
+    } else if (state === "testing") {
+      dialog.querySelector("#connect-explanation").textContent =
+        "Synchri is running the protected canary now. The state will finish as Connected or Failed.";
+      dialog.querySelector("#connect-next").textContent =
+        "Wait here — no other action is needed while the test runs.";
+      button.disabled = true;
+      button.textContent = "Testing…";
+    } else if (!entry.installed) {
+      dialog.querySelector("#connect-explanation").textContent =
+        "Synchri cannot find this CLI on the app's PATH.";
+      dialog.querySelector("#connect-next").textContent =
+        `Next: install ${entry.label}, fully quit and reopen Synchri, then return here.`;
+      button.disabled = true;
+      button.textContent = "CLI not detected";
+    } else if (!entry.connection_test_available) {
+      dialog.querySelector("#connect-explanation").textContent =
+        "The green setup checks do not mean connected. This Synchri version has no enforced canary for this CLI.";
+      dialog.querySelector("#connect-next").textContent =
+        "Nothing you can do locally will mark it fully connected in this version. Do not retry; Synchri must add a protected adapter first.";
+      button.disabled = true;
+      button.textContent = "Test unavailable";
+    } else if (currentConnection?.state === "reconnect_needed") {
+      dialog.querySelector("#connect-explanation").textContent =
+        "A previously verified part of this connection changed, so Synchri removed the connected state.";
+      dialog.querySelector("#connect-next").textContent =
+        `Next: ${currentConnection.detail || "run the protected test again to re-verify this CLI."}`;
+      button.disabled = false;
+      button.textContent = "Re-verify connection";
+    } else if (state === "failed") {
+      dialog.querySelector("#connect-explanation").textContent =
+        "The protected test completed, but at least one required proof failed.";
+      dialog.querySelector("#connect-next").textContent =
+        "Still not connected. Fix the red test result below, then choose Try connection test again.";
+      button.disabled = false;
+      button.textContent = "Try connection test again";
+    } else {
+      dialog.querySelector("#connect-explanation").textContent =
+        "The checklist confirms local readiness; it does not create a connected state by itself.";
+      dialog.querySelector("#connect-next").textContent =
+        "Next: run the protected connection test once. That final step changes this state to Connected or explains exactly what failed.";
+      button.disabled = false;
+      button.textContent = "Run protected test";
+    }
+    dialog.querySelector("#connect-status").textContent =
+      currentTest?.detail || currentConnection?.detail || "";
+  };
+  renderState();
+
+  button.onclick = guard(async () => {
+    currentTest = {state:"testing", phase:"starting", detail:"Starting the protected test."};
+    renderState();
+    const started = await api("runtimes/connect", {runtime: runtimeKey});
+    currentTest = started.test || currentTest;
+    renderState();
+    if (S.view === "home") await home();
     const poll = async () => {
-      if (!document.getElementById("connect-dialog")) return;
+      const visible = document.getElementById("connect-dialog") === dialog;
       const status = await api("runtimes/connect?runtime=" + encodeURIComponent(runtimeKey));
-      const test = status.test || {};
-      if (test.alive || !["done", "failed", "cancelled", "idle"].includes(test.phase)) {
-        dialog.querySelector("#connect-status").textContent = test.detail || test.phase || "";
+      currentTest = status.test || currentTest;
+      currentConnection = status.connection || currentConnection;
+      if (visible) renderState();
+      if (currentTest.alive || !["done", "failed", "cancelled", "idle"].includes(currentTest.phase)) {
         window.setTimeout(guard(poll), 700);
         return;
       }
-      if (test.result?.checks) renderChecks(test.result.checks);
-      dialog.querySelector("#connect-status").textContent = status.connection?.detail || test.detail || "";
-      button.disabled = false;
-      button.textContent = status.connection?.state === "connected" ? "Re-run connection test" : "Run connection test";
-      S.boot = await api("bootstrap");
+      if (S.view === "home") await home();
+      else S.boot = await api("bootstrap");
     };
     await poll();
   });

@@ -190,6 +190,75 @@ def test_bootstrap_gives_the_app_everything_it_needs(ui):
     assert any(c["key"] == "git.push" for g in boot["permissions"] for c in g["capabilities"])
     assert boot["sessions"] == [] and "workspace" in boot
     assert boot["github"]["authenticated"] is False
+    runtimes = {runtime["key"]: runtime for runtime in boot["runtimes"]}
+    assert runtimes["claude_code"]["connection_test_available"] is True
+    assert runtimes["copilot"]["connection_test_available"] is False
+    assert boot["runtime_connection_tests"]["claude_code"]["state"] == "not_connected"
+    assert boot["appearance"] == {"theme": ""}
+
+
+def test_an_unverifiable_runtime_cannot_start_an_impossible_connection_test(ui):
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/runtimes/connect", {"runtime": "copilot"})
+    payload = json.loads(exc.value.read())
+    assert payload["error"]["code"] == "validation_error"
+    assert "cannot be marked connected" in payload["error"]["message"]
+
+
+def test_connection_ui_distinguishes_readiness_from_connected_state():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "SETUP CHECKLIST" in source
+    assert "CONNECTION TEST RESULTS" in source
+    assert "Not connected yet" in source
+    assert "Testing connection" in source
+    assert "Connection failed" in source
+    assert "Fully connected" in source
+    assert "One step remains: run the protected connection test." in source
+    assert "Nothing you can do locally will mark it fully connected" in source
+    assert "A previously verified part of this connection changed" in source
+    assert source.count("renderAgentConnections(") == 3  # definition + first-run and regular homes
+    assert 'button.textContent = "Connected"' in source
+    assert 'if (S.view === "home") await home();' in source
+    assert "Re-run connection test" not in source
+
+
+def test_theme_persists_across_ephemeral_loopback_origins(ui):
+    selected = call(ui, "/api/appearance", {"theme": "sage"})
+    assert selected == {"appearance": {"theme": "sage"}}
+    assert call(ui, "/api/bootstrap")["appearance"]["theme"] == "sage"
+
+    # A desktop relaunch gets a different loopback port (a different browser
+    # origin). The server must still inject the database-backed choice before
+    # first paint instead of relying on origin-scoped localStorage.
+    second, url = create_server(ui["broker"], port=0)
+    thread = threading.Thread(target=second.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert second.server_address[1] != ui["server"].server_address[1]
+        with urllib.request.urlopen(url, timeout=20) as response:
+            body = response.read().decode()
+        assert 'const savedTheme = "sage";' in body
+    finally:
+        second.shutdown()
+        second.server_close()
+
+    cleared = call(ui, "/api/appearance", {"theme": ""})
+    assert cleared == {"appearance": {"theme": ""}}
+    assert call(ui, "/api/bootstrap")["appearance"]["theme"] == ""
+
+
+def test_theme_endpoint_rejects_values_that_cannot_be_injected(ui):
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        call(ui, "/api/appearance", {"theme": 'sage";alert(1)//'})
+    assert json.loads(exc.value.read())["error"]["code"] == "validation_error"
+
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "localStorage" not in source
+    assert 'api("appearance", {theme:key})' in source
 
 
 def test_the_client_uses_native_updates_only_from_the_packaged_desktop_app():

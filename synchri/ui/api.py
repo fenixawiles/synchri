@@ -26,6 +26,7 @@ from ..session.modes import (
     ParticipantPlan,
     Role,
     collaboration_pair,
+    connection_test_available,
     default_agent_name,
     list_modes,
     plan_launch_status,
@@ -33,12 +34,17 @@ from ..session.modes import (
 )
 from ..session.permissions import PermissionSet, permission_profile, permission_profiles
 from ..session.spec import ProductSpec
-from ..storage import dao
+from ..storage import dao, db
 from ..runner import ancillary as ancillary_module
 from ..runner import doctor as doctor_module
 from ..runner.managed import ManagedRunnerRegistry
 
 Route = Callable[[dict, dict], dict]
+
+THEME_KEYS = frozenset(
+    {"", "terminal", "midnight", "ember", "copper", "orchid",
+     "daylight", "sage", "solar", "harbor", "iris"}
+)
 
 
 class Api:
@@ -72,6 +78,7 @@ class Api:
         #: no authority: nothing is created until "Start session".
         self._routes: dict[tuple[str, str], Route] = {
             ("GET", "bootstrap"): self.bootstrap,
+            ("POST", "appearance"): self.update_appearance,
             ("GET", "repositories"): self.repositories,
             ("GET", "worktrees"): self.worktrees,
             ("POST", "repository/resolve"): self.resolve_repository,
@@ -132,9 +139,10 @@ class Api:
 
     def bootstrap(self, query: dict, body: dict) -> dict:
         """Everything the app needs on first paint."""
+        runtimes = runtime_catalog()
         return {
             "modes": list_modes(),
-            "runtimes": runtime_catalog(),
+            "runtimes": runtimes,
             "roles": [
                 {"key": r.value, "label": r.value.replace("_", " ").title()} for r in Role
             ],
@@ -151,10 +159,30 @@ class Api:
             # Stored connection outcomes only — no probes on first paint. The
             # doctor endpoint refreshes these with live invalidation checks.
             "runtime_connections": doctor_module.stored_connections(self.broker.conn),
+            # In-memory test state makes a closed dialog and the home page
+            # agree while a connection test is still running.
+            "runtime_connection_tests": {
+                entry["key"]: self.connections.status(entry["key"])
+                for entry in runtimes if entry.get("managed_command")
+            },
+            "appearance": {"theme": self.appearance_theme()},
             "default_repo": self.default_repo,
             "desktop_clone_root": str(discovery.desktop_clone_root()),
             "open_drafts": drafts_module.versions(self.broker.conn),
         }
+
+    def appearance_theme(self) -> str:
+        """The validated, durable theme injected before the UI's first paint."""
+        theme = dao.get_app_preference(self.broker.conn, "theme")
+        return theme if theme in THEME_KEYS else ""
+
+    def update_appearance(self, query: dict, body: dict) -> dict:
+        theme = body.get("theme")
+        if not isinstance(theme, str) or theme not in THEME_KEYS:
+            raise ValidationError("choose a theme offered by Synchri")
+        with db.transaction(self.broker.conn):
+            dao.set_app_preference(self.broker.conn, "theme", theme or None)
+        return {"appearance": {"theme": theme}}
 
     def repositories(self, query: dict, body: dict) -> dict:
         return discovery.repositories(
@@ -518,6 +546,11 @@ class Api:
         runtime = (body.get("runtime") or "").strip()
         if not runtime:
             raise ValidationError("choose which runtime to connect")
+        if not connection_test_available(runtime):
+            raise ValidationError(
+                f"the connection test is unavailable for {runtime!r} in this "
+                "Synchri version; this CLI cannot be marked connected"
+            )
         return {"test": self.connections.start(runtime)}
 
     def connect_runtime_status(self, query: dict, body: dict) -> dict:

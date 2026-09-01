@@ -4,7 +4,7 @@
 
 *Stop being the clipboard between your coding agents.*
 
-> **Status: v0.2, early prototype.** Synchri is a local app with a deterministic broker, persistent state, a native macOS interface, and managed local launches for supported agent tools. Nothing here is affiliated with or endorsed by Anthropic, OpenAI, GitHub, or Google.
+> **Status: v0.5, working alpha.** Synchri is a local app with a deterministic broker, persistent state, a native macOS interface, zero-touch managed launches for supported agent tools, an adversarially reviewed Planning Mode, and mixed teams of managed and externally-run agents. Nothing here is affiliated with or endorsed by Anthropic, OpenAI, GitHub, or Google.
 
 ---
 
@@ -67,6 +67,34 @@ grant is a ceiling that never overrides your provider, OS, or repo host. Complet
 requires evidence, not agreement. A timebox guides pacing but never stops a good
 session or claims "done". Activation gives the Primary Builder the opening task
 automatically; the reviewer follows its handoff. Full detail: [`docs/sessions.md`](docs/sessions.md).
+
+### How a session works
+
+1. **You answer a few questions** — repository, workspace, what you want done,
+   who should work on it. A plain brief is enough; explicit `AUTH-01`-style
+   criteria in it become tracked acceptance gates automatically, and the app
+   says which rule produced them.
+2. **Synchri issues the session contract** — one document naming the
+   repository, the authorized worktree, each agent's role, the capabilities
+   you granted, the brief, and the timebox.
+3. **Every agent replies `UNDERSTOOD`** to the same text before any work
+   begins. Changing the permissions, brief, timebox, or team later issues a
+   new revision that everyone must acknowledge again.
+4. **The agents work in the isolated worktree**, handing the floor to each
+   other; you watch, interrupt, and decide escalations. A team can mix
+   Synchri-launched agents with agents you run in your own terminals — the
+   managed ones wait out an external turn and resume by themselves. A gate
+   passes only with recorded evidence and both sign-offs.
+5. **Planning first, if you chose it**: a planner and an adversarial plan
+   reviewer iterate inside a disposable, read-only planning workspace until
+   review closure — then **you approve the plan**, and only that approval
+   promotes it into a coordination session branched from the exact commit
+   the plan inspected. Nothing is ever executed from a plan you have not
+   approved.
+
+The load-bearing terms — worktree, acceptance gate, session contract,
+planning workspace — are defined in [`docs/glossary.md`](docs/glossary.md),
+and in the app itself wherever they first appear.
 
 ## Install
 
@@ -307,8 +335,10 @@ Every message and every state transition can answer: who sent it, under which pa
 Stated plainly, because the point of a prototype is knowing what it does not do yet.
 
 - **Polling, not push.** `wait` polls every 500ms. Fine for two or three agents on one machine; not a design for scale.
-- **No UI.** The data model was built so a group-chat UI can read `status`, `read`, `events`, and `memory` without core changes, but none exists.
-- **No provider integrations.** Agents participate by running shell commands, or by being invoked as one via `synchri run --agent 'name=your command'`. There is no MCP server, no provider adapter, no SDK, and no knowledge of any specific agent baked in.
+- **Provider knowledge stops at launch adapters.** Managed launches ship
+  maintained command adapters for supported tools; the room protocol itself
+  stays provider-agnostic — any process that can run the CLI can
+  participate — and there is still no MCP server and no SDK.
 - **Attached agents must cooperate.** Nothing forces a self-driving agent to call `wait` before speaking or to honor a blocking turn — the broker refuses out-of-turn writes, but an agent that never polls simply never participates. `synchri run` sidesteps this by driving the turn loop itself.
 - **Conducted agents must be non-interactive.** `run` needs a prompt-in / answer-on-stdout invocation. An agent that only works as an interactive REPL has to be driven in attached mode instead.
 - **Single machine.** No remote rooms, no multi-user rooms, no authentication beyond local secrets.
@@ -324,9 +354,8 @@ Stated plainly, because the point of a prototype is knowing what it does not do 
 Deliberately not built yet, and not to be started without an explicit decision:
 
 1. **MCP server wrapper** — expose `send` / `wait` / `read` / `memory` as MCP tools so agents that speak MCP skip the shell.
-2. **Provider-specific adapters** — thin shims that teach a particular agent harness the Synchri conventions.
-3. **Read-only HTTP/WebSocket observer** on `127.0.0.1`, for a group-chat UI.
-4. **Richer artifact references** — resolve `git:abc123` into a real diff the room can display.
+2. **Provider-specific protocol adapters** — thin shims that teach a particular agent harness the Synchri conventions beyond launch commands.
+3. **Richer artifact references** — resolve `git:abc123` into a real diff the room can display.
 
 Each of these wraps the existing `Broker` class. None of them requires changing the queue, the storage layer, or the message model.
 

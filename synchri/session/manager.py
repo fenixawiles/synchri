@@ -382,11 +382,21 @@ class SessionManager:
             )
         # Propose gates from the spec so the user does not restate their own
         # acceptance criteria. They land PENDING with no evidence -- a proposal,
-        # not an authority.
+        # not an authority. The derivation rule that produced them persists in
+        # metadata so the dashboard can keep explaining where they came from.
         if spec:
-            proposed = extract_module.extract_gates(spec.canonical_text())
+            proposed, derivation = extract_module.extract_gates_with_derivation(
+                spec.canonical_text()
+            )
             if proposed:
                 self.set_gates(session_id, proposed)
+                self._update(
+                    session_id,
+                    metadata=json.dumps(
+                        {**self.get(session_id).metadata, "gate_derivation": derivation}
+                    ),
+                )
+                record = self.get(session_id)
         self._log(
             record,
             ev.SESSION_CREATED,

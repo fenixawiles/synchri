@@ -311,6 +311,10 @@ pre{overflow:auto;background:var(--panel2);border:0;
 .pill.warn{color:var(--warn)}
 .pill.bad{color:var(--bad)}
 .pill.dim{color:var(--faint)}
+/* tap-for-definition terms: printed text with a dotted rule, never a chip */
+.term{background:none;border:none;padding:0;margin:0;font:inherit;color:inherit;
+  border-bottom:1px dotted var(--dim);border-radius:0;cursor:help}
+.term:hover{border-bottom-style:solid;background:none}
 
 .led{width:6px;height:6px;border-radius:50%;background:var(--line2);display:inline-block;flex:none}
 .led.live{background:var(--accent)}
@@ -899,31 +903,55 @@ function flash(error) {
         ? `<button id="error-choose-repo" style="margin-top:.65rem">${esc(resolution.label || "Use existing folder")}</button>`
         : resolution?.kind === "choose_repository"
           ? `<button id="error-choose-repo" style="margin-top:.65rem">Choose a repository</button>`
-          : error?.code === "awaiting_join" || error?.code === "awaiting_ack"
-            ? `<button id="error-open-setup" style="margin-top:.65rem">Open agent setup</button>`
-            : error?.code === "gates_unsatisfied"
-              ? `<button id="error-open-gates" style="margin-top:.65rem">Review acceptance gates</button>`
-              : error?.code === "worktree_missing"
-                ? `<button id="error-open-worktree" style="margin-top:.65rem">View workspace details</button>`
-                : "";
-  box.innerHTML = `<b>Here’s how to continue</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>${action}`;
-  box.querySelector("#error-connect-github")?.addEventListener("click", guard(connectGitHub));
+          : resolution?.kind === "edit_permissions"
+            ? `<button id="error-edit-permissions" style="margin-top:.65rem">Edit session permissions</button>`
+            : error?.code === "awaiting_join" || error?.code === "awaiting_ack"
+              ? `<button id="error-open-setup" style="margin-top:.65rem">Open agent setup</button>`
+              : error?.code === "gates_unsatisfied"
+                ? `<button id="error-open-gates" style="margin-top:.65rem">Review acceptance gates</button>`
+                : error?.code === "worktree_missing"
+                  ? `<button id="error-open-worktree" style="margin-top:.65rem">View workspace details</button>`
+                  : (error?.code?.startsWith?.("plan_") || error?.code === "baseline_drift") && S.session
+                    ? `<button id="error-open-plan" style="margin-top:.65rem">Open the plan tab</button>`
+                    : "";
+  // Honest titling: only an error that actually carries a way forward claims
+  // one — and then it stays put until acted on or dismissed, instead of
+  // vanishing on a timer mid-read.
+  box.innerHTML = action
+    ? `<b>Here’s how to continue</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>
+       <div class="row" style="gap:.55rem">${action}<button class="ghost" id="error-dismiss" style="margin-top:.65rem">Dismiss</button></div>`
+    : `<b>That didn’t work</b><div class="small" style="margin-top:.3rem">${esc(message)}</div>`;
+  const dismiss = () => { box.className = "err hide"; };
+  box.querySelector("#error-dismiss")?.addEventListener("click", dismiss);
+  box.querySelector("#error-connect-github")?.addEventListener("click", guard(async () => {
+    dismiss(); await connectGitHub();
+  }));
   box.querySelector("#error-open-github-settings")?.addEventListener(
-    "click", guard(() => openGitHub("https" + "://github.com/settings/apps"))
+    "click", guard(() => { dismiss(); return openGitHub("https" + "://github.com/settings/apps"); })
   );
   box.querySelector("#error-choose-repo")?.addEventListener("click", guard(async () => {
+    dismiss();
     if (!S.quick) await quickStart();
     if (resolution?.path) S.quick.repo_path = resolution.path;
     renderQuick();
   }));
-  box.querySelector("#error-open-setup")?.addEventListener("click", guard(() => openLaunch(S.session)));
+  box.querySelector("#error-edit-permissions")?.addEventListener("click", guard(async () => {
+    dismiss(); await showPermissionsDialog(resolution?.capability);
+  }));
+  box.querySelector("#error-open-setup")?.addEventListener("click", guard(() => {
+    dismiss(); return openLaunch(S.session);
+  }));
   box.querySelector("#error-open-gates")?.addEventListener("click", () => {
-    S.tab = "gates"; renderSession();
+    dismiss(); S.tab = "gates"; renderSession();
   });
   box.querySelector("#error-open-worktree")?.addEventListener("click", () => {
-    S.tab = "worktree"; renderSession();
+    dismiss(); S.tab = "worktree"; renderSession();
   });
-  clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 7000);
+  box.querySelector("#error-open-plan")?.addEventListener("click", () => {
+    dismiss(); S.tab = "plan"; renderSession();
+  });
+  clearTimeout(flash.t);
+  if (!action) flash.t = setTimeout(() => box.className = "err hide", 7000);
 }
 function confirmNotice(message, title = "Saved") {
   const box = document.getElementById("err");
@@ -932,6 +960,101 @@ function confirmNotice(message, title = "Saved") {
   clearTimeout(flash.t); flash.t = setTimeout(() => box.className = "err hide", 4200);
 }
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flash(e); } };
+
+/* ------------------------------------------------------------ definitions
+   Load-bearing terms, defined where they first appear. One dictionary and
+   one delegated listener; more terms can join without new chrome. */
+const DEFINITIONS = {
+  worktree: {
+    title: "Worktree",
+    body: "A separate working folder git creates from your repository, on its own branch. The agents make every change inside it, so your primary checkout is never touched. If a session goes wrong you can delete the worktree and nothing else has changed; keeping or merging its branch afterwards is your call.",
+  },
+  gate: {
+    title: "Acceptance gate",
+    body: "One concrete thing that must be true before the session can complete — usually lifted straight from your brief. A gate passes only with recorded evidence (tests, commits, observations) and sign-off from both the builder and the reviewer. You can correct, add, or override any gate at any time.",
+  },
+  contract: {
+    title: "Session contract",
+    body: "The written terms every agent must agree to before work begins: the repository, the authorized worktree, who does what, what they may and may not do, the brief, and the timebox. Each agent replies UNDERSTOOD to the same text — and if anything material changes later, a new revision goes out and every agent must agree again.",
+  },
+  "planning workspace": {
+    title: "Planning workspace",
+    body: "A disposable, read-only copy of your repository that planning agents inspect. It is cloned from one exact commit and has no connection back to your repository, so nothing run inside it can touch your code. It is thrown away when planning ends; an approved plan starts the real build from that same inspected commit.",
+  },
+};
+
+function defTerm(key, label) {
+  return `<button class="term" data-term="${esc(key)}">${esc(label || key)}</button>`;
+}
+
+function showDefinition(key) {
+  const entry = DEFINITIONS[key];
+  if (!entry) return;
+  document.getElementById("definition-dialog")?.remove();
+  const dialog = $(`<div class="dialog stack" id="definition-dialog" role="dialog" aria-modal="true" aria-label="${esc(entry.title)}">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="kicker">WHAT THIS MEANS</div>
+    <h2>${esc(entry.title)}</h2>
+    <p class="small" style="margin:.2rem 0 0">${esc(entry.body)}</p>
+    <div class="row"><button data-close>Got it</button></div>
+  </div>`);
+  document.body.append(dialog);
+  const close = () => dialog.remove();
+  dialog.querySelector(".detail-close").onclick = close;
+  dialog.querySelector("[data-close]").onclick = close;
+  dialog.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
+  dialog.querySelector("[data-close]").focus();
+}
+document.addEventListener("click", event => {
+  const term = event.target.closest?.(".term");
+  if (term?.dataset.term) showDefinition(term.dataset.term);
+});
+
+/* ------------------------------------------------------- session permissions
+   Backed by the existing control:permissions endpoint. Saving is a contract
+   event, and the dialog says so before the user commits to it. */
+async function showPermissionsDialog(highlightKey) {
+  if (!S.session) return;
+  if (!S.boot) S.boot = await api("bootstrap");
+  const d = await api("dashboard?session=" + encodeURIComponent(S.session));
+  const decisions = {...(d.session.permissions || {})};
+  document.getElementById("permissions-dialog")?.remove();
+  const groups = S.boot.permissions.map(group => `<div class="stack" style="gap:.35rem">
+    <div class="kicker">${esc(group.group)}</div>
+    ${group.capabilities.map(c => `<div class="row" style="gap:.5rem;align-items:baseline;flex-wrap:nowrap${c.key === highlightKey ? ";outline:1px dotted var(--warn);outline-offset:3px" : ""}">
+      <select class="perm-decision" data-capability="${esc(c.key)}" aria-label="${esc(c.label)}">
+        ${["allow", "ask", "deny"].map(value => `<option value="${value}" ${(decisions[c.key] || c.default) === value ? "selected" : ""}>${value}</option>`).join("")}
+      </select>
+      <b class="small" style="white-space:nowrap">${esc(c.label)}</b>
+      <span class="small muted">${esc(c.description)}</span></div>`).join("")}
+  </div>`).join("");
+  const dialog = $(`<div class="dialog stack" id="permissions-dialog" role="dialog" aria-modal="true" style="max-height:82vh;overflow:auto">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="kicker">SESSION PERMISSIONS</div>
+    <h2>What the agents may do</h2>
+    <p class="small muted" style="margin:.2rem 0 0">Saving issues a new ${defTerm("contract", "contract")} revision: the session
+      returns to awaiting acknowledgment, and every agent must reply UNDERSTOOD to the updated terms before work continues.</p>
+    ${groups}
+    <div class="row"><button class="primary" id="perm-save">Save and reissue the contract</button><button data-close>Cancel</button></div>
+  </div>`);
+  document.body.append(dialog);
+  const close = () => dialog.remove();
+  dialog.querySelector(".detail-close").onclick = close;
+  dialog.querySelector("[data-close]").onclick = close;
+  dialog.querySelector("#perm-save").onclick = guard(async () => {
+    const updated = {};
+    dialog.querySelectorAll(".perm-decision").forEach(select => {
+      updated[select.dataset.capability] = select.value;
+    });
+    await api("control", {session: S.session, action: "permissions", permissions: updated});
+    close();
+    confirmNotice("Permissions updated — a new contract revision is out for acknowledgment.", "Contract reissued");
+    if (S.view === "session") {
+      S.dash = await api("dashboard?session=" + encodeURIComponent(S.session));
+      renderSession();
+    }
+  });
+}
 
 /* ------------------------------------------------------------------ themes
    The choice is persisted by Synchri, independent of the ephemeral loopback
@@ -1947,7 +2070,7 @@ function renderQuick() {
 
   const workspaceBody = () => {
     const body = $(`<div class="ask-body stack"></div>`);
-    body.append($(`<div class="small muted">Every session works in a git worktree — your primary checkout is never the target. Even the new worktree is a deliberate choice, never assumed.</div>`));
+    body.append($(`<div class="small muted">Every session works in a git ${defTerm("worktree")} — your primary checkout is never the target. Even the new worktree is a deliberate choice, never assumed.</div>`));
     body.append($(`<div class="repo-grid" role="radiogroup" aria-label="Workspace">
       <button class="choice ${q.workspace_choice === "new" ? "on" : ""}" data-workspace="new" role="radio" aria-checked="${q.workspace_choice === "new"}">
         <div class="repo-row"><b>New isolated worktree</b></div>
@@ -2842,12 +2965,22 @@ function renderSessionRail(box) {
   const nav = ["conversation", ...DETAIL_TABS.filter(tab =>
     (tab !== "changelog" || s.status === "complete")
     && (tab !== "plan" || s.mode === "planning"))];
+  // Where the gates came from, one hover away — the full note lives on the
+  // Gates tab, from the same persisted derivation.
+  const derivationHints = {
+    explicit_ids: "These gates were lifted from your brief's explicit ids.",
+    acceptance_list: "These gates were lifted from your brief's acceptance-criteria list.",
+    generic_fallback: "No criteria were detected in the brief — one generic gate holds it honest.",
+    approved_plan: "These gates are the approved plan's acceptance criteria.",
+  };
+  const gateHint = derivationHints[s.metadata?.gate_derivation]
+    || "Each gate needs evidence and both sign-offs to pass.";
   box.innerHTML = "";
   const rail = $(`<div class="session-rail">
       <div><div class="kicker">Session</div><div class="rail-title">${esc(s.name)}</div></div>
       <div class="rail-status"><i id="rail-current-dot" class="led ${working ? "live" : ""}"></i><span id="rail-current">${esc(current)}</span></div>
       <div id="timebox" class="rail-clock mono">${esc(["complete", "stopped", "failed", "timed_out"].includes(s.status) ? "Session ended" : timeboxText(s.deadline))}</div>
-      <div class="rail-progress"><div class="rail-progress-line"><span>Acceptance gates</span><b id="rail-gates">${esc(g.satisfied + "/" + g.required)}</b></div><span class="rail-progress-track"><i id="rail-gates-bar" style="width:${gatePercent}%"></i></span></div>
+      <div class="rail-progress" title="${esc(gateHint)}"><div class="rail-progress-line"><span>Acceptance gates</span><b id="rail-gates">${esc(g.satisfied + "/" + g.required)}</b></div><span class="rail-progress-track"><i id="rail-gates-bar" style="width:${gatePercent}%"></i></span></div>
       <nav class="rail-nav" aria-label="Session tools">${nav.map(tab =>
         `<button data-tab="${tab}" class="${tab===S.tab?"on":""}">${tab === "conversation" ? "Conversation" : tab[0].toUpperCase()+tab.slice(1)}</button>`
       ).join("")}</nav>
@@ -3331,7 +3464,8 @@ async function paint(tab, el) {
       <div class="between"><div><b class="mono">${esc(p.plan_id)}</b> ${statusPill}
         <span class="small muted">revision ${p.revision} · baseline ${esc((p.inspection_sha||"").slice(0,12))}</span>
         <div class="small muted" style="margin-top:.25rem">budgets: ${b.turns_used}/${b.turn_budget} turns ·
-          ${b.revisions_used}/${b.revision_budget} revisions · ${b.minutes_budget} min${b.resumes_used?" (resumed once)":""}</div></div>
+          ${b.revisions_used}/${b.revision_budget} revisions · ${b.minutes_budget} min${b.resumes_used?" (resumed once)":""}</div>
+        <div class="small muted" style="margin-top:.25rem">The agents inspect a disposable ${defTerm("planning workspace")}, anchored to the baseline above.</div></div>
         <div class="row">
           ${p.status === "ready" || (p.status === "needs_human_resolution" && p.revision >= 1 && !p.open_blockers.length) ? `<button class="primary" id="plan-approve">Approve &amp; Continue to Coordination</button>` : ""}
           ${p.status === "needs_human_resolution" && b.resume_available ? `<button class="primary" id="plan-resume">Resume the budget (once)</button>` : ""}
@@ -3398,7 +3532,8 @@ async function paint(tab, el) {
     const r = await api("gates" + q);
     const editable = !["complete", "stopped", "failed", "timed_out"].includes(d.session.status);
     el.innerHTML = r.gates.length ? `<div class="between"><div><b>${r.summary.satisfied}/${r.summary.required} verified</b>
-      <div class="small muted">Agents report evidence here as they work. You can correct or override any gate.</div></div></div>
+      <div class="small muted">Agents report evidence here as they work. You can correct or override any ${defTerm("gate")}.</div></div></div>
+      ${r.derivation_note ? `<div class="note small" style="margin-top:.7rem">${esc(r.derivation_note)}</div>` : ""}
       <div class="stack" style="margin-top:1rem">${r.gates.map(x=>`<div class="card gate-card" data-gate="${esc(x.gate_id)}">
         <div class="between"><div><b class="mono">${esc(x.gate_id)}</b><div class="small" style="margin-top:.18rem">${esc(x.description)}</div></div>
           <select class="gate-status" ${editable?"":"disabled"}>${["pending","in_progress","pass","fail","unverified","waived"].map(status => `<option value="${status}" ${x.status===status?"selected":""}>${status.replace("_"," ")}</option>`).join("")}</select></div>
@@ -3406,8 +3541,8 @@ async function paint(tab, el) {
         <div class="small muted" style="margin-top:.25rem">Builder: ${esc(x.builder_assessment || "not recorded")} · Reviewer: ${esc(x.reviewer_assessment || "not recorded")}</div>
         ${editable?`<details style="margin-top:.65rem"><summary class="small muted" style="cursor:pointer">Add evidence or override</summary><div class="grid" style="margin-top:.55rem"><input class="gate-evidence mono" placeholder="Evidence, test, or commit"><input class="gate-builder" placeholder="Builder assessment"><input class="gate-reviewer" placeholder="Reviewer assessment"><button class="primary gate-save">Save gate</button></div></details>`:""}
         ${x.blocker?`<div class="small" style="color:var(--warn);margin-top:.55rem">${esc(x.blocker)}</div>`:""}</div>`).join("")}</div>
-      <div class="small muted" style="margin-top:.9rem">A gate passes only with evidence and both sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>${gateAddForm(editable)}`
-      : `<span class="muted">No gates defined yet.</span>${gateAddForm(editable)}`;
+      <div class="small muted" style="margin-top:.9rem">A ${defTerm("gate")} passes only with evidence and both sign-offs. ${esc(r.summary.blockers.join("; ")||"")}</div>${gateAddForm(editable)}`
+      : `<span class="muted">No ${defTerm("gate", "gates")} defined yet.</span>${r.derivation_note ? `<div class="note small" style="margin-top:.7rem">${esc(r.derivation_note)}</div>` : ""}${gateAddForm(editable)}`;
     document.getElementById("gate-new-save")?.addEventListener("click", guard(async () => {
       const gateId = document.getElementById("gate-new-id").value.trim();
       const description = document.getElementById("gate-new-description").value.trim();
@@ -3572,7 +3707,22 @@ async function paint(tab, el) {
   } else if (tab === "contract") {
     const r = await api("contract" + q);
     const a = r.acknowledgments;
-    el.innerHTML = `<div class="between"><div><b>Revision ${r.revision}</b>
+    const h = r.human_summary;
+    const list = values => (values || []).map(esc).join(", ");
+    // The human cover: the same terms the verbatim text below states, said
+    // plainly — what was asked, who works, what they may do, what done means.
+    const cover = h ? `<div class="stack" style="gap:.45rem;margin-bottom:1.15rem">
+      <div class="small">This ${defTerm("contract", "session contract")} is the set of terms every agent must agree to before work begins. In plain terms:</div>
+      ${h.goal ? `<div class="small"><b>What you asked for:</b> ${esc(h.goal)}</div>` : ""}
+      <div class="small"><b>Who is working:</b> ${(h.team || []).map(m => `${esc(m.name)} — ${esc(m.role_label)}`).join(" · ") || "no one yet"}</div>
+      <div class="small"><b>They may:</b> ${list(h.allowed) || "nothing"}.</div>
+      ${(h.ask_first || []).length ? `<div class="small"><b>They must ask you first:</b> ${list(h.ask_first)}.</div>` : ""}
+      ${(h.denied || []).length ? `<div class="small"><b>Refused for this session:</b> ${list(h.denied)}.</div>` : ""}
+      <div class="small"><b>Done means:</b> ${esc(h.done)}${(h.gate_ids || []).length ? ` <span class="mono">(${list(h.gate_ids)})</span>` : ""}</div>
+      ${h.timebox ? `<div class="small"><b>Timebox:</b> ${esc(h.timebox)}</div>` : ""}
+      <div class="small muted">${esc(h.acknowledgment)}</div>
+    </div>` : "";
+    el.innerHTML = `${cover}<div class="between"><div><b>Revision ${r.revision}</b>
       <span class="small muted mono"> ${esc(r.short_digest)}</span></div></div>
       <table style="margin-top:.8rem"><tbody>${a.expected.map(p => {
         const c = a.conflicts.find(x=>x.participant===p);
@@ -3582,7 +3732,8 @@ async function paint(tab, el) {
           : `<span class="pill dim">waiting</span>`}</td></tr>`;}).join("")}</tbody></table>
       ${a.all_accepted && d.session.status==="awaiting_ack"
         ? `<button class="primary" id="act" style="margin-top:1rem">Activate session</button>` : ""}
-      <pre style="margin-top:1rem;max-height:26rem;overflow:auto">${esc(r.core_text)}</pre>`;
+      <div class="small muted" style="margin-top:1rem">The agents' exact copy:</div>
+      <pre style="margin-top:.4rem;max-height:26rem;overflow:auto">${esc(r.core_text)}</pre>`;
     const act = el.querySelector("#act");
     if (act) act.onclick = guard(async () => {
       await api("activate", { session: S.session });

@@ -643,6 +643,9 @@ def test_approval_promotes_into_exactly_one_linked_coordination_session(manager,
     assert coordination.metadata["promoted_from"] == record.session_id
     assert coordination.metadata["plan_id"] == "PLAN-001"
     assert coordination.metadata["inspection_sha"] == inspection
+    assert coordination.metadata["gate_derivation"] == "approved_plan", (
+        "gate provenance is the plan, not the spec-text extraction heuristics"
+    )
     worktree_head = subprocess.run(
         ["git", "-C", coordination.worktree_path, "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True,
@@ -885,6 +888,7 @@ def test_a_crash_between_provision_and_finalize_is_adopted_and_completed(manager
     adopted = manager.get(orphan.session_id)
     assert [g.gate_id for g in manager.gates(orphan.session_id)] == ["CACHE-01", "CACHE-02"]
     assert adopted.contract_revision == 1
+    assert adopted.metadata["gate_derivation"] == "approved_plan"
     linked = [
         s for s in manager.list_sessions()
         if (s.metadata or {}).get("promoted_from") == record.session_id

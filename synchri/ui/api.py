@@ -19,10 +19,16 @@ from ..errors import NotFoundError, ValidationError
 from ..session import discovery, drafts as drafts_module, presets as presets_module, worktree as worktree_module
 from ..session.draft import SessionDraft
 from ..session.escalation import CATALOG as ESCALATION_CATALOG
-from ..session.extract import describe as describe_gates, extract_gates
+from ..session.extract import (
+    derivation_note,
+    describe as describe_gates,
+    extract_gates,
+    extract_gates_with_derivation,
+)
 from ..session.gates import Gate
 from ..session.manager import SessionManager
 from ..session.modes import (
+    ROLE_LABELS,
     ParticipantPlan,
     Role,
     collaboration_pair,
@@ -32,7 +38,13 @@ from ..session.modes import (
     plan_launch_status,
     runtime_catalog,
 )
-from ..session.permissions import PermissionSet, permission_profile, permission_profiles
+from ..session.permissions import (
+    BY_KEY,
+    CATALOG as PERMISSION_CATALOG,
+    PermissionSet,
+    permission_profile,
+    permission_profiles,
+)
 from ..session.spec import ProductSpec
 from ..storage import dao, db
 from ..runner import ancillary as ancillary_module
@@ -675,7 +687,7 @@ class Api:
             )
         return {
             "session": record.to_dict(),
-            "contract": document.to_dict(),
+            "contract": {**document.to_dict(), "human_summary": self._contract_summary(record)},
             "launch": {
                 "room_id": record.room_id,
                 "worktree_path": workdir,
@@ -762,13 +774,73 @@ class Api:
     def contract(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query)
         document = self.manager.current_contract(session_id)
+        record = self.manager.get(session_id)
         payload = document.to_dict()
         payload["per_participant"] = {
             plan.name: document.for_participant(plan.name)
-            for plan in self.manager.get(session_id).participants
+            for plan in record.participants
         }
         payload["acknowledgments"] = self.manager.acknowledgment_state(session_id)
+        payload["human_summary"] = self._contract_summary(record)
         return payload
+
+    def _contract_summary(self, record) -> dict:
+        """The human-addressed cover for the verbatim contract beneath it.
+
+        Derived at serve time from the same session configuration the contract
+        was generated from — never stored — so old sessions get it too and it
+        can never drift from what the exact text says.
+        """
+        permissions = record.permissions
+        ask = [
+            capability.key for capability in PERMISSION_CATALOG
+            if permissions.requires_escalation(capability.key)
+        ]
+        gates = self.manager.gates(record.session_id)
+        if record.policy.planning:
+            goal = (record.metadata or {}).get("idea") or ""
+            done = (
+                "The planner and the adversarial reviewer close the loop on a "
+                "written plan; nothing is executed until you approve it."
+            )
+        else:
+            goal = record.spec.canonical_text() if record.spec else ""
+            done = (
+                f"All {len(gates)} acceptance gate(s) pass with recorded "
+                "evidence and both sign-offs."
+                if gates else "No acceptance gates are defined yet."
+            )
+        goal_line = next(
+            (line.strip("# ").strip() for line in goal.splitlines() if line.strip()), ""
+        )
+        return {
+            "mode": record.policy.label,
+            "goal": goal_line[:200],
+            "team": [
+                {
+                    "name": plan.name,
+                    "role_label": ROLE_LABELS.get(plan.role, plan.role),
+                    "runtime": plan.runtime,
+                }
+                for plan in record.participants
+            ],
+            "allowed": [BY_KEY[key].label for key in permissions.granted_keys()],
+            "ask_first": [BY_KEY[key].label for key in ask],
+            "denied": [BY_KEY[key].label for key in permissions.denied_keys()],
+            "done": done,
+            "gate_ids": [gate.gate_id for gate in gates[:8]],
+            "timebox": record.deadline.describe() if record.deadline else None,
+            "workspace": (
+                record.worktree.path if record.worktree
+                else (record.planning_workspace.get("path") or record.repo_root)
+            ),
+            "acknowledgment": (
+                "The text below is the agents' copy of these terms. Each must "
+                "reply UNDERSTOOD before work begins, and changing the "
+                "permissions, brief, timebox, or team issues a new revision "
+                "they must acknowledge again."
+            ),
+        }
 
     def acknowledge(self, query: dict, body: dict) -> dict:
         session_id = self._session_id(query, body)
@@ -894,11 +966,19 @@ class Api:
         from ..session.gates import summarize
 
         gates = self.manager.gates(session_id)
-        return {"gates": [g.to_dict() for g in gates], "summary": summarize(gates)}
+        # Where the gates came from, persisted at create or promotion time.
+        # Sessions from before the field existed simply carry no label.
+        derivation = (self.manager.get(session_id).metadata or {}).get("gate_derivation")
+        return {
+            "gates": [g.to_dict() for g in gates],
+            "summary": summarize(gates),
+            "derivation": derivation,
+            "derivation_note": derivation_note(derivation),
+        }
 
     def preview_gates(self, query: dict, body: dict) -> dict:
         """What gate detection would make of a brief, before anything exists."""
-        gates = extract_gates(body.get("spec") or "")
+        gates, derivation = extract_gates_with_derivation(body.get("spec") or "")
         if len(gates) == 1 and gates[0].gate_id == "SPEC-01":
             note = (
                 "No explicit acceptance criteria detected — the session gets one generic "
@@ -910,6 +990,7 @@ class Api:
         return {
             "gates": [{"gate_id": g.gate_id, "description": g.description} for g in gates],
             "note": note,
+            "derivation": derivation,
         }
 
     def update_gate(self, query: dict, body: dict) -> dict:

@@ -1347,6 +1347,12 @@ def _complete_provisioning(manager, coordination, promo: dict):
             coordination.session_id,
             [Gate(gate_id=gate_id, description=text) for gate_id, text in criteria],
         )
+    # The gates' provenance is the approved plan, not whatever the extraction
+    # heuristics made of the promoted spec text at create time.
+    metadata = dict(manager.get(coordination.session_id).metadata or {})
+    if metadata.get("gate_derivation") != "approved_plan":
+        metadata["gate_derivation"] = "approved_plan"
+        manager._update(coordination.session_id, metadata=json.dumps(metadata))
     if coordination.contract_revision < 1:
         manager.issue_contract(
             coordination.session_id,

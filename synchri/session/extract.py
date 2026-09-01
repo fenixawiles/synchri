@@ -38,23 +38,63 @@ _BULLET = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(?P<text>.+?)\s*$"
 MAX_GATES = 100
 MAX_DESCRIPTION = 300
 
+#: How a session's gates came to exist — persisted in session metadata so the
+#: dashboard can keep explaining it long after the type-time preview is gone.
+DERIVATION_EXPLICIT = "explicit_ids"
+DERIVATION_ACCEPTANCE = "acceptance_list"
+DERIVATION_GENERIC = "generic_fallback"
+#: Set at plan promotion (synchri.session.planning), never by extraction.
+DERIVATION_APPROVED_PLAN = "approved_plan"
 
-def extract_gates(spec_text: str) -> list[Gate]:
-    """Propose gates from a specification. Empty means "we could not tell"."""
+DERIVATION_NOTES = {
+    DERIVATION_EXPLICIT: (
+        "These gates come from the explicit identifiers your brief already "
+        "carried (AUTH-01-style lines) — nothing was invented."
+    ),
+    DERIVATION_ACCEPTANCE: (
+        "These gates come from the bullets under your brief's "
+        "acceptance-criteria heading, numbered in order."
+    ),
+    DERIVATION_GENERIC: (
+        "Your brief carried no parseable acceptance criteria, so one generic "
+        "gate holds the whole specification honest at completion. You or the "
+        "agents can add sharper gates at any time."
+    ),
+    DERIVATION_APPROVED_PLAN: (
+        "These gates are the approved plan's acceptance criteria, "
+        "materialized verbatim when the plan was promoted."
+    ),
+}
+
+
+def derivation_note(kind: str | None) -> str | None:
+    return DERIVATION_NOTES.get(kind or "")
+
+
+def extract_gates_with_derivation(spec_text: str) -> tuple[list[Gate], str]:
+    """Propose gates from a specification, and say which rule produced them."""
     if not spec_text or not spec_text.strip():
-        return []
+        return [], DERIVATION_GENERIC
 
     explicit = _explicit_gates(spec_text)
     if explicit:
-        return explicit[:MAX_GATES]
+        return explicit[:MAX_GATES], DERIVATION_EXPLICIT
     accepted = _acceptance_section_gates(spec_text)
     if accepted:
-        return accepted[:MAX_GATES]
+        return accepted[:MAX_GATES], DERIVATION_ACCEPTANCE
     # The product brief is allowed to be a ticket, pasted chat, plain prose,
     # or any other text.  A generic evidence gate keeps that unconstrained
     # input honest at completion without pretending Synchri understood or
     # rewrote the user's requirements.
-    return [Gate(gate_id="SPEC-01", description="Deliver the supplied specification.")]
+    return (
+        [Gate(gate_id="SPEC-01", description="Deliver the supplied specification.")],
+        DERIVATION_GENERIC,
+    )
+
+
+def extract_gates(spec_text: str) -> list[Gate]:
+    """Propose gates from a specification. Empty means "we could not tell"."""
+    return extract_gates_with_derivation(spec_text)[0]
 
 
 def _explicit_gates(spec_text: str) -> list[Gate]:

@@ -1890,3 +1890,112 @@ def test_launch_payload_reports_runtime_connection_state(ui, repo):
 
     boot = call(ui, "/api/bootstrap")
     assert boot["runtime_connections"]["codex"]["state"] == "connected"
+
+
+# ----------------------------------------------------------------------
+# the redesigned shell
+# ----------------------------------------------------------------------
+
+
+def test_the_shell_is_a_global_collapsible_sidebar():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert '<aside id="sidebar"' in source
+    assert 'id="side-toggle"' in source and 'id="side-reveal"' in source
+    assert "S.sidebarCollapsed" in source
+    assert "function applySidebar(" in source and "function toggleSidebar(" in source
+    # Collapse removes the sidebar from layout and the accessibility tree.
+    assert ".shell.collapsed #sidebar{display:none}" in source
+    assert 'aria-controls="sidebar"' in source
+    # The old top header chrome is gone; its controls live in the sidebar.
+    assert "<header>" not in source
+    assert 'id="nav-new"' in source and 'id="github-account"' in source
+    assert 'id="theme-menu"' in source and 'id="app-update"' in source
+
+
+def test_the_sidebar_becomes_the_session_rail_without_double_chrome():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    assert "function renderSideContext(" in source
+    assert "function renderSessionRail(" in source
+    # The one global sidebar swaps its browsing lists for session telemetry.
+    assert 'if (S.view === "session" && S.dash)' in source
+    assert "renderSessionRail(box);" in source
+    assert 'id="session-rail"' not in source
+    assert "session-rail-side" not in source
+    assert 'id="rail-toggle"' not in source
+    # Browsing shows workflows and the compact recent-session list.
+    assert "Show all ${list.length} sessions" in source
+    assert "S.showAllSessions ? list : list.slice(0, 6)" in source
+
+
+def test_the_chrome_is_neutral_ink_with_semantic_color():
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # Primary actions are inverted ink, not a hue; success needs an explicit
+    # modifier instead of being the pill default.
+    assert "button.primary{background:var(--btn);" in source
+    assert ".pill.ok{color:var(--ok)}" in source
+    root = re.search(r"\n:root\{(.*?)\n\}", source, re.S).group(1)
+    for token in ("--btn:", "--btn-ink:", "--ok:", "--ok-soft:", "--ok-line:", "--frame:"):
+        assert token in root
+    # The blinking terminal cursor is retired along with the terminal look.
+    assert "cursorblink" not in source
+    # Keep the persisted theme key stable while presenting the calmer name.
+    assert '{key: "terminal", label: "Graphite"' in source
+    assert 'label: "Terminal"' not in source
+
+
+def test_the_new_session_flow_asks_progressively():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    for question in ("What are we working on?", "Where should the agents work?",
+                     "What do you want done?", "Who should work on it?", "Ready."):
+        assert question in source
+    assert "Help me make a plan" in source
+    # A saved workflow is recommended, never required: the recommended team
+    # can launch a build directly, and planning routes through the draft API.
+    assert "RECOMMENDED_BUILD_TEAM" in source and "RECOMMENDED_PLAN_TEAM" in source
+    assert 'planDraft: `quick-plan-${crypto.randomUUID()}`' in source
+    assert 'const draftId = q.planDraft;' in source
+    assert 'await api("draft", {draft: draftId, mode: "planning"' in source
+    assert 'await api("start", {draft: draftId})' in source
+    assert 'role="radiogroup" aria-label="Session intent"' in source
+    assert 'role="radio" aria-checked="${planIntent}"' in source
+    # Changing the repository invalidates the repository-scoped answers.
+    assert "S.quick.workspace_choice = null;\n  S.quick.editStep = null;" in source
+    # The timebox is segmented pills, and raw connection prompts stay tucked
+    # inside a collapsed fallback drawer.
+    assert "TIMEBOX_CHOICES" in source and '["2 hours", "2h"]' in source
+    assert "data-tb=" in source
+    assert "Manual connection fallback" in source
+
+
+def test_quick_plan_drafts_are_isolated_between_browser_flows(ui, repo):
+    agents = [
+        {"runtime": "claude_code", "role": "planner"},
+        {"runtime": "codex", "role": "plan_reviewer"},
+    ]
+    # Interleave the writes exactly as two browser windows can. A shared key
+    # would make window A start window B's idea and leave B with no draft.
+    for draft_id, idea in (("quick-plan-window-a", "Idea from window A."),
+                           ("quick-plan-window-b", "Idea from window B.")):
+        call(ui, "/api/draft/reset", {"draft": draft_id})
+        call(ui, "/api/draft", {"draft": draft_id, "mode": "planning",
+                                "repo_path": str(repo), "spec": idea, "agents": agents})
+
+    started_a = call(ui, "/api/start", {"draft": "quick-plan-window-a"})
+    started_b = call(ui, "/api/start", {"draft": "quick-plan-window-b"})
+    for started, idea in ((started_a, "Idea from window A."),
+                          (started_b, "Idea from window B.")):
+        session_id = started["session"]["session_id"]
+        session = call(ui, f"/api/session?session={session_id}")
+        plan = call(ui, f"/api/plan?session={session_id}")
+        assert session["mode"] == "planning"
+        assert [p["name"] for p in session["participants"]] == ["Claude", "Codex"]
+        assert plan["idea"] == idea

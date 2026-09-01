@@ -53,7 +53,7 @@ The interface is mono-forward — an instrument panel, not a marketing page.
 Data (paths, branches, statuses, countdowns, logs) renders in monospace; prose
 stays prose. By default it follows the OS light/dark preference; the header's
 **theme picker** offers ten explicit palettes spanning the spectrum — dark:
-Terminal (graphite, emerald), Midnight (slate, blue), Ember (warm, coral red),
+Graphite (charcoal, emerald), Midnight (slate, blue), Ember (warm, coral red),
 Copper (umber, burnt orange), Orchid (violet); light: Daylight (instrument
 green), Sage (warm paper, the original Synchri green), Solar (parchment,
 gold), Harbor (grey-blue), Iris (lavender, indigo) — stored in the browser,

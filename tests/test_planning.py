@@ -1182,6 +1182,17 @@ def test_planning_commands_carry_the_clis_own_enforcement():
     assert planning_workspace_supported("copilot") is False
 
 
+def test_planning_sessions_launch_their_full_roster_only(manager, repo):
+    """Directives parse only from managed stdout, so no planning role can be
+    left to an external terminal."""
+    record = _planning_session(manager, repo)
+    with pytest.raises(ValidationError) as exc:
+        manager.set_managed_participants(record.session_id, ["claude"])
+    assert "full roster" in str(exc.value)
+    # The full roster is not a subset — recording it is allowed.
+    manager.set_managed_participants(record.session_id, ["claude", "codex"])
+
+
 def test_custom_commands_are_refused_for_planning(manager, repo):
     with pytest.raises(ValidationError) as exc:
         manager.create(

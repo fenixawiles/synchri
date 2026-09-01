@@ -2307,6 +2307,29 @@ async function openLaunch(id) {
   showLaunch(result);
 }
 
+/* Assembly indicators are real durable phase transitions, never a spinner on
+   a timer. Shared by the fully-managed and mixed preflights. */
+const PREFLIGHT_PHASES = {
+  launching: ["launching", "warn"],
+  injecting_bootstrap: ["injecting bootstrap", "warn"],
+  awaiting_acknowledgment: ["awaiting acknowledgment", "warn"],
+  ready: ["ready", "ok"],
+  failed: ["failed", "bad"],
+};
+
+function agentStatusPill(agent, managedRow) {
+  if (managedRow && agent.join_phase && PREFLIGHT_PHASES[agent.join_phase]) {
+    const [label, cls] = PREFLIGHT_PHASES[agent.join_phase];
+    return `<span class="pill ${cls}">${esc(label)}</span>`;
+  }
+  if (agent.joined) {
+    return agent.acknowledged ? `<span class="pill ok">ready</span>` : `<span class="pill warn">reading agreement</span>`;
+  }
+  return managedRow
+    ? `<span class="pill dim">${agent.connected ? "ready to launch" : "not started"}</span>`
+    : `<span class="pill dim">not connected</span>`;
+}
+
 function renderLaunch() {
   const l = S.launch, a = l.acknowledgments;
   app().innerHTML = "";
@@ -2331,31 +2354,12 @@ function renderLaunch() {
 
   if (allManaged) {
     const list = document.getElementById("preflight-agents");
-    // Assembly indicators are real durable phase transitions, never a spinner
-    // on a timer. They live from Start until every agent is officially ready,
-    // then the room opens and they go away.
-    const phasePills = {
-      launching: ["launching", "warn"],
-      injecting_bootstrap: ["injecting bootstrap", "warn"],
-      awaiting_acknowledgment: ["awaiting acknowledgment", "warn"],
-      ready: ["ready", "ok"],
-      failed: ["failed", "bad"],
-    };
     const failedAgents = l.agents.filter(agent => agent.join_phase === "failed");
     const allConnected = l.agents.every(agent => agent.connected);
     for (const agent of l.agents) {
-      let status;
-      if (agent.join_phase && phasePills[agent.join_phase]) {
-        const [label, cls] = phasePills[agent.join_phase];
-        status = `<span class="pill ${cls}">${esc(label)}</span>`;
-      } else {
-        status = agent.joined
-          ? (agent.acknowledged ? `<span class="pill ok">ready</span>` : `<span class="pill warn">reading agreement</span>`)
-          : `<span class="pill dim">${agent.connected ? "ready to launch" : "not started"}</span>`;
-      }
       const failure = agent.join_phase === "failed" && agent.join_detail
         ? `<div class="small" style="margin-top:.3rem;color:var(--bad)">${esc(agent.join_detail)}</div>` : "";
-      list.append($(`<div class="check-row"><div class="check-status">${status}</div>
+      list.append($(`<div class="check-row"><div class="check-status">${agentStatusPill(agent, true)}</div>
         <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
         <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>${failure}</div></div>`));
     }
@@ -2372,7 +2376,7 @@ function renderLaunch() {
     const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0">${l.managed_only ? "" : `<button class="ghost" id="external">Send prompts instead</button>`}
       <span class="small faint">${note}</span></div>
       <button class="primary" id="managed-start" ${run.alive?"disabled":""}>${startLabel}</button></div>`);
-    bar.querySelector("#managed-start").onclick = guard(startManaged);
+    bar.querySelector("#managed-start").onclick = guard(() => startManaged());
     const external = bar.querySelector("#external");
     if (external) external.onclick = () => renderExternalSetup(l);
     actions.append(bar);
@@ -2380,7 +2384,67 @@ function renderLaunch() {
     return;
   }
   if (l.managed_only) { renderManagedOnlyBlocked(l); return; }
+  // A mixed team: launch what Synchri can, paste prompts for the rest — one
+  // screen, never the full paste wall because of a single external agent.
+  // A persisted split (managed_by_synchri) wins; before one exists, runtime
+  // readiness decides which agents Synchri offers to launch.
+  const flagged = l.agents.filter(agent => agent.managed_by_synchri);
+  const readyNames = new Set((managed.readiness.agents || [])
+    .filter(agent => agent.ready).map(agent => agent.name));
+  const managedAgents = flagged.length ? flagged : l.agents.filter(agent => readyNames.has(agent.name));
+  const externalAgents = l.agents.filter(agent => !managedAgents.includes(agent));
+  if (managedAgents.length && externalAgents.length) {
+    renderMixedSetup(l, run, managedAgents, externalAgents);
+    return;
+  }
   renderExternalSetup(l);
+}
+
+function renderMixedSetup(l, run, managedAgents, externalAgents) {
+  const list = document.getElementById("preflight-agents");
+  const actions = document.getElementById("preflight-actions");
+  if (!list || !actions) return;
+  list.innerHTML = `<div class="small muted" style="padding:.65rem 0 .3rem">Synchri launches ${esc(managedAgents.map(agent => agent.name).join(", "))} for you.
+    ${esc(externalAgents.map(agent => agent.name).join(", "))} runs from its own terminal — paste its prompt there. Everyone reads and agrees to the same agreement before anything starts.</div>`;
+  for (const agent of managedAgents) {
+    const failure = agent.join_phase === "failed" && agent.join_detail
+      ? `<div class="small" style="margin-top:.3rem;color:var(--bad)">${esc(agent.join_detail)}</div>` : "";
+    list.append($(`<div class="check-row"><div class="check-status">${agentStatusPill(agent, true)}</div>
+      <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
+        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · Synchri launches this agent</span></div>${failure}</div></div>`));
+  }
+  for (const agent of externalAgents) {
+    const row = $(`<div class="check-row"><div class="check-status">${agentStatusPill(agent, false)}</div>
+      <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
+        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div>
+        <details class="adv" ${agent.joined ? "" : "open"}><summary class="small muted">Manual connection fallback</summary>
+          <pre>${esc(agent.setup_prompt)}</pre>
+          <div class="row" style="margin-top:.55rem"><button class="primary" data-copy>Copy for ${esc(agent.name)}</button></div>
+        </details></div></div>`);
+    const setup = row.querySelector("[data-copy]");
+    setup.onclick = guard(async () => { await copyText(agent.setup_prompt); setup.textContent = "Copied"; });
+    list.append(row);
+  }
+  actions.innerHTML = "";
+  const managedDone = managedAgents.every(agent => agent.acknowledged);
+  const waitingExternal = externalAgents.filter(agent => !agent.acknowledged).map(agent => agent.name);
+  const note = run.alive ? (run.detail || "Starting your agents…")
+    : managedDone
+      ? (l.ready_to_activate
+        ? "Everyone joined and agreed. Begin when ready."
+        : `Waiting for ${waitingExternal.join(", ") || "an acknowledgement"}.`)
+      : "Start your managed agents — the pasted prompts work in parallel.";
+  const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0">
+      ${managedDone ? "" : `<button class="primary" id="managed-start" ${run.alive ? "disabled" : ""}>${run.alive ? "Starting…" : "Start my agents"}</button>`}
+      <span class="small faint">${esc(note)}</span></div>
+    <button class="primary" id="activate" ${l.ready_to_activate ? "" : "disabled"}>Begin collaboration</button></div>`);
+  bar.querySelector("#managed-start")?.addEventListener(
+    "click", guard(() => startManaged(managedAgents.map(agent => agent.name))));
+  bar.querySelector("#activate").onclick = guard(async () => {
+    await api("activate", {session:S.session}); await openSession(S.session);
+  });
+  actions.append(bar);
+  if (run.alive) pollManagedLaunch();
 }
 
 function renderManagedOnlyBlocked(l) {
@@ -2404,8 +2468,12 @@ function renderManagedOnlyBlocked(l) {
   actions.append($(`<div class="between" style="gap:1rem"><span class="small faint">Install or sign in to each runtime above, then refresh this preflight.</span></div>`));
 }
 
-async function startManaged() {
-  await api("managed/start", {session:S.session});
+async function startManaged(participants) {
+  const payload = {session:S.session};
+  // A mixed team names its managed subset; the split persists on the session
+  // so resume and restart honor it without being told again.
+  if (Array.isArray(participants) && participants.length) payload.participants = participants;
+  await api("managed/start", payload);
   await refreshLaunch();
   pollManagedLaunch();
 }

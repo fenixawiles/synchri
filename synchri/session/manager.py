@@ -871,6 +871,44 @@ class SessionManager:
         """Non-raising variant, for rendering UI state."""
         return self.get(session_id).permissions.allows(capability)
 
+    def set_managed_participants(self, session_id: str, names: list[str]) -> "SessionRecord":
+        """Record which participants the local managed runner supervises.
+
+        The flags are the durable split behind a mixed team: start, resume,
+        restart, and post-restart reconstruction all derive the managed subset
+        from them, so the split survives the UI process. Absent flags mean the
+        legacy shape — every participant managed. Planning sessions refuse a
+        strict subset: plan directives are parsed only from managed stdout, so
+        an externally-run planning role could never submit anything.
+        """
+        record = self.get(session_id)
+        roster = {plan.name for plan in record.participants}
+        chosen = list(dict.fromkeys(names or []))
+        unknown = sorted(set(chosen) - roster)
+        if unknown:
+            raise ValidationError(f"unknown participant(s): {', '.join(unknown)}")
+        if not chosen:
+            raise ValidationError("name at least one participant for Synchri to launch")
+        if record.policy.planning and set(chosen) != roster:
+            raise ValidationError(
+                "planning sessions launch their full roster — plan directives are "
+                "parsed only from managed agents"
+            )
+        with db.transaction(self.conn):
+            for plan in record.participants:
+                metadata = dict(plan.metadata or {})
+                if plan.name in chosen:
+                    metadata["managed_by_synchri"] = True
+                else:
+                    metadata.pop("managed_by_synchri", None)
+                self.conn.execute(
+                    "UPDATE session_participants SET metadata = ? "
+                    "WHERE session_id = ? AND name = ?",
+                    (json.dumps(metadata), session_id, plan.name),
+                )
+        self._log(record, "session.managed_split_set", {"managed": chosen})
+        return self.get(session_id)
+
     # ------------------------------------------------------------------
     # gates and completion
     # ------------------------------------------------------------------

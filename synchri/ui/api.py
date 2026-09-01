@@ -511,8 +511,19 @@ class Api:
         return self._launch_payload(self.manager.get(self._session_id(query)))
 
     def start_managed(self, query: dict, body: dict) -> dict:
-        """Attach, obtain agreement from, and launch detected local agents."""
+        """Attach, obtain agreement from, and launch detected local agents.
+
+        An optional ``participants`` list names the subset Synchri should
+        launch — a mixed team's externally-run agents stay outside it. The
+        split persists on the session, so resume, restart, and post-restart
+        reconstruction all honor it without being told again.
+        """
         record = self.manager.get(self._session_id(query, body))
+        names = body.get("participants")
+        if names is not None:
+            if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+                raise ValidationError("participants must be a list of participant names")
+            record = self.manager.set_managed_participants(record.session_id, names)
         run = (
             self.managed.resume(record)
             if record.status == "active"
@@ -679,6 +690,7 @@ class Api:
                     "managed_ready": launch_status["ready"],
                     "launch_detail": launch_status["detail"],
                     "connected": connections.get(plan.runtime, {}).get("state") == "connected",
+                    "managed_by_synchri": bool((plan.metadata or {}).get("managed_by_synchri")),
                     "join_phase": state.get("join_phase"),
                     "join_detail": state.get("join_detail"),
                     "join_command": join_command,
@@ -850,7 +862,13 @@ class Api:
         return {**result, "state": self.manager.acknowledgment_state(session_id)}
 
     def activate(self, query: dict, body: dict) -> dict:
-        return self.manager.activate(self._session_id(query, body)).to_dict()
+        record = self.manager.activate(self._session_id(query, body))
+        # A mixed team: the human's Begin collaboration is the moment its
+        # managed subset starts supervision. Rosters that never chose managed
+        # launch carry no flags and are untouched.
+        if any((plan.metadata or {}).get("managed_by_synchri") for plan in record.participants):
+            self.managed.resume(record)
+        return record.to_dict()
 
     # -- tabs ----------------------------------------------------------
 

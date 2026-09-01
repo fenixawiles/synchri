@@ -458,7 +458,8 @@ def test_every_session_start_routes_to_the_agent_setup_prompts():
     assert "showLaunch(r);" in source
     assert "Start my agents" in source
     assert "function renderExternalSetup(l)" in source
-    assert 'api("managed/start", {session:S.session})' in source
+    assert "function startManaged(participants)" in source
+    assert 'api("managed/start", payload)' in source
     assert "function openLaunch(id)" in source
 
 
@@ -1150,6 +1151,24 @@ def test_the_contract_carries_a_human_summary(ui, repo):
     # The preflight payload carries the same cover, derived at serve time.
     launch = call(ui, f"/api/launch?session={session_id}")
     assert launch["contract"]["human_summary"]["team"]
+
+
+def test_the_preflight_handles_mixed_teams():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # One combined screen: managed rows with real phase indicators, external
+    # rows with their collapsed paste fallback — a single external agent no
+    # longer forces the whole preflight through the paste wall.
+    assert "renderMixedSetup" in source
+    assert "agentStatusPill" in source
+    assert "managed_by_synchri" in source
+    assert "startManaged(managedAgents.map(" in source, (
+        "the Start button launches only the managed subset"
+    )
+    assert "payload.participants = participants" in source
+    assert "Begin collaboration" in source
+    assert "Manual connection fallback" in source
 
 
 def test_teaching_surfaces_ship_in_the_page():

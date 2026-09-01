@@ -1914,18 +1914,18 @@ def test_the_shell_is_a_global_collapsible_sidebar():
     assert 'id="theme-menu"' in source and 'id="app-update"' in source
 
 
-def test_the_sidebar_stays_global_beside_a_right_telemetry_rail():
+def test_the_sidebar_becomes_the_session_rail_without_double_chrome():
     from pathlib import Path
 
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
     assert "function renderSideContext(" in source
     assert "function renderSessionRail(" in source
-    # The session's telemetry (status, gates, tools, team, controls) lives in
-    # a collapsible right rail; the left rail keeps global navigation.
-    assert 'id="session-rail"' in source
-    assert "session-rail-side" in source
-    assert 'renderSessionRail(document.getElementById("session-rail"))' in source
-    assert 'id="rail-toggle"' in source
+    # The one global sidebar swaps its browsing lists for session telemetry.
+    assert 'if (S.view === "session" && S.dash)' in source
+    assert "renderSessionRail(box);" in source
+    assert 'id="session-rail"' not in source
+    assert "session-rail-side" not in source
+    assert 'id="rail-toggle"' not in source
     # Browsing shows workflows and the compact recent-session list.
     assert "Show all ${list.length} sessions" in source
     assert "S.showAllSessions ? list : list.slice(0, 6)" in source
@@ -1945,6 +1945,9 @@ def test_the_chrome_is_neutral_ink_with_semantic_color():
         assert token in root
     # The blinking terminal cursor is retired along with the terminal look.
     assert "cursorblink" not in source
+    # Keep the persisted theme key stable while presenting the calmer name.
+    assert '{key: "terminal", label: "Graphite"' in source
+    assert 'label: "Terminal"' not in source
 
 
 def test_the_new_session_flow_asks_progressively():
@@ -1958,8 +1961,12 @@ def test_the_new_session_flow_asks_progressively():
     # A saved workflow is recommended, never required: the recommended team
     # can launch a build directly, and planning routes through the draft API.
     assert "RECOMMENDED_BUILD_TEAM" in source and "RECOMMENDED_PLAN_TEAM" in source
-    assert '{draft: "quick-plan", mode: "planning"' in source
-    assert 'await api("start", {draft: "quick-plan"})' in source
+    assert 'planDraft: `quick-plan-${crypto.randomUUID()}`' in source
+    assert 'const draftId = q.planDraft;' in source
+    assert 'await api("draft", {draft: draftId, mode: "planning"' in source
+    assert 'await api("start", {draft: draftId})' in source
+    assert 'role="radiogroup" aria-label="Session intent"' in source
+    assert 'role="radio" aria-checked="${planIntent}"' in source
     # Changing the repository invalidates the repository-scoped answers.
     assert "S.quick.workspace_choice = null;\n  S.quick.editStep = null;" in source
     # The timebox is segmented pills, and raw connection prompts stay tucked
@@ -1969,15 +1976,26 @@ def test_the_new_session_flow_asks_progressively():
     assert "Manual connection fallback" in source
 
 
-def test_the_quick_plan_route_creates_a_planning_session(ui, repo):
-    call(ui, "/api/draft/reset", {"draft": "quick-plan"})
-    call(ui, "/api/draft", {"draft": "quick-plan", "mode": "planning",
-                            "repo_path": str(repo), "spec": "A small idea to plan.",
-                            "agents": [
-                                {"runtime": "claude_code", "role": "planner"},
-                                {"runtime": "codex", "role": "plan_reviewer"}]})
-    started = call(ui, "/api/start", {"draft": "quick-plan"})
-    session_id = started["session"]["session_id"]
-    session = call(ui, f"/api/session?session={session_id}")
-    assert session["mode"] == "planning"
-    assert [p["name"] for p in session["participants"]] == ["Claude", "Codex"]
+def test_quick_plan_drafts_are_isolated_between_browser_flows(ui, repo):
+    agents = [
+        {"runtime": "claude_code", "role": "planner"},
+        {"runtime": "codex", "role": "plan_reviewer"},
+    ]
+    # Interleave the writes exactly as two browser windows can. A shared key
+    # would make window A start window B's idea and leave B with no draft.
+    for draft_id, idea in (("quick-plan-window-a", "Idea from window A."),
+                           ("quick-plan-window-b", "Idea from window B.")):
+        call(ui, "/api/draft/reset", {"draft": draft_id})
+        call(ui, "/api/draft", {"draft": draft_id, "mode": "planning",
+                                "repo_path": str(repo), "spec": idea, "agents": agents})
+
+    started_a = call(ui, "/api/start", {"draft": "quick-plan-window-a"})
+    started_b = call(ui, "/api/start", {"draft": "quick-plan-window-b"})
+    for started, idea in ((started_a, "Idea from window A."),
+                          (started_b, "Idea from window B.")):
+        session_id = started["session"]["session_id"]
+        session = call(ui, f"/api/session?session={session_id}")
+        plan = call(ui, f"/api/plan?session={session_id}")
+        assert session["mode"] == "planning"
+        assert [p["name"] for p in session["participants"]] == ["Claude", "Codex"]
+        assert plan["idea"] == idea

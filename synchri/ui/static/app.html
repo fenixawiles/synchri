@@ -409,7 +409,7 @@ details.menu>div>button:hover{background:var(--panel2)}
    No panels, no cards: content sits directly on the page at a book measure,
    structured by type, whitespace, and the occasional printed rule. */
 .wrap{max-width:44rem;margin:0 auto;padding:3rem 2rem 4.5rem}
-.wrap.session-app{max-width:none;margin:0;padding:0}
+.wrap.session-app{max-width:none;height:100vh;margin:0;padding:0}
 .page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem;margin-bottom:1.4rem}
 .page-head .row button{white-space:nowrap}
 .page-head .sub{font-size:12.5px;color:var(--dim);margin-top:.4rem;max-width:44rem}
@@ -552,14 +552,8 @@ details.adv summary:hover{color:var(--ink)}
   background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius-s)}
 
 /* ---------------------------------------------------------------- session
-   Conversation in the center; a collapsible right telemetry rail carries the
-   session's status, gates, tools, team, and controls. The left rail stays
-   global navigation. */
-.session-layout{display:grid;grid-template-columns:minmax(0,1fr) 16.25rem;height:100vh;background:var(--bg)}
-.session-layout.rail-hidden{grid-template-columns:minmax(0,1fr)}
-.session-layout.rail-hidden .session-rail-side{display:none}
-.session-rail-side{border-left:1px solid var(--line);background:transparent;overflow-y:auto;
-  overflow-x:hidden;padding:1rem .9rem;min-width:0}
+   Conversation fills the main canvas; the one global sidebar becomes the
+   session rail for status, tools, team, and controls. */
 .session-rail{display:flex;flex-direction:column;gap:.9rem;min-height:100%}
 .rail-title{font-size:13.5px;font-weight:650;line-height:1.35}
 .rail-status{font:11.5px var(--mono);color:var(--dim);display:flex;align-items:center;gap:.45rem;padding:0 .1rem}
@@ -752,9 +746,6 @@ pre.diff{background:var(--bg)}
   .wrap{padding:2.6rem 1rem 3rem}
   .wrap.session-app{padding:0}
   .page-head{flex-direction:column;align-items:flex-start}
-  .session-layout{height:100vh}
-  .session-layout:not(.rail-hidden) .session-rail-side{position:fixed;right:0;top:0;bottom:0;
-    width:min(17rem,88vw);z-index:50;box-shadow:var(--shadow);border-left:1px solid var(--line2)}
   .message-list,.live-work,.live-feed,.chat-compose,.chat-header,.inspector-head{padding-left:1rem;padding-right:1rem}
   .chat-header{padding-left:3rem}
   .details-panel{padding:1rem 1rem 2rem}
@@ -948,7 +939,7 @@ const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { flas
    and follows the OS. */
 const THEMES = [
   {key: "", label: "System", swatch: ["#0b0c0e", "#f9f9fb"]},
-  {key: "terminal", label: "Terminal", swatch: ["#0b0c0e", "#10b981"]},
+  {key: "terminal", label: "Graphite", swatch: ["#0b0c0e", "#10b981"]},
   {key: "midnight", label: "Midnight", swatch: ["#0d1119", "#89a8dd"]},
   {key: "ember", label: "Ember", swatch: ["#141110", "#cd8478"]},
   {key: "copper", label: "Copper", swatch: ["#131110", "#c69566"]},
@@ -995,7 +986,7 @@ const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
             agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null,
             workflowName:"", workflowOriginal:"", workflowAgents:null,
             workflowPermissions:null, workflowDeadline:"", update:null, dismissedTimebox:null,
-            worktreeChoices:null, worktreeLoading:null, sidebarCollapsed:false, railCollapsed:false,
+            worktreeChoices:null, worktreeLoading:null, sidebarCollapsed:false,
             returnToQuick:false,
             openFileCards:new Set(), fileCardCache:new Map() };
 const app = () => document.getElementById("app");
@@ -1031,6 +1022,10 @@ function renderSideContext() {
   document.querySelectorAll(".side-nav button").forEach(button =>
     button.classList.toggle("on", S.view === "home" && button.id === "nav-home"));
   box.innerHTML = "";
+  if (S.view === "session" && S.dash) {
+    renderSessionRail(box);
+    return;
+  }
   if (!S.boot) return;
   const workflows = S.boot.presets || [];
   if (workflows.length) {
@@ -1629,6 +1624,7 @@ async function quickStart(selectedWorkflow) {
       teamDone: false,
       deadlineCustom: false,
       editStep: null,
+      planDraft: `quick-plan-${crypto.randomUUID()}`,
     };
     S.worktreeChoices = null;
   }
@@ -1915,11 +1911,11 @@ function renderQuick() {
   const repoBody = () => {
     const body = $(`<div class="ask-body stack"></div>`);
     const repoChoices = [...repos.local.slice(0, 8).map(repo =>
-      `<button class="choice ${repo.path===q.repo_path?"on":""}" data-repo="${esc(repo.path)}">
+      `<button class="choice ${repo.path===q.repo_path?"on":""}" data-repo="${esc(repo.path)}" role="radio" aria-checked="${repo.path===q.repo_path}">
         <div class="repo-row"><b>${esc(repo.name)}</b><span class="mono small muted">${esc(repo.branch || "")}</span></div>
         <span class="mono small faint">${esc(repo.path)}</span></button>`),
       ...repos.github.slice(0, 8).map(repo =>
-        `<button class="choice ${repo.local_path===q.repo_path?"on":""}" data-repo="${esc(repo.full_name)}">
+        `<button class="choice ${repo.local_path===q.repo_path?"on":""}" data-repo="${esc(repo.full_name)}" role="radio" aria-checked="${repo.local_path===q.repo_path}">
           <div class="repo-row"><b>${esc(repo.full_name)}</b><span class="small muted">${repo.local_path ? "cloned" : "will clone"}</span></div>
           ${repo.description ? `<span class="small muted">${esc(repo.description)}</span>` : ""}</button>`)].join("");
     const githubState = !repos.github_status?.authenticated
@@ -1930,7 +1926,7 @@ function renderQuick() {
     const repoList = repoChoices || (S.githubReposLoading
       ? `<div class="small muted">Scanning this Mac and loading GitHub repositories…</div>`
       : `<div class="note small"><b>No repositories were found automatically.</b><div style="margin-top:.15rem">Paste a GitHub link or a local folder below. This path is fully supported.</div></div>`);
-    body.append($(`<div id="quick-repositories" class="repo-grid">${repoList}</div>`));
+    body.append($(`<div id="quick-repositories" class="repo-grid" role="radiogroup" aria-label="Repository">${repoList}</div>`));
     if (repos.github_status?.authenticated && S.githubReposLoading) {
       body.append($(`<div class="small muted">Loading GitHub repositories…</div>`));
     }
@@ -1952,11 +1948,11 @@ function renderQuick() {
   const workspaceBody = () => {
     const body = $(`<div class="ask-body stack"></div>`);
     body.append($(`<div class="small muted">Every session works in a git worktree — your primary checkout is never the target. Even the new worktree is a deliberate choice, never assumed.</div>`));
-    body.append($(`<div class="repo-grid">
-      <button class="choice ${q.workspace_choice === "new" ? "on" : ""}" data-workspace="new">
+    body.append($(`<div class="repo-grid" role="radiogroup" aria-label="Workspace">
+      <button class="choice ${q.workspace_choice === "new" ? "on" : ""}" data-workspace="new" role="radio" aria-checked="${q.workspace_choice === "new"}">
         <div class="repo-row"><b>New isolated worktree</b></div>
         <span class="small muted">A fresh branch and folder created for this session.</span></button>
-      ${worktrees.map(tree => `<button class="choice ${q.workspace_choice === "existing" && tree.path === q.existing_worktree_path ? "on" : ""}" data-workspace="${esc(tree.path)}">
+      ${worktrees.map(tree => `<button class="choice ${q.workspace_choice === "existing" && tree.path === q.existing_worktree_path ? "on" : ""}" data-workspace="${esc(tree.path)}" role="radio" aria-checked="${q.workspace_choice === "existing" && tree.path === q.existing_worktree_path}">
         <div class="repo-row"><b>${esc(tree.name)}</b><span class="mono small muted">${esc(tree.branch)}</span></div>
         <span class="mono small faint">${esc(tree.path)}</span></button>`).join("")}
     </div>`));
@@ -1975,10 +1971,10 @@ function renderQuick() {
 
   const briefBody = () => {
     const body = $(`<div class="ask-body stack"></div>`);
-    body.append($(`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(14rem,1fr))">
-      <button class="choice ${planIntent ? "" : "on"}" data-intent="build"><b>Paste a brief</b>
+    body.append($(`<div class="grid" role="radiogroup" aria-label="Session intent" style="grid-template-columns:repeat(auto-fit,minmax(14rem,1fr))">
+      <button class="choice ${planIntent ? "" : "on"}" data-intent="build" role="radio" aria-checked="${!planIntent}"><b>Paste a brief</b>
         <span class="small muted">A spec, ticket, notes, or plain language — kept verbatim as the contract.</span></button>
-      <button class="choice ${planIntent ? "on" : ""}" data-intent="plan"><b>Help me make a plan</b>
+      <button class="choice ${planIntent ? "on" : ""}" data-intent="plan" role="radio" aria-checked="${planIntent}"><b>Help me make a plan</b>
         <span class="small muted">Planners inspect the repository and draft a plan you approve before any build.</span></button>
     </div>`));
     body.append($(`<textarea id="quick-goal" placeholder="${planIntent
@@ -2102,28 +2098,33 @@ function renderQuick() {
     start.disabled = !planIntent && !q.workspace_choice;
     start.title = start.disabled ? "Choose a workspace first" : "";
     start.onclick = guard(async () => {
+      start.disabled = true;
       q.goal = q.goal.trim();
-      if (planIntent) {
-        // The draft key lives only inside this click — reset, fill, start;
-        // the server deletes it on start. Nothing long-lived is shared, so
-        // parallel windows of this loopback app cannot trample each other.
-        await api("draft/reset", {draft: "quick-plan"});
-        await api("draft", {draft: "quick-plan", mode: "planning", repo_path: q.repo_path,
-          spec: q.goal, deadline: q.deadline.trim() || undefined,
-          agents: RECOMMENDED_PLAN_TEAM.map(agent => ({...agent}))});
-        const result = await api("start", {draft: "quick-plan"});
+      try {
+        if (planIntent) {
+          // Every quick flow owns its draft id. Interleaved browser windows can
+          // reset, fill, and start independently without overwriting each other.
+          const draftId = q.planDraft;
+          await api("draft/reset", {draft: draftId});
+          await api("draft", {draft: draftId, mode: "planning", repo_path: q.repo_path,
+            spec: q.goal, deadline: q.deadline.trim() || undefined,
+            agents: RECOMMENDED_PLAN_TEAM.map(agent => ({...agent}))});
+          const result = await api("start", {draft: draftId});
+          S.quick = null;
+          showLaunch(result);
+          return;
+        }
+        const result = await api("quick-start", {
+          repo_path:q.repo_path, goal:q.goal, deadline:q.deadline, preset:q.preset || undefined,
+          agents: team.workflow ? undefined : RECOMMENDED_BUILD_TEAM.map(agent => ({...agent})),
+          worktree_strategy:q.workspace_choice,
+          existing_worktree_path:q.workspace_choice === "existing" ? q.existing_worktree_path : null,
+        });
         S.quick = null;
         showLaunch(result);
-        return;
+      } finally {
+        if (S.quick === q) start.disabled = !planIntent && !q.workspace_choice;
       }
-      const result = await api("quick-start", {
-        repo_path:q.repo_path, goal:q.goal, deadline:q.deadline, preset:q.preset || undefined,
-        agents: team.workflow ? undefined : RECOMMENDED_BUILD_TEAM.map(agent => ({...agent})),
-        worktree_strategy:q.workspace_choice,
-        existing_worktree_path:q.workspace_choice === "existing" ? q.existing_worktree_path : null,
-      });
-      S.quick = null;
-      showLaunch(result);
     });
     return body;
   };
@@ -2681,9 +2682,8 @@ function stepReview() {
 async function openSession(id) {
   app().classList.add("session-app");
   S.view = "session"; S.session = id;
-  if (isNarrow()) S.railCollapsed = true;
-  // Refresh the sidebar's lists too, so a session created moments ago shows
-  // up (and highlights) in Recent sessions.
+  // Refresh global chrome and session state together. Once loaded, the
+  // sidebar swaps its browsing lists for this session's controls.
   const [boot, dash] = await Promise.all([
     api("bootstrap"),
     api("dashboard?session=" + encodeURIComponent(id)),
@@ -2860,22 +2860,13 @@ function renderSession() {
   const d = S.dash, s = d.session, g = d.gates.summary;
   app().innerHTML = "";
   renderSideContext();
-  const layout = $(`<div class="session-layout${S.railCollapsed ? " rail-hidden" : ""}"><main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
+  const layout = $(`<main class="conversation-shell"><div class="chat-header"><div><div class="chat-title">Conversation</div>
       <div class="chat-subtitle">${esc(s.repository.name)} · ${esc(s.worktree?.branch || s.repository.base_branch || "")}</div></div>
-      <div class="row" style="flex-wrap:nowrap;gap:.8rem"><div class="chat-time"><span id="chat-gates">${esc(g.satisfied + "/" + g.required)}</span> gates verified</div>
-      <button class="ghost" id="rail-toggle" aria-controls="session-rail" aria-expanded="${S.railCollapsed ? "false" : "true"}">Details</button></div></div>
+      <div class="chat-time"><span id="chat-gates">${esc(g.satisfied + "/" + g.required)}</span> gates verified</div></div>
       <div id="conversation-panel" class="conversation-feed"><span class="muted small" style="padding:1rem clamp(1.25rem,3vw,2.5rem)">Loading conversation…</span></div>
       <section id="detail-wrap" class="inspector hide"><div class="inspector-head"><div class="detail-heading" id="detail-heading"></div><button class="detail-close">Close</button></div>
-      <section id="detail-panel" class="details-panel"></section></section></main>
-      <aside class="session-rail-side" id="session-rail" aria-label="Session telemetry"></aside></div>`);
+      <section id="detail-panel" class="details-panel"></section></section></main>`);
   app().append(layout);
-  renderSessionRail(document.getElementById("session-rail"));
-  const railToggle = document.getElementById("rail-toggle");
-  railToggle.onclick = () => {
-    S.railCollapsed = !S.railCollapsed;
-    layout.classList.toggle("rail-hidden", S.railCollapsed);
-    railToggle.setAttribute("aria-expanded", S.railCollapsed ? "false" : "true");
-  };
   paint("conversation", document.getElementById("conversation-panel"))
     .catch(error => document.getElementById("conversation-panel").innerHTML = `<span class="muted">${esc(error.message)}</span>`);
   if (S.tab !== "conversation") {
@@ -3573,7 +3564,7 @@ document.addEventListener("keydown", event => {
 // On a narrow screen the sidebar is an overlay: navigating from it closes it.
 document.getElementById("sidebar").addEventListener("click", event => {
   if (!isNarrow()) return;
-  if (event.target.closest(".side-item, .side-nav button, #nav-new")) {
+  if (event.target.closest(".side-item, .side-nav button, .rail-nav button, #nav-new")) {
     S.sidebarCollapsed = true;
     applySidebar();
   }

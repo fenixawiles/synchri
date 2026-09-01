@@ -22,6 +22,7 @@ from synchri.errors import StateError, ValidationError
 from synchri.runner.agent_command import AgentCommand, parse_directives
 from synchri.runner.conductor import Conductor
 from synchri.session import dropbox, planning
+from synchri.storage import db
 from synchri.session.contract import ACK_TOKEN
 from synchri.session.modes import (
     ParticipantPlan,
@@ -346,6 +347,35 @@ def test_a_human_waiver_goes_back_through_review(manager, repo):
     assert planning.get_plan(manager, record.session_id)["status"] == "ready"
 
 
+def test_review_closure_enforces_the_promotion_criteria_rule(manager, repo):
+    """PLAN-READY implies approvable: invalid criteria are caught at closure,
+    while the loop can still fix them, never first at human approval."""
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission(body="# Plan\n\n1. do it\n"))
+    actions, warnings = _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
+    assert any("cannot reach PLAN-READY" in w for w in warnings)
+    assert actions == [{"kind": "review", "verdict": "revise", "revision": 1,
+                        "criteria_correction": True}]
+    plan = planning.get_plan(manager, record.session_id)
+    assert plan["status"] == "under_revision" and plan["ready_at"] is None
+    wakes = _wake_messages(manager, record, "plan_criteria_correction")
+    assert wakes and wakes[-1]["target"] == "claude"
+    assert "Acceptance" in wakes[-1]["content"]
+
+    colliding = PLAN_BODY.replace("CACHE-02", "CACHE-01")
+    _turn(manager, record, "claude", _submission(body=colliding, summary="colliding ids"))
+    _actions, warnings = _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
+    assert any("collide on gate id CACHE-01" in w for w in warnings)
+    assert planning.get_plan(manager, record.session_id)["status"] == "under_revision"
+
+    _turn(manager, record, "claude", _submission(summary="criteria fixed"))
+    _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|fine")
+    assert planning.get_plan(manager, record.session_id)["status"] == "ready"
+    assert planning.approve(manager, record.session_id)["promoted"] is True, (
+        "what review closure accepts, approval accepts"
+    )
+
+
 # ----------------------------------------------------------------------
 # budgets
 # ----------------------------------------------------------------------
@@ -465,6 +495,10 @@ def test_agents_drive_the_loop_through_the_conductor(manager, repo, tmp_path):
     record, credentials = _activated(manager, repo)
     workspace = record.planning_workspace["path"]
 
+    # The reviewer approves ONLY if the durable plan text reached its prompt.
+    # The needle exists nowhere but the submitted body (the plan block is
+    # stripped from the room transcript), so a blind approval — the regression
+    # where the reviewer never receives the plan — fails this test.
     scripted = {
         "claude": (
             "print('Drafted the plan from the idea and the repository.')\n"
@@ -474,9 +508,13 @@ def test_agents_drive_the_loop_through_the_conductor(manager, repo, tmp_path):
             "print('SYNCHRI-PLAN-SUBMIT: first full draft')\n"
         ),
         "codex": (
-            "print('Reviewed revision 1 against the workspace.')\n"
-            "print('SYNCHRI-OBJECTION: nonblocking|Assumes one process')\n"
-            "print('SYNCHRI-PLAN-REVIEW: approve|executable as ordered')\n"
+            "if 'bounded LRU map' in prompt:\n"
+            "    print('Reviewed revision 1; the durable plan text is in my prompt.')\n"
+            "    print('SYNCHRI-OBJECTION: nonblocking|Assumes one process')\n"
+            "    print('SYNCHRI-PLAN-REVIEW: approve|executable as ordered')\n"
+            "else:\n"
+            "    print('SYNCHRI-OBJECTION: blocking|I never received the plan text to review')\n"
+            "    print('SYNCHRI-PLAN-REVIEW: revise|cannot review an invisible plan')\n"
         ),
     }
     commands = {}
@@ -507,6 +545,20 @@ def test_agents_drive_the_loop_through_the_conductor(manager, repo, tmp_path):
 
     prompt = conductor.build_prompt("claude", {}, agent=commands["claude"])
     assert "PLAN-READY" in prompt
+    assert "the plan: revision 1, full text, verbatim" in prompt
+    assert "bounded LRU map" in prompt
+
+
+def test_render_status_carries_the_full_revision_body(manager, repo):
+    """Both roles read the durable revision from the planning panel — the
+    only channel, since transcripts strip the block and turns relaunch cold."""
+    record, _ = _activated(manager, repo)
+    status = planning.render_status(manager, manager.get(record.session_id))
+    assert "full text, verbatim" not in status, "no body section before a submission"
+    _turn(manager, record, "claude", _submission())
+    status = planning.render_status(manager, manager.get(record.session_id))
+    assert "the plan: revision 1, full text, verbatim" in status
+    assert PLAN_BODY.strip() in status
 
 
 # ----------------------------------------------------------------------
@@ -635,8 +687,23 @@ def test_post_approval_captures_route_to_the_coordination_session(manager, repo)
     assert dropbox.items(manager, record.session_id) == []
 
 
+def _forced_ready(manager, repo, body):
+    """A plan pushed to READY outside the loop — review closure would refuse
+    this body, so force the status directly to exercise approval's re-check."""
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission(body=body))
+    with db.transaction(manager.conn):
+        manager.conn.execute(
+            "UPDATE session_plans SET status = 'ready' WHERE session_id = ?",
+            (record.session_id,),
+        )
+    return manager.get(record.session_id)
+
+
 def test_approval_requires_explicit_collision_free_criteria(manager, repo):
-    record, _ = _ready(manager, repo, body="# Plan\n\n1. do it\n")
+    """Defense in depth: review closure enforces the criteria rule, and
+    approval re-checks the same rule against plans forced READY outside it."""
+    record = _forced_ready(manager, repo, body="# Plan\n\n1. do it\n")
     with pytest.raises(StateError) as exc:
         planning.approve(manager, record.session_id)
     assert exc.value.code == "plan_criteria_missing"
@@ -646,7 +713,7 @@ def test_approval_requires_explicit_collision_free_criteria(manager, repo):
     assert planning.promotion(manager, record.session_id) is None
 
     colliding = PLAN_BODY.replace("CACHE-02", "CACHE-01")
-    record2, _ = _ready(manager, repo, body=colliding)
+    record2 = _forced_ready(manager, repo, body=colliding)
     with pytest.raises(StateError) as exc:
         planning.approve(manager, record2.session_id)
     assert exc.value.code == "plan_gate_collision"
@@ -660,6 +727,62 @@ def test_blocking_decisions_cannot_cross_approval(manager, repo):
         planning.approve(manager, record.session_id)
     assert exc.value.code == "plan_blocking_open"
     assert "OBJ-001" in exc.value.message
+
+
+def test_exhausted_plans_can_approve_what_stands(manager, repo):
+    """The exhaustion copy promises 'approve what stands'; approval honors it:
+    a preserved revision with no open blockers promotes without re-review."""
+    record, _ = _ready(manager, repo)
+    _turn(manager, record, "codex", "SYNCHRI-OBJECTION: blocking|second thoughts")
+    for _ in range(planning.TURN_BUDGET):
+        planning.count_turn(manager, record)
+    assert planning.get_plan(manager, record.session_id)["status"] == "needs_human_resolution"
+
+    # Open blockers still cannot cross approval, exhausted or not.
+    with pytest.raises(StateError) as exc:
+        planning.approve(manager, record.session_id)
+    assert exc.value.code == "plan_blocking_open"
+
+    # With a spent budget the waiver stands as recorded — no forced re-review.
+    planning.waive_objection(manager, record.session_id, "OBJ-001", "Accepted for v1.")
+    plan = planning.get_plan(manager, record.session_id)
+    assert plan["status"] == "needs_human_resolution", "the waiver stands"
+    assert _wake_messages(manager, record, "plan_waiver_review") == []
+
+    result = planning.approve(manager, record.session_id)
+    assert result["promoted"] is True
+    coordination = manager.get(result["coordination_session_id"])
+    assert [g.gate_id for g in manager.gates(coordination.session_id)] == [
+        "CACHE-01", "CACHE-02",
+    ]
+    assert planning.get_plan(manager, record.session_id)["status"] == "approved"
+    assert not any(
+        e["rule"] == "planning_budget_exhausted"
+        for e in manager.open_escalations(record.session_id)
+    ), "approving what stands settles the exhaustion escalation"
+
+
+def test_an_exhausted_plan_without_a_revision_cannot_be_approved(manager, repo):
+    record, _ = _activated(manager, repo)
+    for _ in range(planning.TURN_BUDGET):
+        planning.count_turn(manager, record)
+    assert planning.get_plan(manager, record.session_id)["status"] == "needs_human_resolution"
+    with pytest.raises(StateError) as exc:
+        planning.approve(manager, record.session_id)
+    assert exc.value.code == "plan_not_ready"
+    assert "no submitted revision" in exc.value.message
+
+
+def test_the_review_record_is_immutable_after_approval(manager, repo):
+    record, _ = _ready(manager, repo)
+    _turn(manager, record, "codex", "SYNCHRI-OBJECTION: nonblocking|left open on purpose")
+    planning.approve(manager, record.session_id)
+    with pytest.raises(StateError) as exc:
+        planning.waive_objection(manager, record.session_id, "OBJ-001", "too late")
+    assert exc.value.code == "plan_approved_immutable"
+    with pytest.raises(StateError) as exc:
+        planning.reopen(manager, record.session_id, "change it")
+    assert exc.value.code == "plan_not_active"
 
 
 def test_baseline_drift_returns_the_plan_to_review_and_reanchors(manager, repo):
@@ -973,10 +1096,19 @@ def test_the_app_ships_the_planning_flow():
     assert '"plan","gates"' in source, "the plan panel is a first-class session tab"
     assert 'api("plan" + q)' in source
     assert "plan/approve" in source and "plan/control" in source
-    assert "Approve &amp; Start Coordination" in source
+    assert "Approve &amp; Continue to Coordination" in source
+    assert "showLaunch(result.coordination)" in source, (
+        "approval lands on the coordination preflight, never an inactive dashboard"
+    )
+    assert "approve what stands" in source, (
+        "the exhausted state explains its three ways forward"
+    )
     assert "Articulate the idea" in source
     assert "no planning support" in source, "unsupported runtimes are shown unavailable"
     assert "Resume the budget (once)" in source
+    assert "renderManagedOnlyBlocked" in source and "l.managed_only" in source, (
+        "planning preflight hides the dead paste path"
+    )
 
 
 def test_the_approve_endpoint_returns_the_coordination_launch(manager, repo):
@@ -1001,11 +1133,16 @@ def test_the_approve_endpoint_returns_the_coordination_launch(manager, repo):
             return {"phase": "not_started"}
 
     api.managed = _Recorder()
+    planning_launch = api._launch_payload(manager.get(record.session_id))
+    assert planning_launch["launch"]["managed_only"] is True, (
+        "a pasted agent cannot submit plan revisions, so planning is managed-only"
+    )
     result = api.approve_plan({}, {"session": record.session_id})
     assert result["promoted"] is True
     assert api.managed.cancelled == [record.session_id]
     launch = result["coordination"]["launch"]
     assert launch["worktree_path"]
+    assert launch["managed_only"] is False, "coordination keeps the manual fallback"
     assert {agent["role"] for agent in launch["agents"]} == {
         "primary_builder", "adversarial_reviewer",
     }

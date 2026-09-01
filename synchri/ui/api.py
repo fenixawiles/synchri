@@ -686,6 +686,11 @@ class Api:
                     "readiness": self.managed.readiness(record),
                     "run": self.managed.status(record.session_id),
                 },
+                # Planning sessions launch only under the managed runner:
+                # directives are parsed from managed stdout, so a pasted agent
+                # could never submit a plan revision. The preflight hides the
+                # manual path rather than offering a dead one.
+                "managed_only": bool(record.policy.planning),
                 "ready_to_activate": bool(agents)
                 and all(agent["joined"] for agent in agents)
                 and acknowledgments["all_accepted"],

@@ -2239,21 +2239,46 @@ function renderLaunch() {
     const actions = document.getElementById("preflight-actions");
     const note = failedAgents.length
       ? `The room stays inactive. Ready agents stay attached and receive no work; retry relaunches only ${esc(failedAgents.map(a=>a.name).join(", "))}.`
-      : (allConnected
-        ? "No paste step — Synchri launches your agents, verifies their agreement, and begins the room."
-        : "Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that.");
+      : (l.managed_only
+        ? "Planning runs managed-only: the agents launch under their CLI's enforced read-only isolation, and a pasted agent could not submit plan revisions."
+        : (allConnected
+          ? "No paste step — Synchri launches your agents, verifies their agreement, and begins the room."
+          : "Synchri connects the agents, confirms the agreement, and opens the first build turn. The timer starts only after that."));
     const startLabel = run.alive ? "Starting…"
       : (failedAgents.length ? `Retry ${esc(failedAgents.map(a=>a.name).join(", "))}` : "Start my agents");
-    const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0"><button class="ghost" id="external">Send prompts instead</button>
+    const bar = $(`<div class="between" style="gap:1rem"><div class="row" style="min-width:0">${l.managed_only ? "" : `<button class="ghost" id="external">Send prompts instead</button>`}
       <span class="small faint">${note}</span></div>
       <button class="primary" id="managed-start" ${run.alive?"disabled":""}>${startLabel}</button></div>`);
     bar.querySelector("#managed-start").onclick = guard(startManaged);
-    bar.querySelector("#external").onclick = () => renderExternalSetup(l);
+    const external = bar.querySelector("#external");
+    if (external) external.onclick = () => renderExternalSetup(l);
     actions.append(bar);
     if (run.alive) pollManagedLaunch();
     return;
   }
+  if (l.managed_only) { renderManagedOnlyBlocked(l); return; }
   renderExternalSetup(l);
+}
+
+function renderManagedOnlyBlocked(l) {
+  // A planning session whose runtimes cannot launch has no manual fallback:
+  // directives are parsed only from managed stdout, so a pasted agent could
+  // never submit a plan revision. The honest path is fixing the runtime,
+  // not a paste wall that leads nowhere.
+  const list = document.getElementById("preflight-agents");
+  const actions = document.getElementById("preflight-actions");
+  if (!list || !actions) return;
+  list.innerHTML = `<div class="small muted" style="padding:.65rem 0 .3rem">Planning runs managed-only: the agents must launch under their CLI's enforced read-only mode, so there is no paste fallback here.</div>`;
+  for (const agent of l.agents) {
+    const status = agent.managed_ready
+      ? `<span class="pill ok">ready to launch</span>`
+      : `<span class="pill warn">needs setup</span>`;
+    list.append($(`<div class="check-row"><div class="check-status">${status}</div>
+      <div class="check-main"><div><b class="mono">${esc(agent.name)}</b>
+        <span class="small muted" style="margin-left:.5rem">${esc(agent.role_label)} · ${esc(agent.launch_detail)}</span></div></div></div>`));
+  }
+  actions.innerHTML = "";
+  actions.append($(`<div class="between" style="gap:1rem"><span class="small faint">Install or sign in to each runtime above, then refresh this preflight.</span></div>`));
 }
 
 async function startManaged() {
@@ -3308,14 +3333,16 @@ async function paint(tab, el) {
         <div class="small muted" style="margin-top:.25rem">budgets: ${b.turns_used}/${b.turn_budget} turns ·
           ${b.revisions_used}/${b.revision_budget} revisions · ${b.minutes_budget} min${b.resumes_used?" (resumed once)":""}</div></div>
         <div class="row">
-          ${p.status === "ready" ? `<button class="primary" id="plan-approve">Approve &amp; Start Coordination</button>` : ""}
+          ${p.status === "ready" || (p.status === "needs_human_resolution" && p.revision >= 1 && !p.open_blockers.length) ? `<button class="primary" id="plan-approve">Approve &amp; Continue to Coordination</button>` : ""}
           ${p.status === "needs_human_resolution" && b.resume_available ? `<button class="primary" id="plan-resume">Resume the budget (once)</button>` : ""}
           ${p.status === "approved" && p.promotion?.coordination_session_id ? `<button class="primary" id="plan-open-coordination">Open the coordination session</button>` : ""}
           ${["ready","awaiting_review","under_revision","drafting","needs_human_resolution"].includes(p.status) ? `<button id="plan-reopen">Request changes…</button>` : ""}
         </div></div>
       ${p.status === "ready" ? `<div class="note small" style="margin-top:.8rem">Review closure reached: no blocking objections or open forks remain.
         Approval creates a new linked coordination session branched from the inspected baseline — the plan and this session stay immutable.</div>` : ""}
-      ${p.status === "needs_human_resolution" ? `<div class="note warn small" style="margin-top:.8rem">The planning budget is exhausted. The latest draft and its open objections are preserved below.</div>` : ""}
+      ${p.status === "needs_human_resolution" ? `<div class="note warn small" style="margin-top:.8rem">The planning budget is exhausted. The latest draft and its open objections are preserved below.
+        ${p.revision < 1 ? "No revision was submitted yet, so there is nothing to approve — resume the budget once or stop the session."
+          : `You can resume the budget once, request changes, or approve what stands${p.open_blockers.length ? " — after resolving or waiving its blocking items" : ""}.`}</div>` : ""}
       <details style="margin-top:.9rem"><summary class="small muted" style="cursor:pointer">Your idea, verbatim</summary>
         <pre style="margin-top:.5rem;max-height:14rem;overflow:auto">${esc(p.idea)}</pre></details>
       ${p.open_objections.length ? `<h3 class="small muted" style="margin-top:1rem">OPEN OBJECTIONS &amp; FORKS</h3><div class="stack" style="margin-top:.5rem">${openRows}</div>` : ""}
@@ -3329,9 +3356,17 @@ async function paint(tab, el) {
     const approve = el.querySelector("#plan-approve");
     if (approve) approve.onclick = guard(async () => {
       approve.disabled = true; approve.textContent = "Provisioning…";
-      const result = await api("plan/approve", { session: S.session });
-      confirmNotice(`${p.plan_id} approved — coordination session created.`);
-      await openSession(result.coordination_session_id);
+      try {
+        const result = await api("plan/approve", { session: S.session });
+        confirmNotice(`${p.plan_id} approved — continue to the coordination preflight.`);
+        // The approve endpoint returns the coordination session's full launch
+        // payload: land on its preflight with startable agents, never on an
+        // inactive dashboard.
+        showLaunch(result.coordination);
+      } catch (error) {
+        approve.disabled = false; approve.textContent = "Approve & Continue to Coordination";
+        throw error;
+      }
     });
     const resume = el.querySelector("#plan-resume");
     if (resume) resume.onclick = guard(async () => {
@@ -3351,7 +3386,10 @@ async function paint(tab, el) {
     });
     el.querySelectorAll(".objection-waive").forEach(button => button.onclick = guard(async () => {
       const objectionId = button.closest("[data-objection]").dataset.objection;
-      const note = prompt(`Waive ${objectionId} — your reason goes on the record, and the plan returns to review:`);
+      const explains = p.status === "needs_human_resolution"
+        ? "your reason goes on the record and the waiver stands; the budget is spent, so there is no re-review"
+        : "your reason goes on the record, and the plan returns to review";
+      const note = prompt(`Waive ${objectionId} — ${explains}:`);
       if (!note || !note.trim()) return;
       await api("plan/control", { session: S.session, action: "waive_objection", objection_id: objectionId, note });
       S.dash = await api("dashboard" + q); await paint("plan", el);

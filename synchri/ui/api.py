@@ -16,7 +16,7 @@ from typing import Callable
 
 from ..broker import Broker, Credential
 from ..errors import NotFoundError, ValidationError
-from ..session import discovery, drafts as drafts_module, presets as presets_module, worktree as worktree_module
+from ..session import deliberation, discovery, drafts as drafts_module, presets as presets_module, worktree as worktree_module
 from ..session.draft import SessionDraft
 from ..session.escalation import CATALOG as ESCALATION_CATALOG
 from ..session.extract import (
@@ -137,6 +137,7 @@ class Api:
             ("GET", "diff/file"): self.file_diff,
             ("GET", "memory"): self.memory,
             ("GET", "events"): self.events,
+            ("GET", "history/timeline"): self.history_timeline,
             ("POST", "control"): self.control,
             ("GET", "presets"): self.presets,
             ("POST", "preset"): self.save_preset,
@@ -992,6 +993,16 @@ class Api:
             "summary": summarize(gates),
             "derivation": derivation,
             "derivation_note": derivation_note(derivation),
+        }
+
+    def history_timeline(self, query: dict, body: dict) -> dict:
+        """The session's deliberative sequence, derived from the durable record."""
+        record = self.manager.get(self._session_id(query))
+        kinds = [k for k in (query.get("kinds") or "").split(",") if k] or None
+        events = deliberation.timeline(self.manager, record, kinds=kinds)
+        return {
+            "events": events,
+            "kinds": sorted({event["kind"] for event in events}),
         }
 
     def preview_gates(self, query: dict, body: dict) -> dict:

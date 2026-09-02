@@ -21,7 +21,9 @@ from ..broker import Broker, Credential
 from ..cli import session as session_files
 from ..errors import SynchriError, ValidationError
 from ..models.envelope import MessageDraft
+from ..protocol import events as ev
 from ..session import dropbox, planning
+from ..session import verify as verify_module
 from ..session.modes import (
     KNOWN_RUNTIMES,
     managed_command,
@@ -821,6 +823,16 @@ class ManagedRunnerRegistry:
                 dropbox.reconcile(manager, record.session_id)
             except Exception:  # pragma: no cover - supervision must not break the run
                 pass
+            # A point-in-time repository observation, so the deliberative
+            # record can say where the code actually stood when each turn
+            # ended — one rev-parse plus a porcelain count, never a diff.
+            if record.mode != "planning" and record.worktree_path:
+                try:
+                    observation = verify_module.observe_head(record.worktree_path)
+                    if observation:
+                        manager._log(record, ev.SESSION_REPO_OBSERVED, observation)
+                except Exception:  # pragma: no cover - supervision must not break the run
+                    pass
         if record.mode == "planning":
             # Defense-in-depth after every turn: the planning workspace's Git
             # state is verified (and restored) regardless of how the turn

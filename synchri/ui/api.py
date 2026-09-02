@@ -49,6 +49,7 @@ from ..session.spec import ProductSpec
 from ..storage import dao, db
 from ..runner import ancillary as ancillary_module
 from ..runner import doctor as doctor_module
+from ..runner import historian as historian_module
 from ..runner.managed import ManagedRunnerRegistry
 
 Route = Callable[[dict, dict], dict]
@@ -139,6 +140,7 @@ class Api:
             ("GET", "events"): self.events,
             ("GET", "history/timeline"): self.history_timeline,
             ("GET", "history/search"): self.history_search,
+            ("POST", "history/ask"): self.history_ask,
             ("POST", "control"): self.control,
             ("GET", "presets"): self.presets,
             ("POST", "preset"): self.save_preset,
@@ -1015,6 +1017,25 @@ class Api:
         if session_id:
             self.manager.get(session_id)
         return deliberation.search(self.manager, question, session_id=session_id)
+
+    def history_ask(self, query: dict, body: dict) -> dict:
+        """A grounded plain-English report, with the evidence it stands on.
+
+        The historian's synthesis rides on the retrieval result and degrades
+        honestly: no runtime, a failed invocation, or an ungrounded reply all
+        return the same shape with ``report: null`` and the reason named —
+        the evidence and timeline are always the floor.
+        """
+        session_id = self._session_id(query, body)
+        record = self.manager.get(session_id)
+        question = (body.get("question") or "").strip()
+        if not question:
+            raise ValidationError("ask a question about this session's history")
+        retrieval = deliberation.search(self.manager, question, session_id=session_id)
+        outcome = historian_module.report(
+            self.broker, self.manager, record, question, retrieval
+        )
+        return {"question": question, **retrieval, **outcome}
 
     def preview_gates(self, query: dict, body: dict) -> dict:
         """What gate detection would make of a brief, before anything exists."""

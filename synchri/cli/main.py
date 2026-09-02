@@ -316,6 +316,11 @@ def build_parser() -> argparse.ArgumentParser:
     why = command("why", "Ask the recorded development history a question.")
     why.add_argument("question", help='e.g. "Why was persistent authentication adopted?"')
     why.add_argument("--session", help="scope to one session id (default: every session)")
+    why.add_argument(
+        "--report", action="store_true",
+        help="also ask a connected read-only agent for a grounded report "
+             "(one provider invocation; requires --session)",
+    )
 
     export = command("export", "Rebuild transcript.jsonl from authoritative state.")
     _add_room_reader(export)
@@ -992,7 +997,7 @@ def cmd_events(args: argparse.Namespace, broker: Broker) -> int:
 
 
 def cmd_why(args: argparse.Namespace, broker: Broker) -> int:
-    """Retrieval over the deliberative record; the report layer builds on it."""
+    """Retrieval over the deliberative record, plus an opt-in grounded report."""
     from ..session.deliberation import search
     from ..session.manager import SessionManager
 
@@ -1001,6 +1006,25 @@ def cmd_why(args: argparse.Namespace, broker: Broker) -> int:
     lines = [
         f"engine: {result['engine']} · {len(result['evidence'])} evidence item(s)"
     ]
+    if getattr(args, "report", False):
+        from ..runner import historian
+
+        if not args.session:
+            outcome = {"report": None, "fallback": True, "runtime": None,
+                       "fallback_reason": "a grounded report needs --session"}
+        else:
+            outcome = historian.report(
+                broker, manager, manager.get(args.session), args.question, result
+            )
+        result = {**result, **outcome}
+        if outcome.get("report"):
+            sections = outcome["report"]["sections"]
+            for key in ("SUMMARY", "TRIGGER", "POSITIONS", "EVIDENCE",
+                        "RESOLUTION", "SYNTHESIS", "UNRESOLVED"):
+                if sections.get(key):
+                    lines.append(f"\n{key}: {sections[key]}")
+        else:
+            lines.append(f"\nno report: {outcome.get('fallback_reason')}")
     for item in result["evidence"]:
         origin = " · ".join(
             str(part) for part in (

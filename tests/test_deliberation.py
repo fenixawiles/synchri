@@ -292,6 +292,172 @@ def test_the_search_api_and_cli_round_trip(manager, repo, capsys):
     assert "revision:" in printed and "engine:" in printed
 
 
+# ----------------------------------------------------------------------
+# the historian: fail-closed grounding over the retrieved evidence
+# ----------------------------------------------------------------------
+
+
+def _retrieval(manager, record, question="why is the cache bounded with LRU eviction?"):
+    return deliberation.search(manager, question, session_id=record.session_id)
+
+
+def _grounded_reply(prompt):
+    assert "THE EVIDENCE" in prompt and "[E1]" in prompt
+    return "\n".join([
+        "SUMMARY: The plan bounds the cache with an LRU map [E1].",
+        "TRIGGER: The human asked for request-level caching [E1].",
+        "POSITIONS: The planner proposed a bounded LRU module [E1].",
+        "EVIDENCE: The acceptance criteria require bounded eviction [E1].",
+        "RESOLUTION: not established",
+        "SYNTHESIS: none",
+        "UNRESOLVED: the record does not name who chose LRU over LFU.",
+    ])
+
+
+def test_a_cited_report_is_accepted_with_the_causal_contract(manager, repo):
+    from synchri.runner import historian
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    seen = {}
+
+    def runner(prompt):
+        seen["prompt"] = prompt
+        return _grounded_reply(prompt)
+
+    outcome = historian.report(
+        manager.broker, manager, record,
+        "why is the cache bounded?", _retrieval(manager, record), runner=runner,
+    )
+    assert outcome["fallback"] is False
+    report = outcome["report"]
+    assert report["layer"] == "synthesis"
+    assert report["citations"] == [1]
+    assert report["insufficient"] is False
+    assert "LRU map [E1]" in report["sections"]["SUMMARY"]
+    # The prompt itself carries the epistemic contract, verbatim commitments:
+    prompt = seen["prompt"]
+    assert "temporal proximity" in prompt
+    assert "resolved by" in prompt, "the causal-language rule is stated"
+    assert "INSUFFICIENT:" in prompt
+    assert "why is the cache bounded?" in prompt
+
+
+def test_uncited_synthesis_is_refused(manager, repo):
+    from synchri.runner import historian
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    outcome = historian.report(
+        manager.broker, manager, record, "why bounded?",
+        _retrieval(manager, record),
+        runner=lambda prompt: (
+            "SUMMARY: The agents clearly preferred LRU because it is standard.\n"
+            "TRIGGER: not established\nPOSITIONS: none\nEVIDENCE: none\n"
+            "RESOLUTION: none\nSYNTHESIS: none\nUNRESOLVED: none"
+        ),
+    )
+    assert outcome["report"] is None and outcome["fallback"] is True
+    assert "not grounded" in outcome["fallback_reason"]
+
+
+def test_out_of_range_citations_are_refused(manager, repo):
+    from synchri.runner import historian
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    outcome = historian.report(
+        manager.broker, manager, record, "why bounded?",
+        _retrieval(manager, record),
+        runner=lambda prompt: _grounded_reply(prompt).replace("[E1]", "[E99]"),
+    )
+    assert outcome["report"] is None and "not grounded" in outcome["fallback_reason"]
+
+
+def test_honest_insufficiency_is_accepted(manager, repo):
+    from synchri.runner import historian
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    outcome = historian.report(
+        manager.broker, manager, record, "why was the logo blue?",
+        _retrieval(manager, record),
+        runner=lambda prompt: (
+            "INSUFFICIENT: the record contains no discussion of any logo."
+        ),
+    )
+    assert outcome["fallback"] is False
+    assert outcome["report"]["insufficient"] is True
+    assert "no discussion" in outcome["report"]["sections"]["SUMMARY"]
+
+
+def test_without_a_runtime_the_fallback_is_the_floor(manager, repo):
+    from synchri.runner import historian
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    outcome = historian.report(
+        manager.broker, manager, record, "why bounded?", _retrieval(manager, record)
+    )
+    assert outcome["report"] is None and outcome["fallback"] is True
+    assert "read-only" in outcome["fallback_reason"]
+
+
+def test_empty_evidence_never_invokes_anything(manager, repo):
+    from synchri.runner import historian
+
+    record, _ = _activated(manager, repo)
+
+    def exploding_runner(prompt):  # pragma: no cover - must not run
+        raise AssertionError("no invocation without evidence")
+
+    outcome = historian.report(
+        manager.broker, manager, record, "why?",
+        {"evidence": [], "events": [], "engine": "fts5", "tokens": []},
+        runner=exploding_runner,
+    )
+    assert outcome["fallback"] is True
+    assert "nothing in the recorded history" in outcome["fallback_reason"]
+
+
+def test_the_ask_endpoint_keeps_the_evidence_floor(manager, repo):
+    from synchri.ui.api import Api
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    api = Api(manager.broker, manager)
+    payload = api.history_ask(
+        {}, {"session": record.session_id, "question": "why is the cache bounded?"}
+    )
+    assert payload["evidence"], "the mechanical floor is always present"
+    assert payload["report"] is None and payload["fallback"] is True
+    assert payload["fallback_reason"]
+    assert payload["question"] == "why is the cache bounded?"
+
+
+def test_the_historian_usage_recorder_tags_its_origin(workspace, manager, repo):
+    from types import SimpleNamespace
+
+    from synchri.runner.ancillary import _UsageRecorder
+
+    record, _ = _activated(manager, repo)
+    recorder = _UsageRecorder(
+        workspace, session_id=record.session_id, room_id=record.room_id,
+        participant="historian", runtime="claude_code", drop_id=None,
+        origin_kind="historian",
+    )
+    recorder.begin()
+    recorder.finish(SimpleNamespace(usage={
+        "model": "m", "input_tokens": 10, "output_tokens": 5,
+        "cached_input_tokens": 0, "cost_usd": 0.01, "duration_seconds": 2.0,
+    }))
+    row = manager.conn.execute(
+        "SELECT origin_kind, participant FROM agent_turn_usage WHERE session_id = ?",
+        (record.session_id,),
+    ).fetchone()
+    assert row["origin_kind"] == "historian" and row["participant"] == "historian"
+
+
 def test_the_timeline_api_serves_events_and_kinds(manager, repo):
     from synchri.ui.api import Api
 

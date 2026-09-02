@@ -321,6 +321,31 @@ def parse_acceptance_criteria(body: str | None) -> list[tuple[str, str]]:
     return criteria
 
 
+def validate_criteria(body: str | None) -> None:
+    """The promotion-grade acceptance-criteria rule, in exactly one place.
+
+    Enforced when the reviewer closes with approve and re-checked at human
+    approval, so PLAN-READY implies approvable: review closure and promotion
+    can never disagree about what a valid criteria section is.
+    """
+    criteria = parse_acceptance_criteria(body)
+    if not criteria:
+        raise StateError(
+            "the plan names no explicit acceptance criteria — add an "
+            "'## Acceptance criteria' section with gate ids and re-review; "
+            "promotion never falls back to generic prose extraction",
+            code="plan_criteria_missing",
+        )
+    seen: set[str] = set()
+    for gate_id, _text in criteria:
+        if gate_id in seen:
+            raise StateError(
+                f"the plan's acceptance criteria collide on gate id {gate_id}",
+                code="plan_gate_collision",
+            )
+        seen.add(gate_id)
+
+
 # ----------------------------------------------------------------------
 # the review loop
 # ----------------------------------------------------------------------
@@ -555,6 +580,35 @@ def _close_review(manager, record, plan, actor, verdict, note, planner, warnings
                 f"{actor}: approval refused — open blocking items prevent PLAN-READY: {names}"
             )
             return None
+        # READY must imply approvable: the promotion-grade criteria rule runs
+        # here, at review closure, so an invalid section is caught while the
+        # loop can still fix it instead of failing at human approval.
+        try:
+            validate_criteria(revision_body(manager, record.session_id, plan["revision"]))
+        except StateError as exc:
+            warnings.append(f"{actor}: approval cannot reach PLAN-READY — {exc.message}")
+            manager.conn.execute(
+                "UPDATE session_plans SET status = ?, ready_at = NULL, updated_at = ? "
+                "WHERE session_id = ?",
+                (UNDER_REVISION, now, record.session_id),
+            )
+            _send_task(
+                manager, record, target=planner, other=actor,
+                source="plan_criteria_correction",
+                content=(
+                    f"The reviewer approved revision {plan['revision']}, but it cannot "
+                    f"reach PLAN-READY: {exc.message}. Correct the '## Acceptance "
+                    "criteria' section and submit the next revision between "
+                    "SYNCHRI-PLAN-BEGIN and SYNCHRI-PLAN-END."
+                ),
+            )
+            manager._log(
+                record, "session.plan_criteria_refused",
+                {"plan_id": plan["plan_id"], "revision": plan["revision"],
+                 "detail": exc.message},
+            )
+            return {"kind": "review", "verdict": "revise", "revision": plan["revision"],
+                    "criteria_correction": True}
         manager.conn.execute(
             "UPDATE session_plans SET status = ?, ready_at = ?, updated_at = ? "
             "WHERE session_id = ?",
@@ -742,14 +796,23 @@ def reopen(manager: "SessionManager", session_id: str, note: str) -> dict:
 def waive_objection(
     manager: "SessionManager", session_id: str, objection_id: str, note: str
 ) -> dict:
-    """The human explicitly waives one blocking decision — via a reviewed revision.
+    """The human explicitly waives one blocking decision.
 
     A waiver never slips through silently: it is recorded on the objection,
-    and the plan returns to review so the reviewer closes with the waiver on
-    the record. Only then can PLAN-READY and approval follow.
+    and — while the loop is live — the plan returns to review so the reviewer
+    closes with the waiver on the record. Once the budget is exhausted
+    (``needs_human_resolution``) the waiver stands as recorded instead: the
+    loop is over, the human owns the decision, and "approve what stands"
+    checks the remaining open blockers directly.
     """
     record = manager.get(session_id)
     plan = require_plan(manager, session_id)
+    if plan["status"] == APPROVED:
+        raise StateError(
+            "the plan is approved and immutable — its review record can no "
+            "longer change",
+            code="plan_approved_immutable",
+        )
     row = manager.conn.execute(
         "SELECT * FROM session_plan_objections WHERE session_id = ? AND objection_id = ?",
         (session_id, objection_id),
@@ -785,9 +848,12 @@ def waive_objection(
                         "with SYNCHRI-PLAN-REVIEW: approve or revise."
                     ),
                 )
+        # In needs_human_resolution the waiver stands as recorded: the budget
+        # is spent, so there is no reviewer turn to send it back through.
     manager._log(
         record, "session.plan_objection_waived",
-        {"objection_id": objection_id, "note": reason[:400]},
+        {"objection_id": objection_id, "note": reason[:400],
+         "stands": plan["status"] == NEEDS_HUMAN},
     )
     return payload(manager, session_id)
 
@@ -855,6 +921,15 @@ def render_status(manager: "SessionManager", record: "SessionRecord") -> str | N
         lines.append("[synchri: truncated in this prompt; the full articulation is preserved on the plan]")
     else:
         lines.append(idea)
+    # The durable revision text itself, for planner and reviewer alike: the
+    # plan block is stripped from the room transcript and the agents relaunch
+    # cold each turn, so this panel is the only place the loop's actual
+    # subject can reach them. Submissions are already capped at
+    # MAX_PLAN_CHARS, so the body renders untruncated.
+    if plan["revision"]:
+        lines.append("")
+        lines.append(f"--- the plan: revision {plan['revision']}, full text, verbatim ---")
+        lines.append(revision_body(manager, record.session_id, plan["revision"]))
     open_items = [o for o in objections(manager, record.session_id) if o["status"] == "open"]
     resolved = [o for o in objections(manager, record.session_id) if o["status"] != "open"]
     if open_items:
@@ -982,7 +1057,10 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
 
     existing = promotion(manager, session_id)
     if existing is None:
-        if plan["status"] != READY:
+        # Two approvable states: PLAN-READY (review closure), and — honoring
+        # the exhaustion copy's "approve what stands" — needs_human_resolution
+        # with a preserved revision, no open blockers, and valid criteria.
+        if plan["status"] not in {READY, NEEDS_HUMAN}:
             blockers = open_blockers(manager, session_id)
             names = ", ".join(f"{b['objection_id']} ({b['classification']})" for b in blockers)
             raise StateError(
@@ -990,33 +1068,26 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
                 + (f"; open blocking items: {names}" if names else f" (it is {plan['status']})"),
                 code="plan_not_ready",
             )
-        # Blocking decisions cannot cross approval — READY implies none are
-        # open, and this re-check keeps that true even against direct edits.
+        if not plan["revision"]:
+            raise StateError(
+                "there is no submitted revision to approve — the budget ran out "
+                "before the first draft; resume it or stop the session",
+                code="plan_not_ready",
+            )
+        # Blocking decisions cannot cross approval. For a READY plan this
+        # re-checks review closure against direct edits; for an exhausted one
+        # it is the rule itself: open blockers must be resolved or explicitly
+        # waived before what stands can be approved.
         blockers = open_blockers(manager, session_id)
         if blockers:
             raise StateError(
                 "blocking decisions cannot cross approval: "
                 + ", ".join(b["objection_id"] for b in blockers)
-                + " must be resolved or explicitly waived via a reviewed revision",
+                + " must be resolved or explicitly waived first",
                 code="plan_blocking_open",
             )
         body = revision_body(manager, session_id, plan["revision"])
-        criteria = parse_acceptance_criteria(body)
-        if not criteria:
-            raise StateError(
-                "the plan names no explicit acceptance criteria — add an "
-                "'## Acceptance criteria' section with gate ids and re-review; "
-                "promotion never falls back to generic prose extraction",
-                code="plan_criteria_missing",
-            )
-        seen: set[str] = set()
-        for gate_id, _text in criteria:
-            if gate_id in seen:
-                raise StateError(
-                    f"the plan's acceptance criteria collide on gate id {gate_id}",
-                    code="plan_gate_collision",
-                )
-            seen.add(gate_id)
+        validate_criteria(body)
         # Revalidate the repository baseline: drift returns the plan to
         # review rather than silently executing stale assumptions.
         current_tip = worktree_module.git(
@@ -1035,7 +1106,11 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
         now = utc_now()
         with db.transaction(manager.conn):
             fresh = get_plan(manager, session_id)
-            if fresh is None or fresh["status"] != READY:
+            if (
+                fresh is None
+                or fresh["status"] not in {READY, NEEDS_HUMAN}
+                or fresh["revision"] != plan["revision"]
+            ):
                 raise StateError(
                     "the plan changed while approval was in flight; review its "
                     "state and approve again",
@@ -1058,6 +1133,13 @@ def approve(manager: "SessionManager", session_id: str, *, staffing=None) -> dic
                 "UPDATE sessions SET phase = 'closing', updated_at = ? WHERE session_id = ?",
                 (now, session_id),
             )
+            # Approving what stands settles the exhaustion: the decision the
+            # escalation asked for has been made.
+            for escalation in manager.open_escalations(session_id):
+                if escalation["rule"] == "planning_budget_exhausted":
+                    manager.resolve_escalation(
+                        escalation["escalation_id"], "the human approved what stands"
+                    )
         manager._log(
             record, "session.plan_approved",
             {"plan_id": plan["plan_id"], "revision": plan["revision"], "digest": digest},
@@ -1265,6 +1347,12 @@ def _complete_provisioning(manager, coordination, promo: dict):
             coordination.session_id,
             [Gate(gate_id=gate_id, description=text) for gate_id, text in criteria],
         )
+    # The gates' provenance is the approved plan, not whatever the extraction
+    # heuristics made of the promoted spec text at create time.
+    metadata = dict(manager.get(coordination.session_id).metadata or {})
+    if metadata.get("gate_derivation") != "approved_plan":
+        metadata["gate_derivation"] = "approved_plan"
+        manager._update(coordination.session_id, metadata=json.dumps(metadata))
     if coordination.contract_revision < 1:
         manager.issue_contract(
             coordination.session_id,

@@ -458,7 +458,8 @@ def test_every_session_start_routes_to_the_agent_setup_prompts():
     assert "showLaunch(r);" in source
     assert "Start my agents" in source
     assert "function renderExternalSetup(l)" in source
-    assert 'api("managed/start", {session:S.session})' in source
+    assert "function startManaged(participants)" in source
+    assert 'api("managed/start", payload)' in source
     assert "function openLaunch(id)" in source
 
 
@@ -1113,10 +1114,89 @@ def test_gate_preview_reports_what_the_brief_will_produce(ui):
     r = call(ui, "/api/gates/preview", {"spec": "Acceptance criteria:\n- login works\n- logout works"})
     assert [g["gate_id"] for g in r["gates"]] == ["GATE-01", "GATE-02"]
     assert "2" in r["note"]
+    assert r["derivation"] == "acceptance_list"
 
     fallback = call(ui, "/api/gates/preview", {"spec": "Make it nicer."})
     assert [g["gate_id"] for g in fallback["gates"]] == ["SPEC-01"]
     assert "No explicit acceptance criteria" in fallback["note"]
+    assert fallback["derivation"] == "generic_fallback"
+
+
+def test_gates_carry_their_derivation_to_the_dashboard(ui, repo):
+    """The type-time explanation survives: how the gates came to exist is
+    persisted at create and served with the gates themselves."""
+    session_id = _active(ui, repo)
+    gates = call(ui, f"/api/gates?session={session_id}")
+    assert gates["derivation"] == "explicit_ids"
+    assert "nothing was invented" in gates["derivation_note"]
+
+
+def test_the_contract_carries_a_human_summary(ui, repo):
+    """The cover addresses the human; the verbatim text stays beneath it."""
+    session_id = _active(ui, repo)
+    contract = call(ui, f"/api/contract?session={session_id}")
+    summary = contract["human_summary"]
+    assert summary["mode"]
+    assert {member["name"] for member in summary["team"]} == {"claude", "codex"}
+    assert all(member["role_label"] for member in summary["team"])
+    assert "Read the repository" in summary["allowed"]
+    assert "Install dependencies" in summary["ask_first"], (
+        "ASK capabilities surface as ask-first, in plain labels"
+    )
+    assert "Force push" in summary["denied"]
+    assert "acceptance gate" in summary["done"]
+    assert summary["gate_ids"] == ["AUTH-01"]
+    assert summary["timebox"]
+    assert "UNDERSTOOD" in summary["acknowledgment"]
+    # The preflight payload carries the same cover, derived at serve time.
+    launch = call(ui, f"/api/launch?session={session_id}")
+    assert launch["contract"]["human_summary"]["team"]
+
+
+def test_the_preflight_handles_mixed_teams():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # One combined screen: managed rows with real phase indicators, external
+    # rows with their collapsed paste fallback — a single external agent no
+    # longer forces the whole preflight through the paste wall.
+    assert "renderMixedSetup" in source
+    assert "agentStatusPill" in source
+    assert "managed_by_synchri" in source
+    assert "startManaged(managedAgents.map(" in source, (
+        "the Start button launches only the managed subset"
+    )
+    assert "payload.participants = participants" in source
+    assert "Begin collaboration" in source
+    assert "Manual connection fallback" in source
+
+
+def test_teaching_surfaces_ship_in_the_page():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # Tap-for-definition terms: one dictionary, four load-bearing entries,
+    # rendered as printed text with a dotted rule — never a chip.
+    assert "const DEFINITIONS" in source
+    for key in ("worktree: {", "gate: {", "contract: {", '"planning workspace": {'):
+        assert key in source
+    assert "showDefinition" in source and "defTerm(" in source
+    assert ".term{" in source
+    # Errors: honest titles, and an error carrying a way forward stays put.
+    assert "That didn’t work" in source
+    assert "error-dismiss" in source
+    assert 'resolution?.kind === "edit_permissions"' in source
+    assert "error-open-plan" in source
+    # The permissions dialog is backed by the existing control endpoint and
+    # says what saving means before the user commits to it.
+    assert "showPermissionsDialog" in source
+    assert 'action: "permissions"' in source
+    assert "must reply UNDERSTOOD to the updated terms" in source
+    # The contract tab leads with the human cover; the exact copy stays.
+    assert "human_summary" in source
+    assert "The agents' exact copy:" in source
+    # Gate provenance reaches both the Gates tab and the rail tooltip.
+    assert "derivation_note" in source and "derivationHints" in source
 
 
 def test_gates_can_be_added_from_the_gates_panel(ui, repo):

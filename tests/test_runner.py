@@ -343,8 +343,13 @@ def test_restart_session_replaces_only_that_sessions_managed_run(workspace, monk
     class _Record:
         session_id = "session-to-restart"
         status = "active"
+        participants = ()
 
-    monkeypatch.setattr(registry, "readiness", lambda _record: {"available": True})
+    monkeypatch.setattr(
+        registry, "readiness",
+        lambda _record: {"available": True, "any_available": True,
+                         "all_available": True, "agents": []},
+    )
     monkeypatch.setattr(
         registry,
         "_spawn",

@@ -171,10 +171,45 @@ class ManagedRunnerRegistry:
         for plan in record.participants:
             launch = plan_launch_status(plan)
             agents.append({"name": plan.name, "runtime": plan.runtime, **launch})
+        ready = [agent for agent in agents if agent["ready"]]
         return {
-            "available": bool(agents) and all(agent["ready"] for agent in agents),
+            # ``available`` keeps its historical meaning — the whole roster —
+            # while the two explicit fields let a mixed preflight distinguish
+            # "someone is launchable" from "everyone is".
+            "available": bool(agents) and len(ready) == len(agents),
+            "any_available": bool(ready),
+            "all_available": bool(agents) and len(ready) == len(agents),
             "agents": agents,
         }
+
+    @staticmethod
+    def _managed_plans(record: "SessionRecord") -> list:
+        """The subset this registry supervises, from durable participant flags.
+
+        Absent flags mean the legacy shape: every participant is managed.
+        """
+        chosen = [
+            plan for plan in record.participants
+            if (plan.metadata or {}).get("managed_by_synchri")
+        ]
+        return chosen or list(record.participants)
+
+    @staticmethod
+    def _external_names(record: "SessionRecord") -> list[str]:
+        """Participants deliberately left outside this registry's supervision."""
+        chosen = {
+            plan.name for plan in record.participants
+            if (plan.metadata or {}).get("managed_by_synchri")
+        }
+        if not chosen:
+            return []
+        return [plan.name for plan in record.participants if plan.name not in chosen]
+
+    def _subset_ready(self, record: "SessionRecord") -> bool:
+        ready = {
+            agent["name"] for agent in self.readiness(record)["agents"] if agent["ready"]
+        }
+        return all(plan.name in ready for plan in self._managed_plans(record))
 
     def status(self, session_id: str) -> dict:
         with self._lock:
@@ -228,9 +263,15 @@ class ManagedRunnerRegistry:
             )
 
     def start(self, record: "SessionRecord") -> dict:
-        readiness = self.readiness(record)
-        if not readiness["available"]:
-            unavailable = [a["name"] for a in readiness["agents"] if not a["ready"]]
+        # Only the managed subset must be launchable: a mixed team's external
+        # participants connect through their own setup prompts.
+        ready = {
+            agent["name"] for agent in self.readiness(record)["agents"] if agent["ready"]
+        }
+        unavailable = [
+            plan.name for plan in self._managed_plans(record) if plan.name not in ready
+        ]
+        if unavailable:
             raise ValidationError(
                 "Synchri cannot launch " + ", ".join(unavailable)
                 + " yet; use their setup prompt or choose installed managed agents"
@@ -239,7 +280,7 @@ class ManagedRunnerRegistry:
 
     def resume(self, record: "SessionRecord") -> dict:
         """Resume after a human reply reaches a managed agent."""
-        if not self.readiness(record)["available"] or record.status != "active":
+        if not self._subset_ready(record) or record.status != "active":
             return self.status(record.session_id)
         # Pause/Stop signal a running agent asynchronously.  If the user
         # resumes immediately, wait briefly for that supervised worker to
@@ -260,7 +301,7 @@ class ManagedRunnerRegistry:
         replaced. A slow worker never causes a duplicate run: if it has not
         stopped by the bounded join, the existing stopping state is returned.
         """
-        if not self.readiness(record)["available"] or record.status != "active":
+        if not self._subset_ready(record) or record.status != "active":
             return self.status(record.session_id)
         self.cancel(record.session_id, reason="Restarting the session's agents.")
         with self._lock:
@@ -297,7 +338,7 @@ class ManagedRunnerRegistry:
             time.sleep(0.05)
         time.sleep(0.2)
         event.clear()
-        if record.status != "active" or not self.readiness(record)["available"]:
+        if record.status != "active" or not self._subset_ready(record):
             return self.status(session_id)
         with self._lock:
             thread = self._threads.get(session_id)
@@ -340,7 +381,12 @@ class ManagedRunnerRegistry:
             run.detail = detail
             run.reason = reason
             run.updated_at = _now()
-            run.alive = phase in {"attaching", "agreeing", "starting", "working", "resuming"}
+            run.alive = phase in {
+                "attaching", "agreeing", "starting", "working", "resuming",
+                # A mixed team's worker stays alive while an externally-run
+                # participant holds the floor, so supervision resumes itself.
+                "waiting_external_turn",
+            }
 
     def _worker(self, session_id: str, attach: bool) -> None:
         broker = Broker(self.workspace)
@@ -352,16 +398,47 @@ class ManagedRunnerRegistry:
             if attach:
                 self._attach_and_agree(broker, manager, record)
                 record = manager.get(session_id)
+                acknowledgments = manager.acknowledgment_state(session_id)
+                if not acknowledgments["all_accepted"]:
+                    # A mixed team: the managed subset is attached and agreed,
+                    # but the room stays inactive until every externally-run
+                    # participant acknowledges too. The human activates with
+                    # Begin collaboration, which respawns this supervision.
+                    waiting = [
+                        name for name in acknowledgments["expected"]
+                        if name not in acknowledgments["accepted"]
+                    ]
+                    self._set(
+                        session_id, "waiting_external_setup",
+                        "Your managed agents are attached and agreed. Waiting for "
+                        + ", ".join(waiting)
+                        + " to join and acknowledge; then press Begin collaboration.",
+                        reason="awaiting_external",
+                    )
+                    return
                 manager.activate(session_id)
             self._set(session_id, "working", "The agents are working in the isolated workspace.")
             # The replace rung of the recovery ladder continues supervision in
             # this same worker: a replaced participant gets its fresh turn
             # immediately instead of waiting for a human to press anything.
-            while self._drive(broker, manager, manager.get(session_id)) == "replaced":
-                self._set(
-                    session_id, "working",
-                    "A replaced agent rejoined; the team is working again.",
-                )
+            # An external turn holds the worker in a keep-alive instead of
+            # ending it, so the managed subset resumes without a human press.
+            while True:
+                outcome = self._drive(broker, manager, manager.get(session_id))
+                if outcome == "replaced":
+                    self._set(
+                        session_id, "working",
+                        "A replaced agent rejoined; the team is working again.",
+                    )
+                    continue
+                if outcome == "external_turn":
+                    if self._await_managed_turn(broker, manager, session_id):
+                        self._set(
+                            session_id, "working",
+                            "The floor returned to your managed agents.",
+                        )
+                        continue
+                break
         except _SetupCancelled:
             self._set(session_id, "stopped", "Session control applied.", reason="cancelled")
         except SynchriError as exc:
@@ -396,7 +473,9 @@ class ManagedRunnerRegistry:
             except Exception:  # pragma: no cover - supervision must not break setup
                 pass
 
-        for plan in record.participants:
+        # Only the managed subset is attached here; a mixed team's external
+        # participants join through their own setup prompts.
+        for plan in self._managed_plans(record):
             if plan.name in already_ready:
                 phase(plan, "ready", "already acknowledged the current contract")
                 continue
@@ -482,15 +561,16 @@ class ManagedRunnerRegistry:
 
     def _drive(self, broker: Broker, manager, record: "SessionRecord") -> str | None:
         session_event = self._cancel.get(record.session_id)
+        plans = self._managed_plans(record)
         agents = {
             plan.name: (lambda p=plan: self._turn_agent(manager, record, p))
-            for plan in record.participants
+            for plan in plans
         }
         cancel_events = {
             plan.name: recovery.CompositeCancel(
                 session_event, self._participant_cancel(record.session_id, plan.name)
             )
-            for plan in record.participants
+            for plan in plans
         }
         credentials = {
             name: session_files.resolve_credential(self.workspace, record.room_id, name)
@@ -501,7 +581,7 @@ class ManagedRunnerRegistry:
         document = manager.current_contract(record.session_id)
         role_guidance = {
             plan.name: document.core_text + "\n\n" + document.role_sections.get(plan.name, "")
-            for plan in record.participants
+            for plan in plans
         }
 
         states = _ParticipantStateBridge(manager, record.session_id)
@@ -538,6 +618,11 @@ class ManagedRunnerRegistry:
                 report.failure_kind or recovery.CRASH,
                 conductor.max_consecutive_failures,
             )
+        if report.reason == "unmanaged_speaker" and self._external_names(record):
+            # A mixed team: the floor belongs to a deliberately external
+            # participant. The worker keeps supervising instead of ending, so
+            # the managed subset resumes the moment the floor comes back.
+            return "external_turn"
         phrases = {
             "awaiting_human": "The agents need your decision before they can continue.",
             "room_paused": "The session is paused.",
@@ -553,6 +638,54 @@ class ManagedRunnerRegistry:
             reason=report.reason,
         )
         return None
+
+    def _await_managed_turn(
+        self, broker: Broker, manager, session_id: str, *, poll_interval: float = 1.0
+    ) -> bool:
+        """Hold supervision while an externally-run participant has the floor.
+
+        Returns True the moment the conductor should look again — a managed
+        participant got the floor, the queue went quiet, or the room needs
+        classification the conductor owns (awaiting-human, paused). Returns
+        False only when supervision should end: cancellation, or a session
+        that is no longer active.
+        """
+        event = self._cancel.get(session_id)
+        while True:
+            if event is not None and event.is_set():
+                self._set(session_id, "stopped", "Session control applied.", reason="cancelled")
+                return False
+            try:
+                record = manager.get(session_id)
+            except SynchriError:
+                self._set(session_id, "stopped", "The session has ended.", reason="room_stopped")
+                return False
+            if record.status != "active":
+                self._set(session_id, "stopped", "The session has ended.", reason="room_stopped")
+                return False
+            managed = {plan.name for plan in self._managed_plans(record)}
+            human = (record.metadata or {}).get("human") or {}
+            observer = Credential(participant=human.get("name"), secret=human.get("secret"))
+            try:
+                status = broker.room_status(record.room_id, credential=observer)
+            except SynchriError:
+                self._set(session_id, "stopped", "The session has ended.", reason="room_stopped")
+                return False
+            room = status["room"]
+            if room["status"] != "active" or room["awaiting_human"]:
+                return True  # the conductor classifies pauses, stops, and human turns
+            speaker = status["active_speaker"]
+            if speaker is None and not status["queue"]:
+                return True  # idle — let the conductor report it
+            if speaker in managed:
+                return True
+            self._set(
+                session_id, "waiting_external_turn",
+                f"{speaker or 'An externally-run participant'} has the floor; "
+                "your managed agents resume automatically when it returns.",
+                reason="unmanaged_speaker",
+            )
+            time.sleep(poll_interval)
 
     def _handle_agent_failure(
         self, broker: Broker, manager, record: "SessionRecord", name: str, kind: str, strikes: int

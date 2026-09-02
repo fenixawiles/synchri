@@ -54,6 +54,23 @@ has no connection back to your repository, so nothing run inside it can
 touch your code. It is thrown away when planning ends; an approved plan
 starts the real build from that same inspected commit.
 
+## Deliberation timeline
+
+A derived index over a session's durable record: proposals, objections,
+evidence, test results, resolutions, residual concerns, acceptances, and
+phase transitions, each pointing back at the exact message, event, or row
+it came from. It organizes the history; it never replaces it — the
+transcript and structured records stay the only source of truth.
+
+## Historian report
+
+A plain-English answer to a "why" question, produced by a one-shot
+read-only invocation of one of your own installed agents over a retrieved
+evidence set. Reports must cite the evidence they stand on (uncited replies
+are refused), label cross-excerpt reconstruction as synthesis, use causal
+language only where a cited excerpt states the relationship, and say
+plainly when the record cannot answer.
+
 ## Room and session
 
 The *room* is the durable conversation underneath: participants, turn queue,

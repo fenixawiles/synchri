@@ -96,6 +96,20 @@ The load-bearing terms — worktree, acceptance gate, session contract,
 planning workspace — are defined in [`docs/glossary.md`](docs/glossary.md),
 and in the app itself wherever they first appear.
 
+### Ask why, later
+
+Synchri coordinates coding agents **and preserves the decision process
+behind their work**. Every session keeps a deliberative record — proposals,
+objections, evidence, test results, resolutions, residual concerns — derived
+as an index over the durable transcript and structured records, never a
+rewrite of them. Ask a question with `synchri why "…"` or the session's
+History tab, and retrieval finds the smallest evidence set that answers it;
+a connected read-only agent can turn that into a plain-English report that
+cites the exact excerpts it stands on, labels cross-excerpt reconstruction
+as synthesis, and says plainly when the record cannot answer. Causal claims
+appear only where the record states them; nothing is ever explained from
+the final code alone.
+
 ## Install
 
 For a normal Mac user, download and open **Synchri.app** from

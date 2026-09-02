@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = "7"
+SCHEMA_VERSION = "8"
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 #: How long a writer waits for a competing writer before giving up.
@@ -100,6 +100,7 @@ def initialize(conn: sqlite3.Connection) -> None:
     for attempt in range(INITIALIZE_RETRIES):
         try:
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            _ensure_search_schema(conn)
             with transaction(conn):
                 _apply_additive_migrations(conn)
                 conn.execute(
@@ -112,6 +113,48 @@ def initialize(conn: sqlite3.Connection) -> None:
             if "locked" not in str(exc).lower() or attempt == INITIALIZE_RETRIES - 1:
                 raise
             time.sleep(INITIALIZE_RETRY_SECONDS * (attempt + 1))
+
+
+def _ensure_search_schema(conn: sqlite3.Connection) -> None:
+    """Create the deliberative-history search table, probing for FTS5.
+
+    FTS5 with bm25 ships in effectively every modern SQLite, but bundled
+    runtimes vary, so support is probed rather than assumed: where the
+    virtual table cannot be created, a plain shadow table with the same
+    shape backs a LIKE-based fallback and the query layer reports which
+    engine answered. ``executescript`` cannot host this because the probe
+    needs its own error boundary.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'search_index'"
+    ).fetchone()
+    if exists:
+        return
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE search_index USING fts5("
+            "body, kind UNINDEXED, room_id UNINDEXED, session_id UNINDEXED, "
+            "ref UNINDEXED, actor UNINDEXED, created_at UNINDEXED)"
+        )
+    except sqlite3.OperationalError:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS search_index ("
+            "body TEXT, kind TEXT, room_id TEXT, session_id TEXT, "
+            "ref TEXT, actor TEXT, created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS search_index_session "
+            "ON search_index (session_id, kind)"
+        )
+    conn.commit()
+
+
+def search_engine(conn: sqlite3.Connection) -> str:
+    """Which retrieval engine the workspace's search table supports."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'search_index'"
+    ).fetchone()
+    return "fts5" if row and "fts5" in (row["sql"] or "").lower() else "like"
 
 
 #: Columns added after the first release.  The schema is only ever extended

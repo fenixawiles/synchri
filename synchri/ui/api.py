@@ -138,6 +138,7 @@ class Api:
             ("GET", "memory"): self.memory,
             ("GET", "events"): self.events,
             ("GET", "history/timeline"): self.history_timeline,
+            ("GET", "history/search"): self.history_search,
             ("POST", "control"): self.control,
             ("GET", "presets"): self.presets,
             ("POST", "preset"): self.save_preset,
@@ -1004,6 +1005,16 @@ class Api:
             "events": events,
             "kinds": sorted({event["kind"] for event in events}),
         }
+
+    def history_search(self, query: dict, body: dict) -> dict:
+        """Retrieve the smallest evidence set that addresses a question."""
+        question = (query.get("q") or "").strip()
+        if not question:
+            raise ValidationError("ask a question about the recorded history")
+        session_id = (query.get("session") or "").strip() or None
+        if session_id:
+            self.manager.get(session_id)
+        return deliberation.search(self.manager, question, session_id=session_id)
 
     def preview_gates(self, query: dict, body: dict) -> dict:
         """What gate detection would make of a brief, before anything exists."""

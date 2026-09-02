@@ -179,6 +179,119 @@ def test_repo_observations_are_recorded_but_never_narrated(manager, repo, agents
     )
 
 
+def test_the_search_schema_bootstraps_idempotently(manager):
+    names = {
+        row["name"] for row in manager.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        )
+    }
+    assert "search_index" in names and "search_state" in names
+    version = manager.conn.execute(
+        "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+    ).fetchone()["value"]
+    assert version == "8"
+
+
+def test_search_finds_the_plan_from_a_paraphrase(manager, repo):
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission(summary="first full draft"))
+    result = deliberation.search(
+        manager, "why is the cache bounded with an LRU eviction map?",
+        session_id=record.session_id,
+    )
+    assert result["engine"] in {"fts5", "like"}
+    assert result["tokens"], "the question produced searchable tokens"
+    refs = [item["ref"] for item in result["evidence"]]
+    assert any(ref.startswith("revision:") for ref in refs), (
+        "the durable plan body answers a paraphrased question"
+    )
+    top = result["evidence"][0]
+    assert top["layer"] in {"structured", "transcript", "telemetry"}
+    assert top["excerpt"]
+
+
+def test_search_survives_match_metacharacters(manager, repo):
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    result = deliberation.search(
+        manager, 'Why did we "change" the cache-eviction (LRU)? *really*?',
+        session_id=record.session_id,
+    )
+    assert result["tokens"]
+    assert any("revision:" in item["ref"] for item in result["evidence"])
+
+
+def test_the_like_fallback_answers_too(manager, repo, monkeypatch):
+    from synchri.storage import db as db_module
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    monkeypatch.setattr(db_module, "search_engine", lambda conn: "like")
+    result = deliberation.search(
+        manager, "bounded LRU eviction", session_id=record.session_id
+    )
+    assert result["engine"] == "like"
+    assert any(item["ref"].startswith("revision:") for item in result["evidence"])
+
+
+def test_mutable_sources_refresh_between_queries(manager, repo):
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    _turn(manager, record, "codex", "SYNCHRI-OBJECTION: blocking|No rollback story")
+    before = deliberation.search(
+        manager, "zigzag rollback disposition", session_id=record.session_id
+    )
+    assert not any(
+        "zigzag" in item["excerpt"] for item in before["evidence"]
+    )
+    _turn(manager, record, "claude",
+          "SYNCHRI-PLAN-BEGIN\n" + PLAN_BODY + "\nSYNCHRI-PLAN-END\n"
+          "SYNCHRI-OBJECTION-RESOLVED: OBJ-001|added the zigzag rollback path\n"
+          "SYNCHRI-PLAN-SUBMIT: rollback added")
+    after = deliberation.search(
+        manager, "zigzag rollback disposition", session_id=record.session_id
+    )
+    matches = [item for item in after["evidence"] if "zigzag" in item["excerpt"]]
+    assert any(item["ref"] == "objection:OBJ-001" for item in matches), (
+        "a disposition recorded after the first query is found by the next one"
+    )
+
+
+def test_global_search_spans_sessions(manager, repo):
+    first, _ = _activated(manager, repo)
+    second, _ = _activated(
+        manager, repo,
+        idea="Ship a telemetry exporter: flush latency histograms every minute.",
+    )
+    result = deliberation.search(manager, "telemetry exporter flush latency")
+    assert result["evidence"], "an unscoped query reaches every session"
+    assert {item["session_id"] for item in result["evidence"]} == {second.session_id}
+    caches = deliberation.search(manager, "request-level caching idea")
+    assert first.session_id in {item["session_id"] for item in caches["evidence"]}
+
+
+def test_the_search_api_and_cli_round_trip(manager, repo, capsys):
+    import argparse
+
+    from synchri.cli.main import cmd_why
+    from synchri.ui.api import Api
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    api = Api(manager.broker, manager)
+    payload = api.history_search(
+        {"session": record.session_id, "q": "bounded LRU map"}, {}
+    )
+    assert payload["evidence"] and payload["engine"] in {"fts5", "like"}
+
+    args = argparse.Namespace(
+        question="bounded LRU map", session=record.session_id, json=False
+    )
+    assert cmd_why(args, manager.broker) == 0
+    printed = capsys.readouterr().out
+    assert "revision:" in printed and "engine:" in printed
+
+
 def test_the_timeline_api_serves_events_and_kinds(manager, repo):
     from synchri.ui.api import Api
 

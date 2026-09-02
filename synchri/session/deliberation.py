@@ -19,9 +19,12 @@ Every derived entry carries two things beyond its summary:
 
 from __future__ import annotations
 
+import re
+import sqlite3
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..storage import dao
+from ..storage import dao, db
 from . import dropbox as dropbox_module
 from . import planning as planning_module
 
@@ -327,3 +330,317 @@ def timeline(manager: "SessionManager", record: "SessionRecord", kinds=None) -> 
         wanted = set(kinds)
         ordered = [entry for entry in ordered if entry["kind"] in wanted]
     return ordered
+
+
+# ----------------------------------------------------------------------
+# retrieval: the smallest historical evidence set sufficient to answer
+# ----------------------------------------------------------------------
+
+#: Indexed body text is clipped; excerpts are windows around the first match.
+_BODY_LIMIT = 8_000
+_EXCERPT_LIMIT = 700
+
+_TOKEN = re.compile(r"[A-Za-z0-9_]{2,}")
+_STOPWORDS = frozenset(
+    "a an and are at be but by did do does for from had has have how i in is "
+    "it its me my no not of on or our so that the them they this to us was we "
+    "were what when which who why with you your".split()
+)
+
+#: Which stratum each indexed source belongs to — preserved on every result
+#: so consumers can tell canonical transcript evidence from structured
+#: records and bounded telemetry.
+_SOURCE_LAYERS = {
+    "message": LAYER_TRANSCRIPT,
+    "stream": LAYER_TELEMETRY,
+    "plan_revision": LAYER_STRUCTURED,
+    "objection": LAYER_STRUCTURED,
+    "gate": LAYER_STRUCTURED,
+    "drop": LAYER_STRUCTURED,
+    "memory": LAYER_STRUCTURED,
+    "conflict": LAYER_STRUCTURED,
+    "idea": LAYER_STRUCTURED,
+}
+
+#: Small mutable sources refreshed wholesale on every reindex; the large
+#: append-only sources advance by watermark instead.
+_MUTABLE_KINDS = ("objection", "gate", "drop", "memory", "conflict", "idea")
+
+
+def reindex(manager: "SessionManager", record: "SessionRecord") -> None:
+    """Bring the search index up to date for one session, lazily.
+
+    Append-only sources (messages, stream telemetry, plan revision bodies)
+    advance by per-source watermarks; small mutable sources (objections,
+    gates, drops, the memory ledger, contract conflicts, the idea) are
+    reindexed wholesale — they are tens of rows and they change in place.
+    The index stores excerptable copies plus refs; the underlying rows stay
+    the only source of truth.
+    """
+    conn = manager.conn
+    room_id, session_id = record.room_id, record.session_id
+    with db.transaction(conn):
+        marks = {
+            row["source"]: row["watermark"]
+            for row in conn.execute(
+                "SELECT source, watermark FROM search_state WHERE room_id = ?",
+                (room_id,),
+            )
+        }
+
+        def bump(source: str, watermark: int) -> None:
+            conn.execute(
+                "INSERT INTO search_state(room_id, source, watermark) VALUES (?,?,?) "
+                "ON CONFLICT(room_id, source) DO UPDATE SET watermark = excluded.watermark",
+                (room_id, source, watermark),
+            )
+
+        def put(body, kind: str, ref: str, actor, created_at) -> None:
+            text = " ".join(str(body or "").split())
+            if not text:
+                return
+            conn.execute(
+                "INSERT INTO search_index (body, kind, room_id, session_id, ref, "
+                "actor, created_at) VALUES (?,?,?,?,?,?,?)",
+                (text[:_BODY_LIMIT], kind, room_id, session_id, ref,
+                 actor, created_at or ""),
+            )
+
+        last = marks.get("message", 0)
+        top = last
+        for envelope in dao.list_messages(conn, room_id, since_seq=last):
+            text = "\n".join(
+                part for part in (
+                    envelope.content, envelope.goal, envelope.claim, envelope.evidence
+                ) if part
+            )
+            put(text, "message", f"message:{envelope.message_id}",
+                envelope.sender, envelope.timestamp)
+            top = max(top, envelope.seq or 0)
+        if top != last:
+            bump("message", top)
+
+        last = marks.get("stream", 0)
+        top = last
+        for row in conn.execute(
+            "SELECT event_id, participant, title, detail, file_path, created_at "
+            "FROM agent_stream_events WHERE room_id = ? AND event_id > ? "
+            "ORDER BY event_id",
+            (room_id, last),
+        ):
+            text = " ".join(p for p in (row["title"], row["detail"], row["file_path"]) if p)
+            put(text, "stream", f"stream:{row['event_id']}",
+                row["participant"], row["created_at"])
+            top = max(top, row["event_id"])
+        if top != last:
+            bump("stream", top)
+
+        last = marks.get("plan_revision", 0)
+        top = last
+        for row in conn.execute(
+            "SELECT revision, author, body, created_at FROM session_plan_revisions "
+            "WHERE session_id = ? AND revision > ? ORDER BY revision",
+            (session_id, last),
+        ):
+            put(row["body"], "plan_revision", f"revision:{row['revision']}",
+                row["author"], row["created_at"])
+            top = max(top, row["revision"])
+        if top != last:
+            bump("plan_revision", top)
+
+        placeholders = ",".join("?" for _ in _MUTABLE_KINDS)
+        conn.execute(
+            f"DELETE FROM search_index WHERE session_id = ? AND kind IN ({placeholders})",
+            (session_id, *_MUTABLE_KINDS),
+        )
+        plan = planning_module.get_plan(manager, session_id)
+        if plan:
+            put(plan["idea"], "idea", "idea:1", None, plan["created_at"])
+        for objection in planning_module.objections(manager, session_id):
+            text = objection["text"]
+            if objection.get("disposition"):
+                text += f"\ndisposition: {objection['disposition']}"
+            put(text, "objection", f"objection:{objection['objection_id']}",
+                objection["raised_by"], objection["created_at"])
+        for gate in manager.gates(session_id):
+            text = " ".join([
+                gate.gate_id, gate.description or "",
+                *gate.evidence, *gate.tests, *gate.commits,
+                gate.builder_assessment or "", gate.reviewer_assessment or "",
+            ])
+            put(text, "gate", f"gate:{gate.gate_id}", gate.updated_by, gate.updated_at)
+        for drop in dropbox_module.items(manager, session_id):
+            text = " ".join(
+                str(part) for part in (
+                    drop.get("title"), drop.get("prompt"), drop.get("proposal"),
+                    drop.get("review"), drop.get("failure_report"),
+                ) if part
+            )
+            put(text, "drop", f"drop:{drop['drop_id']}", None, drop["created_at"])
+        for row in conn.execute(
+            "SELECT participant, conflict, raw_reply, created_at "
+            "FROM session_acknowledgments WHERE session_id = ? AND accepted = 0",
+            (session_id,),
+        ):
+            put(row["conflict"] or row["raw_reply"], "conflict",
+                f"ack:{row['participant']}", row["participant"], row["created_at"])
+        try:
+            ledger_path = Path(manager.broker.workspace.memory_path(room_id))
+            ledger_text = ledger_path.read_text(encoding="utf-8") if ledger_path.exists() else ""
+        except Exception:  # pragma: no cover - the ledger is optional evidence
+            ledger_text = ""
+        if ledger_text.strip():
+            put(ledger_text, "memory", "memory:ledger", None, "")
+
+
+def _excerpt(body: str, tokens: list[str], limit: int = _EXCERPT_LIMIT) -> str:
+    text = " ".join((body or "").split())
+    if len(text) <= limit:
+        return text
+    lowered = text.lower()
+    position = min(
+        (lowered.find(token) for token in tokens if lowered.find(token) >= 0),
+        default=0,
+    )
+    start = max(0, position - limit // 3)
+    window = text[start:start + limit]
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if start + limit < len(text) else ""
+    return f"{prefix}{window}{suffix}"
+
+
+def _question_tokens(question: str) -> list[str]:
+    ordered = dict.fromkeys(match.group(0).lower() for match in _TOKEN.finditer(question or ""))
+    return [token for token in ordered if token not in _STOPWORDS]
+
+
+def search(
+    manager: "SessionManager",
+    question: str,
+    session_id: str | None = None,
+    *,
+    limit: int = 8,
+    char_budget: int = 10_000,
+) -> dict:
+    """Hybrid retrieval over the indexed record: lexical rank (bm25 where
+    FTS5 exists, token counting otherwise), structured signals, and recency,
+    fused with reciprocal ranks. Returns the smallest evidence set that
+    fits the budget, each item carrying its ref and provenance layer, plus
+    the timeline events overlapping the evidence window for scoped queries.
+    """
+    conn = manager.conn
+    if session_id:
+        records = [manager.get(session_id)]
+        reindex(manager, records[0])
+    else:
+        records = manager.list_sessions()
+        for record in records:
+            try:
+                reindex(manager, record)
+            except Exception:  # pragma: no cover - one broken session must not sink the query
+                continue
+
+    engine = db.search_engine(conn)
+    tokens = _question_tokens(question)
+    if not tokens:
+        return {"evidence": [], "events": [], "engine": engine, "tokens": []}
+
+    scope_sql = " AND session_id = ?" if session_id else ""
+    scope_args: list = [session_id] if session_id else []
+    hits: list[dict] = []
+    if engine == "fts5":
+        # Raw questions carry MATCH metacharacters; the query is rebuilt from
+        # word tokens only, each quoted, with prefix expansion.
+        match = " OR ".join(f'"{token}"*' for token in tokens)
+        try:
+            hits = [dict(row) for row in conn.execute(
+                "SELECT body, kind, room_id, session_id, ref, actor, created_at, "
+                f"bm25(search_index) AS rank FROM search_index "
+                f"WHERE search_index MATCH ?{scope_sql} ORDER BY rank LIMIT 80",
+                (match, *scope_args),
+            )]
+        except sqlite3.OperationalError:
+            engine = "like"
+    if engine == "like":
+        clauses = " OR ".join("body LIKE ? COLLATE NOCASE" for _ in tokens)
+        hits = [dict(row) for row in conn.execute(
+            f"SELECT body, kind, room_id, session_id, ref, actor, created_at "
+            f"FROM search_index WHERE ({clauses}){scope_sql} LIMIT 200",
+            (*[f"%{token}%" for token in tokens], *scope_args),
+        )]
+
+    for hit in hits:
+        lowered = hit["body"].lower()
+        hit["matches"] = sum(1 for token in tokens if token in lowered)
+        actor = (hit.get("actor") or "").lower()
+        hit["structured"] = (
+            (2 if hit["kind"] not in {"message", "stream"} else 0)
+            + (1 if actor and actor in tokens else 0)
+        )
+
+    lexical = sorted(
+        hits,
+        key=lambda hit: hit.get("rank", 0.0) if engine == "fts5" else -hit["matches"],
+    )
+    structured = sorted(hits, key=lambda hit: (-hit["structured"], hit.get("created_at") or ""))
+    recency = sorted(hits, key=lambda hit: hit.get("created_at") or "", reverse=True)
+    fused: dict[str, float] = {}
+    for ranking in (lexical, structured, recency):
+        for position, hit in enumerate(ranking):
+            fused[hit["ref"]] = fused.get(hit["ref"], 0.0) + 1.0 / (60 + position)
+    by_ref = {hit["ref"]: hit for hit in hits}
+    ranked = sorted(by_ref.values(), key=lambda hit: fused[hit["ref"]], reverse=True)
+
+    evidence: list[dict] = []
+    seen: set[str] = set()
+    used = 0
+
+    def append(hit: dict, *, context: bool = False) -> None:
+        nonlocal used
+        if hit["ref"] in seen:
+            return
+        excerpt = _excerpt(hit["body"], tokens)
+        entry = {
+            "ref": hit["ref"],
+            "kind": hit["kind"],
+            "layer": _SOURCE_LAYERS.get(hit["kind"], LAYER_STRUCTURED),
+            "actor": hit.get("actor"),
+            "at": hit.get("created_at") or "",
+            "session_id": hit["session_id"],
+            "excerpt": excerpt,
+        }
+        if context:
+            entry["context"] = True
+        evidence.append(entry)
+        seen.add(hit["ref"])
+        used += len(excerpt)
+
+    for hit in ranked:
+        if len([e for e in evidence if not e.get("context")]) >= limit or used >= char_budget:
+            break
+        append(hit)
+        # Thread expansion: a message hit brings the message it replied to,
+        # so proposal-and-answer pairs arrive together.
+        if hit["kind"] == "message" and used < char_budget:
+            message_id = hit["ref"].split(":", 1)[1]
+            envelope = dao.get_message(conn, hit["room_id"], message_id)
+            if envelope and envelope.in_reply_to:
+                parent = dao.get_message(conn, hit["room_id"], envelope.in_reply_to)
+                if parent and parent.content:
+                    append({
+                        "ref": f"message:{parent.message_id}", "kind": "message",
+                        "room_id": hit["room_id"], "session_id": hit["session_id"],
+                        "actor": parent.sender, "created_at": parent.timestamp,
+                        "body": parent.content,
+                    }, context=True)
+
+    events: list[dict] = []
+    if session_id and evidence:
+        window = [entry["at"] for entry in evidence if entry["at"]]
+        if window:
+            low, high = min(window), max(window)
+            events = [
+                entry for entry in timeline(manager, records[0])
+                if low <= entry["at"] <= high
+            ][:60]
+    return {"evidence": evidence, "events": events, "engine": engine, "tokens": tokens}

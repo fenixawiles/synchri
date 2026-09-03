@@ -222,9 +222,9 @@ def test_connection_ui_distinguishes_readiness_from_connected_state():
     assert "One step remains: run the protected connection test." in source
     assert "Nothing you can do locally will verify this connection" in source
     assert "A previously verified part of this connection changed" in source
-    assert source.count("renderAgentConnections(") == 3  # definition + first-run and regular homes
+    assert source.count("renderAgentConnections(") == 2  # definition + the Connections dialog
     assert 'button.textContent = "Connection verified"' in source
-    assert 'if (S.view === "home") await home();' in source
+    assert 'if (S.view === "workspace") await workspace();' in source
     assert "Re-run connection test" not in source
 
 
@@ -1358,12 +1358,27 @@ def test_the_new_session_flow_is_a_setup_sheet():
     assert 'id="setup-close"' in source
 
 
-def test_home_leads_with_workflows_and_keeps_sessions_compact():
+def test_the_workspace_is_the_landing_surface():
     from pathlib import Path
 
     source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
-    assert '<button class="primary" id="new-workflow">+ New workflow</button>' in source
-    assert 'class="wf-grid"' in source
+    # Boot lands in the workspace: the most recent active session resumes
+    # directly into its conversation; otherwise the blank workspace offers
+    # the brief composer, workflow quick-starts, and the needs-you rows.
+    assert "async function boot(" in source
+    assert "guard(boot)();" in source
+    assert 'const active = (b.sessions || []).find(s => s.status === "active");' in source
+    assert "async function workspace(" in source
+    assert 'id="workspace-brief"' in source
+    assert "async function startFromComposer(" in source
+    assert 'class="flow-chip"' in source
+    # Home retired without losing what it held: workflows keep their sidebar
+    # list and gain creation and management there; connections live in a
+    # dialog off the sidebar foot; sessions stay compact in the sidebar.
+    assert 'id="side-new-workflow"' in source
+    assert 'id="nav-connections"' in source
+    assert "function showConnectionsDialog(" in source
+    assert 'id="nav-workspace"' in source
     assert "Recent sessions" in source
     assert "S.showAllSessions ? list : list.slice(0, 6)" in source
     assert "Show all ${list.length} sessions" in source

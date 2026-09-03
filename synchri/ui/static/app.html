@@ -404,6 +404,10 @@ th{font:600 10px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;co
 .side-backdrop{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.35);border:0;padding:0}
 .side-label{font:600 10px/1.2 var(--sans);letter-spacing:.12em;text-transform:uppercase;
   color:var(--faint);padding:0 .55rem;display:flex;justify-content:space-between;align-items:center}
+.side-label-add{border:0;background:none;color:var(--faint);font:600 10px/1.2 var(--sans);
+  letter-spacing:.08em;text-transform:uppercase;padding:.1rem .2rem;cursor:pointer;
+  border-radius:var(--radius-s)}
+.side-label-add:hover{color:var(--accent);background:none}
 .side-list{display:grid;gap:1px}
 .side-item{display:flex;align-items:center;gap:.5rem;cursor:pointer}
 .side-item b{font-weight:550;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -460,25 +464,22 @@ details.menu>div>button:hover{background:var(--panel2)}
 .page-head .sub{font-size:12.5px;color:var(--dim);margin-top:.4rem;max-width:44rem}
 .section-head{display:flex;align-items:center;gap:.7rem;margin:2rem 0 .7rem}
 .section-head::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
-.hero{max-width:34rem;margin:3.5rem auto 2.5rem}
 
-/* home: an attention strip, then the start surface — plain printed lines */
+/* workspace: the landing surface — an attention strip, a greeting, the brief
+   composer, and workflow quick-starts, as plain printed lines on the sheet */
+.workspace-hello{margin:2.6rem 0 1.1rem}
+.workspace-hello h1{font-size:23px}
+.workspace-composer textarea{min-height:3.4rem}
+.workspace-flows{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin-top:1.1rem}
+.workspace-flows .kicker{margin-right:.35rem}
+.flow-chip{font-size:12px;padding:.3rem .7rem;color:var(--dim);border-color:var(--line2)}
+.flow-chip:hover{color:var(--ink)}
 .attn{display:grid;gap:.15rem;margin-bottom:2.2rem}
 .attn-row{display:flex;align-items:baseline;gap:.6rem;padding:.35rem 0;min-width:0}
 .attn-row .led{align-self:center}
 .attn-row b{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .attn-row .side-meta{font:11px var(--mono);color:var(--faint)}
 .attn-row button{margin-left:auto;flex:none}
-.wf-grid{display:grid;gap:.2rem;margin-top:.5rem}
-.wf-row{display:flex;align-items:baseline;gap:1rem;padding:.45rem 0;min-width:0}
-.wf-main b{font-size:15px}
-.wf-row:hover .wf-main b{text-decoration:underline;text-decoration-color:var(--accent);
-  text-underline-offset:3px}
-.wf-main{min-width:0;flex:1;cursor:pointer;border:0;background:none;text-align:left;padding:0;font:inherit;color:inherit}
-.wf-main b{font-size:13px;font-weight:600}
-.workflow-chain{font:11.5px var(--mono);color:var(--faint);margin-top:.25rem;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.wf-actions{flex:none;display:flex;gap:.35rem;align-items:center}
 .workflow-menu>summary{border:1px solid transparent;padding:.28rem .45rem;line-height:1}
 .workflow-menu button.danger{color:var(--bad)}
 .workflow-editor .perm{padding:.55rem 0}
@@ -847,7 +848,7 @@ pre.diff{background:var(--bg)}
     <button class="side-toggle" id="side-toggle" aria-label="Hide sidebar" title="Hide sidebar" aria-controls="sidebar" aria-expanded="true">«</button>
   </div>
   <div class="side-cta"><button class="primary" id="nav-new">New session</button></div>
-  <nav class="side-nav" aria-label="Primary"><button id="nav-home">Overview</button></nav>
+  <nav class="side-nav" aria-label="Primary"><button id="nav-workspace">Workspace</button></nav>
   <div class="side-context" id="side-context"></div>
   <div class="side-foot">
     <details class="menu" id="share-menu"><summary aria-label="Share Synchri">Share Synchri</summary>
@@ -858,6 +859,7 @@ pre.diff{background:var(--bg)}
         <div class="row" style="margin-top:.6rem;flex-wrap:nowrap"><button class="primary" id="share-copy" style="flex:1">Copy invite link</button><button class="ghost hide" id="share-native">Share…</button></div>
       </div>
     </details>
+    <button id="nav-connections">Connections</button>
     <button id="app-update">Check for updates</button>
     <details class="menu" id="theme-menu"><summary aria-label="Choose theme">Theme</summary><div id="theme-options"></div></details>
     <button class="btn-github" id="github-account"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-label">Sign in with GitHub</span></button>
@@ -1183,7 +1185,7 @@ function renderThemeMenu() {
   }
 }
 
-const S = { view:"home", boot:null, draft:null, step:"mode", session:null,
+const S = { view:"workspace", boot:null, draft:null, step:"mode", session:null,
             tab:"conversation", dash:null, repos:null, es:null, quick:null, launch:null,
             launchSession:null,
             agentDraft:null, githubReposRequest:null, githubReposLoading:false, clock:null,
@@ -1223,7 +1225,7 @@ function renderSideContext() {
   const box = document.getElementById("side-context");
   if (!box) return;
   document.querySelectorAll(".side-nav button").forEach(button =>
-    button.classList.toggle("on", S.view === "home" && button.id === "nav-home"));
+    button.classList.toggle("on", S.view === "workspace" && button.id === "nav-workspace"));
   box.innerHTML = "";
   if (S.view === "session" && S.dash) {
     renderSessionRail(box);
@@ -1231,13 +1233,36 @@ function renderSideContext() {
   }
   if (!S.boot) return;
   const workflows = S.boot.presets || [];
+  // The label row is always present so a first workflow is one click away;
+  // rows carry their management menu the same way session rows do.
+  const wfLabel = $(`<div class="side-label">Workflows<button class="side-label-add" id="side-new-workflow" aria-label="New workflow" title="New workflow">+ New</button></div>`);
+  wfLabel.querySelector("#side-new-workflow").onclick = () => configureWorkflow();
+  box.append(wfLabel);
   if (workflows.length) {
-    box.append($(`<div class="side-label">Workflows</div>`));
     const runs = $(`<div class="side-list"></div>`);
     for (const workflow of workflows.slice(0, 6)) {
       const chain = (workflow.agents || []).map(agent => agent.name).join(" → ");
-      const row = $(`<button class="side-item" title="Run ${esc(workflow.name)}${chain ? ` · ${esc(chain)}` : ""}"><b>${esc(workflow.name)}</b><span class="side-meta">run</span></button>`);
-      row.onclick = guard(() => quickStart(workflow.name));
+      const row = $(`<div class="side-row"><button class="side-item" title="Run ${esc(workflow.name)}${chain ? ` · ${esc(chain)}` : ""}"><b>${esc(workflow.name)}</b><span class="side-meta">run</span></button>
+        <details class="menu workflow-menu"><summary aria-label="Workflow options">⋯</summary><div>
+          <button data-edit>Edit workflow</button>
+          <button data-rename>Rename</button>
+          <button class="danger" data-delete>Delete workflow</button>
+        </div></details></div>`);
+      row.querySelector(".side-item").onclick = guard(() => quickStart(workflow.name));
+      row.querySelector("[data-edit]").onclick = () => configureWorkflow(workflow.name);
+      row.querySelector("[data-rename]").onclick = guard(async () => {
+        const name = prompt("New workflow name", workflow.name)?.trim();
+        if (!name || name === workflow.name) return;
+        S.boot.presets = (await api("preset/rename", {name: workflow.name, new_name: name})).presets;
+        confirmNotice(`Renamed workflow to “${name}”.`);
+        if (S.view === "workspace") await workspace(); else renderSideContext();
+      });
+      row.querySelector("[data-delete]").onclick = guard(async () => {
+        if (!confirm(`Delete workflow “${workflow.name}”? Previous sessions are not affected.`)) return;
+        S.boot.presets = (await api("preset/delete", {name: workflow.name})).presets;
+        confirmNotice(`Deleted workflow “${workflow.name}”.`);
+        if (S.view === "workspace") await workspace(); else renderSideContext();
+      });
       runs.append(row);
     }
     box.append(runs);
@@ -1270,7 +1295,7 @@ function renderSideContext() {
       if (!name || name === s.name) return;
       S.boot.sessions = (await api("session/rename", {session: s.session_id, name})).sessions;
       confirmNotice(`Renamed session to “${name}”.`);
-      if (S.view === "home") await home(); else renderSideContext();
+      if (S.view === "workspace") await workspace(); else renderSideContext();
     });
     row.querySelector("[data-delete]")?.addEventListener("click", () => showDeleteSessionDialog(s));
     rows.append(row);
@@ -1465,44 +1490,46 @@ async function checkForUpdate({manual=false, silent=false}={}) {
   }
 }
 
-/* ------------------------------------------------------------------ home */
+/* ------------------------------------------------------------- workspace
+   The landing surface is the product surface. Boot resumes the most recent
+   active session; otherwise the blank workspace offers the brief composer,
+   workflow quick-starts, and whatever needs you. */
 /* Only states a person can act on belong in the attention strip. */
 const NEEDS_YOU_STATES = ["awaiting_join", "awaiting_ack", "paused"];
 
-async function home() {
-  stopClock();
-  app().classList.remove("session-app");
-  S.view = "home"; S.session = null; S.returnToQuick = false;
-  S.boot = await api("bootstrap");
-  listen();
-  document.getElementById("ctx").textContent = S.boot.workspace;
+async function boot() {
+  const b = await api("bootstrap");
+  S.boot = b;
+  document.getElementById("ctx").textContent = b.workspace;
   renderGitHubAccount();
   if (!S.updateChecked) {
     S.updateChecked = true;
     void checkForUpdate({silent:true});
   }
-  renderSideContext();
-  const list = S.boot.sessions;
-  const workflows = S.boot.presets || [];
-  app().innerHTML = "";
-  if (!workflows.length && !list.length) {
-    const welcome = $(`<div class="hero stack">
-      <div class="kicker">Welcome</div>
-      <div><h1>Start your first session</h1>
-        <p class="muted small" style="margin:.5rem 0 0;line-height:1.65">Choose a repository, say what you want done,
-        and a small agent team builds it in an isolated worktree — reviewed, gated, and under your control.
-        A recommended team comes preselected; save your own defaults as workflows whenever you like.</p>
-        <p class="small faint" style="margin:.5rem 0 0">Synchri is built to be shared: anyone can sign in with GitHub and use it with any repository.</p></div>
-      <div class="row"><button class="primary" id="hero-start">New session</button>
-        <button class="ghost" id="create-workflow">Define a workflow first</button></div>
-    </div>`);
-    welcome.querySelector("#hero-start").onclick = guard(() => quickStart());
-    welcome.querySelector("#create-workflow").onclick = () => configureWorkflow();
-    app().append(welcome);
-    renderAgentConnections(app());
-    return;
+  // Resume-or-blank. Landing on the blank workspace always is a two-line
+  // change: drop this active branch.
+  const active = (b.sessions || []).find(s => s.status === "active");
+  if (active) {
+    try { await openSession(active.session_id); return; }
+    catch (err) { flash(err); }
   }
-  const page = $(`<div class="home-page"></div>`);
+  await workspace(b);
+}
+
+async function workspace(preloaded) {
+  stopClock();
+  app().classList.remove("session-app");
+  S.view = "workspace"; S.session = null; S.returnToQuick = false;
+  S.boot = preloaded || await api("bootstrap");
+  listen();
+  document.getElementById("ctx").textContent = S.boot.workspace;
+  renderGitHubAccount();
+  renderSideContext();
+  const list = S.boot.sessions || [];
+  const workflows = S.boot.presets || [];
+  const firstRun = !workflows.length && !list.length;
+  app().innerHTML = "";
+  const page = $(`<div class="workspace-page"></div>`);
   const needsYou = list.filter(s => NEEDS_YOU_STATES.includes(s.status));
   const inProgress = list.filter(s => s.status === "active");
   if (needsYou.length || inProgress.length) {
@@ -1526,49 +1553,73 @@ async function home() {
     }
     page.append(strip);
   }
-  page.append($(`<div class="page-head"><div><h1>Start a session</h1>
-    <div class="sub">Run a saved workflow, or start fresh from the sidebar — Synchri asks only what it needs, then launches the team in an isolated worktree.</div></div>
-    <button class="primary" id="new-workflow">+ New workflow</button></div>`));
-  page.querySelector("#new-workflow").onclick = () => configureWorkflow();
-  if (workflows.length) {
-    const rows = $(`<div class="wf-grid"></div>`);
-    for (const workflow of workflows) {
-      const agents = workflow.agents || [];
-      const chain = agents.map(agent => agent.name).join(" → ") || "no agents yet";
-      const row = $(`<div class="wf-row"><button class="wf-main" data-run-main title="Run ${esc(workflow.name)}"><b>${esc(workflow.name)}</b>
-        <div class="workflow-chain">${esc(chain)}${workflow.deadline_duration ? ` · ${esc(workflow.deadline_duration)}` : ""}</div></button>
-        <div class="wf-actions"><button data-run>Run</button><details class="menu workflow-menu"><summary aria-label="Workflow options">⋯</summary><div>
-          <button data-edit>Edit workflow</button><button data-rename>Rename</button><button class="danger" data-delete>Delete workflow</button>
-        </div></details></div></div>`);
-      row.querySelector("[data-run]").onclick = guard(() => quickStart(workflow.name));
-      row.querySelector("[data-run-main]").onclick = guard(() => quickStart(workflow.name));
-      row.querySelector("[data-edit]").onclick = () => configureWorkflow(workflow.name);
-      row.querySelector("[data-rename]").onclick = guard(async () => {
-        const name = prompt("New workflow name", workflow.name)?.trim();
-        if (!name || name === workflow.name) return;
-        S.boot.presets = (await api("preset/rename", {name: workflow.name, new_name: name})).presets;
-        confirmNotice(`Renamed workflow to “${name}”.`); await home();
-      });
-      row.querySelector("[data-delete]").onclick = guard(async () => {
-        if (!confirm(`Delete workflow “${workflow.name}”? Previous sessions are not affected.`)) return;
-        S.boot.presets = (await api("preset/delete", {name: workflow.name})).presets;
-        confirmNotice(`Deleted workflow “${workflow.name}”.`); await home();
-      });
-      rows.append(row);
-    }
-    page.append(rows);
+  const hello = $(`<div class="workspace-hello"><h1>${firstRun ? "Start your first session" : "What should the team build?"}</h1></div>`);
+  if (firstRun) {
+    hello.append($(`<p class="muted small" style="margin:.5rem 0 0;line-height:1.65">Describe what you want done,
+      and a small agent team builds it in an isolated worktree — reviewed, gated, and under your control.
+      A recommended team comes preselected (Claude builds, Codex reviews); save your own defaults as workflows whenever you like.</p>`));
   } else {
-    page.append($(`<div class="small muted">No saved workflows yet — a new session starts with the recommended team
-      (Claude builds, Codex reviews). Save a workflow to make your own defaults one click.</div>`));
+    hello.append($(`<p class="muted small" style="margin:.4rem 0 0">The brief becomes the session's contract — repository, team, and worktree follow in one short setup.</p>`));
   }
-  renderAgentConnections(page);
+  page.append(hello);
+  const compose = $(`<div class="composer workspace-composer">
+    <textarea id="workspace-brief" placeholder="Describe what you want done…"></textarea>
+    <div class="composer-bar"><span class="composer-hint small faint">Enter to set up the session · Shift+Enter for a new line</span>
+      <button class="primary composer-send" id="workspace-start">Start a session</button></div></div>`);
+  const brief = compose.querySelector("#workspace-brief");
+  const begin = () => guard(startFromComposer)(brief.value);
+  compose.querySelector("#workspace-start").onclick = begin;
+  brief.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); begin(); }
+  });
+  brief.addEventListener("input", () => {
+    brief.style.height = "auto";
+    brief.style.height = Math.min(brief.scrollHeight, 200) + "px";
+  });
+  page.append(compose);
+  if (workflows.length) {
+    const flows = $(`<div class="workspace-flows"><span class="kicker">Quick start</span></div>`);
+    for (const workflow of workflows.slice(0, 5)) {
+      const chain = (workflow.agents || []).map(agent => agent.name).join(" → ");
+      const chip = $(`<button class="flow-chip" title="Run ${esc(workflow.name)}${chain ? ` · ${esc(chain)}` : ""}">${esc(workflow.name)}</button>`);
+      chip.onclick = guard(() => quickStart(workflow.name));
+      flows.append(chip);
+    }
+    page.append(flows);
+  }
   app().append(page);
+}
+
+/* The brief starts on the workspace and flows into the setup sheet with the
+   goal already answered; freshly typed intent wins over a stale draft. */
+async function startFromComposer(text) {
+  const goal = String(text || "").trim();
+  await quickStart();
+  if (goal) {
+    S.quick.goal = goal;
+    S.quick.briefDone = true;
+    renderQuick();
+  }
+}
+
+function showConnectionsDialog() {
+  document.getElementById("connections-dialog")?.remove();
+  const dialog = $(`<div class="dialog stack" id="connections-dialog" role="dialog" aria-modal="true">
+    <button class="detail-close" aria-label="Close">×</button>
+    <div class="kicker">AGENT CONNECTIONS</div>
+    <div id="connections-body" class="stack" style="gap:.4rem"></div>
+  </div>`);
+  document.body.append(dialog);
+  dialog.querySelector(".detail-close").onclick = () => dialog.remove();
+  renderAgentConnections(dialog.querySelector("#connections-body"));
 }
 
 function renderAgentConnections(page) {
   const connectable = (S.boot.runtimes || []).filter(runtime => runtime.managed_command);
-  if (!connectable.length) return;
-  page.append($(`<div class="section-head" style="margin-top:2.4rem"><span class="kicker">Agent connections</span></div>`));
+  if (!connectable.length) {
+    page.append($(`<div class="small muted">No launchable agent CLIs were found on this Mac.</div>`));
+    return;
+  }
   const box = $(`<div class="conn-list"></div>`);
   for (const runtime of connectable) {
     const stored = (S.boot.runtime_connections || {})[runtime.key];
@@ -1630,7 +1681,15 @@ async function showConnectDialog(runtimeKey) {
     <div class="small muted" id="connect-status" aria-live="polite"></div>
   </div>`);
   document.body.append(dialog);
-  const close = () => { dialog.remove(); if (S.view === "home") home().catch(() => {}); };
+  const close = () => {
+    dialog.remove();
+    // Reflect fresh connection state wherever the user returns to.
+    guard(async () => {
+      if (S.view === "workspace") await workspace();
+      else S.boot = await api("bootstrap");
+      if (document.getElementById("connections-dialog")) showConnectionsDialog();
+    })();
+  };
   dialog.querySelector(".detail-close").onclick = close;
   dialog.querySelector("[data-close]").onclick = close;
 
@@ -1736,7 +1795,7 @@ async function showConnectDialog(runtimeKey) {
     const started = await api("runtimes/connect", {runtime: runtimeKey});
     currentTest = started.test || currentTest;
     renderState();
-    if (S.view === "home") await home();
+    if (S.view === "workspace") await workspace();
     const poll = async () => {
       const visible = document.getElementById("connect-dialog") === dialog;
       const status = await api("runtimes/connect?runtime=" + encodeURIComponent(runtimeKey));
@@ -1747,7 +1806,7 @@ async function showConnectDialog(runtimeKey) {
         window.setTimeout(guard(poll), 700);
         return;
       }
-      if (S.view === "home") await home();
+      if (S.view === "workspace") await workspace();
       else S.boot = await api("bootstrap");
     };
     await poll();
@@ -1772,7 +1831,7 @@ function showDeleteSessionDialog(s) {
     close();
     S.boot.sessions = result.sessions;
     confirmNotice(`Deleted “${s.name}” — ${result.worktree_note}.`);
-    await home();
+    await workspace();
   });
 }
 
@@ -2016,7 +2075,7 @@ function renderWorkflow() {
     // An editor opened from the new-session flow returns there, with the
     // unfinished answers still in place.
     if (S.returnToQuick) { S.returnToQuick = false; await quickStart(S.quick?.preset); }
-    else await home();
+    else await workspace();
   });
   box.querySelector("#workflow-save").onclick = guard(async () => {
     const name = box.querySelector("#workflow-name").value.trim();
@@ -2032,7 +2091,7 @@ function renderWorkflow() {
       S.returnToQuick = false;
       if (S.quick) { S.quick.preset = name; S.quick.teamDone = false; }
       await quickStart(name);
-    } else await home();
+    } else await workspace();
   });
 }
 
@@ -2340,7 +2399,7 @@ function renderQuick() {
   page.append($(`<div class="page-head" style="margin-bottom:1.1rem"><div><div class="kicker">New session</div>
     <h1 style="margin-top:.4rem">${planIntent ? "Plan, then build" : "Start a session"}</h1></div>
     <button class="detail-close" type="button" id="setup-close">Close</button></div>`));
-  page.querySelector("#setup-close").onclick = guard(home);
+  page.querySelector("#setup-close").onclick = guard(() => workspace());
   steps.forEach((step, index) => {
     const state = step.key === current ? "on" : (step.answered ? "done" : "todo");
     const section = $(`<section class="ask ${state}" data-ask="${step.key}"></section>`);
@@ -3034,8 +3093,8 @@ function listen() {
       } else if (S.view === "launch" && S.session) {
         const result = await api("launch?session=" + encodeURIComponent(S.session));
         S.launchSession = result.session; S.launch = result.launch; renderLaunch();
-      } else if (S.view === "home" && what.includes("sessions")) {
-        await home();
+      } else if (S.view === "workspace" && what.includes("sessions")) {
+        await workspace();
       } else if (S.view === "wizard" && what.includes("drafts")) {
         // Another tab edited this draft. Adopt it rather than diverge.
         const fresh = await api("draft?draft=default");
@@ -3917,7 +3976,8 @@ async function paint(tab, el) {
   }
 }
 
-document.getElementById("nav-home").onclick = guard(home);
+document.getElementById("nav-workspace").onclick = guard(() => workspace());
+document.getElementById("nav-connections").onclick = () => showConnectionsDialog();
 document.getElementById("nav-new").onclick = guard(() => quickStart());
 document.getElementById("side-toggle").onclick = () => toggleSidebar(true);
 document.getElementById("side-reveal").onclick = () => toggleSidebar(false);
@@ -3968,5 +4028,5 @@ document.addEventListener("click", (event) => {
 });
 if (isNarrow()) S.sidebarCollapsed = true;
 applySidebar();
-guard(home)();
+guard(boot)();
 </script>

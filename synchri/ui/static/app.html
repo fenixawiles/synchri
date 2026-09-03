@@ -493,7 +493,13 @@ details.menu>div>button:hover{background:var(--panel2)}
 .conn-row button{margin-left:auto;flex:none}
 
 /* new session: progressive questions — answered steps collapse to summaries,
-   the current one is expanded, upcoming ones are titles only */
+   the current one is expanded, upcoming ones are titles only. The whole flow
+   is an L2 setup sheet that rises over the workspace: configuration is
+   machinery behind the surface, not a place of its own. */
+.setup-sheet{max-width:47rem;margin:1rem auto 2.5rem;background:var(--panel2);
+  border:1px solid var(--line);border-radius:var(--radius-l);box-shadow:var(--shadow-2);
+  padding:1.4rem clamp(1.1rem,3vw,2rem) 1.8rem;transform-origin:50% 100%;position:relative}
+.setup-sheet.enter{animation:rise var(--dur-3) var(--ease-out)}
 .asks{max-width:44rem}
 .ask{padding:.55rem 0}
 .ask.on{padding:1.1rem 0 1.5rem;margin:.25rem 0;animation:ask-in var(--dur-2) var(--ease-out)}
@@ -822,6 +828,8 @@ pre.diff{background:var(--bg)}
   .page-head{flex-direction:column;align-items:flex-start}
   .message-list,.live-work,.live-feed,.chat-compose,.chat-header,.inspector-head,.launch-stage{padding-left:1rem;padding-right:1rem}
   .inspector-panel{width:100%}
+  .setup-sheet{border:0;border-radius:0;box-shadow:none;background:none;
+    margin:.2rem 0 1.5rem;padding:.6rem .1rem 1rem}
   .chat-header{padding-left:3rem}
   .details-panel{padding:1rem 1rem 2rem}
   .ask-body{margin-left:0}
@@ -2061,6 +2069,8 @@ const roleLabel = key =>
 
 function renderQuick() {
   const q = S.quick;
+  // The sheet rises once, on entry; answer repaints must not replay it.
+  const wasOpen = !!document.querySelector(".setup-sheet");
   app().innerHTML = "";
   const planIntent = q.intent === "plan";
   const repos = S.repos || {local:[], github:[], github_status:{}};
@@ -2325,9 +2335,12 @@ function renderQuick() {
   };
 
   const bodies = {repo: repoBody, workspace: workspaceBody, brief: briefBody, team: teamBody, ready: readyBody};
+  const sheet = $(`<div class="setup-sheet${wasOpen ? "" : " enter"}"></div>`);
   const page = $(`<div class="asks"></div>`);
   page.append($(`<div class="page-head" style="margin-bottom:1.1rem"><div><div class="kicker">New session</div>
-    <h1 style="margin-top:.4rem">${planIntent ? "Plan, then build" : "Start a session"}</h1></div></div>`));
+    <h1 style="margin-top:.4rem">${planIntent ? "Plan, then build" : "Start a session"}</h1></div>
+    <button class="detail-close" type="button" id="setup-close">Close</button></div>`));
+  page.querySelector("#setup-close").onclick = guard(home);
   steps.forEach((step, index) => {
     const state = step.key === current ? "on" : (step.answered ? "done" : "todo");
     const section = $(`<section class="ask ${state}" data-ask="${step.key}"></section>`);
@@ -2345,7 +2358,8 @@ function renderQuick() {
     if (state === "on") section.append(bodies[step.key]());
     page.append(section);
   });
-  app().append(page);
+  sheet.append(page);
+  app().append(sheet);
 }
 
 function copyText(value) {

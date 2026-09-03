@@ -1346,6 +1346,18 @@ def test_the_preflight_assembles_inside_the_session_shell():
     assert ".launch-shell .check-row{animation:rise" in source
 
 
+def test_the_new_session_flow_is_a_setup_sheet():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # Session configuration is machinery that rises over the workspace as an
+    # L2 sheet — once, on entry; answer repaints must not replay the rise.
+    assert 'const wasOpen = !!document.querySelector(".setup-sheet");' in source
+    assert '$(`<div class="setup-sheet${wasOpen ? "" : " enter"}"></div>`)' in source
+    assert "transform-origin:50% 100%" in source
+    assert 'id="setup-close"' in source
+
+
 def test_home_leads_with_workflows_and_keeps_sessions_compact():
     from pathlib import Path
 

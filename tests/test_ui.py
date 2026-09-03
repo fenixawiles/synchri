@@ -1332,6 +1332,20 @@ def test_the_inspector_slides_over_the_conversation():
     assert '"plan","gates"' in source
 
 
+def test_the_preflight_assembles_inside_the_session_shell():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # Launch renders inside the same conversation chrome the live room will
+    # fill: the session's name in the header, the checklist where the
+    # conversation will be, and rows that rise on durable phase transitions.
+    assert 'class="conversation-shell launch-shell"' in source
+    assert "S.launchSession" in source
+    assert 'class="launch-stage"' in source
+    assert "the team is assembling" in source
+    assert ".launch-shell .check-row{animation:rise" in source
+
+
 def test_home_leads_with_workflows_and_keeps_sessions_compact():
     from pathlib import Path
 

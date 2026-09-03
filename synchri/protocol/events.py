@@ -57,5 +57,7 @@ SESSION_PHASE_ADVANCED = "session.phase_advanced"
 SESSION_DROP_CAPTURED = "session.drop_captured"
 SESSION_DROP_UPDATED = "session.drop_updated"
 SESSION_DROP_EVALUATED = "session.drop_evaluated"
+SESSION_TESTS_RUN = "session.tests_run"
+SESSION_REPO_OBSERVED = "session.repo_observed"
 
 ALL = [value for name, value in list(globals().items()) if name.isupper() and name != "ALL"]

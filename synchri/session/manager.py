@@ -1765,6 +1765,21 @@ class SessionManager:
         metadata = {**record.metadata, "last_test_run": result.to_dict()}
         with db.transaction(self.conn):
             self._update(session_id, metadata=json.dumps(metadata))
+        # Deterministic evidence becomes part of the deliberative record: a
+        # mid-session run is timeline-addressable, not only the final one.
+        self._log(
+            record,
+            ev.SESSION_TESTS_RUN,
+            {
+                "command": result.command,
+                "ran": result.ran,
+                "green": result.green,
+                "passed": result.passed,
+                "failed": result.failed,
+                "errors": result.errors,
+                "detail": (result.detail or result.output_tail or "")[-400:],
+            },
+        )
         return result.to_dict()
 
     def last_test_run(self, session_id: str) -> dict | None:

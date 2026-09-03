@@ -313,6 +313,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_room_reader(prov)
     prov.add_argument("--message", required=True, help="message id")
 
+    why = command("why", "Ask the recorded development history a question.")
+    why.add_argument("question", help='e.g. "Why was persistent authentication adopted?"')
+    why.add_argument("--session", help="scope to one session id (default: every session)")
+    why.add_argument(
+        "--report", action="store_true",
+        help="also ask a connected read-only agent for a grounded report "
+             "(one provider invocation; requires --session)",
+    )
+
     export = command("export", "Rebuild transcript.jsonl from authoritative state.")
     _add_room_reader(export)
 
@@ -987,6 +996,49 @@ def cmd_events(args: argparse.Namespace, broker: Broker) -> int:
     return _out(args, result, text or "(no events)")
 
 
+def cmd_why(args: argparse.Namespace, broker: Broker) -> int:
+    """Retrieval over the deliberative record, plus an opt-in grounded report."""
+    from ..session.deliberation import search
+    from ..session.manager import SessionManager
+
+    manager = SessionManager(broker)
+    result = search(manager, args.question, session_id=args.session)
+    lines = [
+        f"engine: {result['engine']} · {len(result['evidence'])} evidence item(s)"
+    ]
+    if getattr(args, "report", False):
+        from ..runner import historian
+
+        if not args.session:
+            outcome = {"report": None, "fallback": True, "runtime": None,
+                       "fallback_reason": "a grounded report needs --session"}
+        else:
+            outcome = historian.report(
+                broker, manager, manager.get(args.session), args.question, result
+            )
+        result = {**result, **outcome}
+        if outcome.get("report"):
+            sections = outcome["report"]["sections"]
+            for key in ("SUMMARY", "TRIGGER", "POSITIONS", "EVIDENCE",
+                        "RESOLUTION", "SYNTHESIS", "UNRESOLVED"):
+                if sections.get(key):
+                    lines.append(f"\n{key}: {sections[key]}")
+        else:
+            lines.append(f"\nno report: {outcome.get('fallback_reason')}")
+    for item in result["evidence"]:
+        origin = " · ".join(
+            str(part) for part in (
+                item["kind"], item.get("actor"), (item.get("at") or "")[:19],
+                None if args.session else item.get("session_id"),
+            ) if part
+        )
+        marker = " (context)" if item.get("context") else ""
+        lines.append(f"\n[{item['ref']}]{marker} {origin}\n  {item['excerpt']}")
+    if not result["evidence"]:
+        lines.append("nothing in the recorded history matched that question")
+    return _out(args, result, "\n".join(lines))
+
+
 def cmd_provenance(args: argparse.Namespace, broker: Broker) -> int:
     room_id = _room(args, broker)
     result = broker.provenance(
@@ -1144,6 +1196,7 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Broker], int]] = {
     "participants": cmd_participants,
     "events": cmd_events,
     "provenance": cmd_provenance,
+    "why": cmd_why,
     "export": cmd_export,
     "memory": cmd_memory,
     "pause-room": cmd_pause,

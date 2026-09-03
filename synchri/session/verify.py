@@ -278,6 +278,28 @@ def summarize_changes(
     return summary
 
 
+def observe_head(worktree_path: str | Path) -> dict | None:
+    """A cheap point-in-time repository observation: HEAD plus dirty count.
+
+    Recorded after completed managed turns so the deliberative record can
+    correlate what was said with where the repository actually stood — one
+    ``rev-parse`` and one porcelain status, never a diff.
+    """
+    from . import worktree as worktree_module
+
+    root = Path(worktree_path)
+    if not root.exists():
+        return None
+
+    def run(*args: str) -> str:
+        return worktree_module.git(root, *args, check=False)
+
+    head = run("rev-parse", "HEAD").strip()
+    if not head:
+        return None
+    return {"head": head, "changed_files": len(_porcelain_entries(run))}
+
+
 def diff_text(worktree_path: str | Path, base_branch: str, *, max_chars: int = 200_000) -> str:
     """The raw diff, for the transparency panel."""
     from . import worktree as worktree_module

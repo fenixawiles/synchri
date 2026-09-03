@@ -315,6 +315,11 @@ pre{overflow:auto;background:var(--panel2);border:0;
 .term{background:none;border:none;padding:0;margin:0;font:inherit;color:inherit;
   border-bottom:1px dotted var(--dim);border-radius:0;cursor:help}
 .term:hover{border-bottom-style:solid;background:none}
+/* citation markers in historian reports: taps that open the exact evidence */
+.cite{background:none;border:none;padding:0;margin:0;font-family:var(--mono);
+  font-size:.85em;font-weight:600;color:inherit;border-bottom:1px dotted var(--dim);
+  border-radius:0;cursor:pointer}
+.cite:hover{border-bottom-style:solid;background:none}
 
 .led{width:6px;height:6px;border-radius:50%;background:var(--line2);display:inline-block;flex:none}
 .led.live{background:var(--accent)}
@@ -976,6 +981,10 @@ const DEFINITIONS = {
   contract: {
     title: "Session contract",
     body: "The written terms every agent must agree to before work begins: the repository, the authorized worktree, who does what, what they may and may not do, the brief, and the timebox. Each agent replies UNDERSTOOD to the same text — and if anything material changes later, a new revision goes out and every agent must agree again.",
+  },
+  history: {
+    title: "Recorded history",
+    body: "Everything this session durably wrote: the conversation, plan revisions and objections, gate evidence, test runs, side tasks, escalations, and the audit log. The History tab derives a deliberation timeline from that record and answers questions with reports that cite it — an answer is never reconstructed from the final code alone, and when the record cannot answer, the report says so.",
   },
   "planning workspace": {
     title: "Planning workspace",
@@ -2952,7 +2961,7 @@ function listen() {
   es.onerror = () => { /* EventSource retries on its own */ };
 }
 
-const DETAIL_TABS = ["plan","gates","dropbox","tests","changes","commits","worktree","memory","raw","contract","changelog"];
+const DETAIL_TABS = ["plan","gates","dropbox","tests","changes","commits","worktree","memory","history","raw","contract","changelog"];
 
 function timeboxText(deadline) {
   if (!deadline?.ends_at) return "Open-ended";
@@ -3767,6 +3776,82 @@ async function paint(tab, el) {
   } else if (tab === "memory") {
     const r = await api("memory" + q);
     el.innerHTML = `<pre style="max-height:30rem;overflow:auto">${esc(r.markdown||"(empty)")}</pre>`;
+  } else if (tab === "history") {
+    // Progressive disclosure over one provenance: a grounded report, its
+    // cited evidence, the derived deliberation timeline, and the Raw tab as
+    // the forensic floor. Reports come only from the recorded history.
+    const t = await api("history/timeline" + q);
+    const ask = S.historyAsk && S.historyAsk.session === S.session ? S.historyAsk.result : null;
+    const citeLink = text => esc(text).replace(/\[E(\d+)\]/g,
+      (_m, n) => `<button class="cite" data-cite="${n}">[E${n}]</button>`);
+    const SECTION_LABELS = {SUMMARY: "What happened", TRIGGER: "Trigger",
+      POSITIONS: "Positions", EVIDENCE: "Decisive evidence", RESOLUTION: "Resolution",
+      SYNTHESIS: "Reconstruction (synthesis)", UNRESOLVED: "Unresolved"};
+    const sectionsHtml = report => Object.keys(SECTION_LABELS)
+      .filter(key => report.sections[key])
+      .map(key => `<div class="small" style="margin-top:.5rem"><b>${SECTION_LABELS[key]}:</b>
+        <span style="white-space:pre-wrap">${citeLink(report.sections[key])}</span></div>`).join("");
+    const evidenceHtml = evidence => evidence.map((item, index) => `
+      <details class="adv" data-evidence="${index + 1}"><summary class="small">[E${index + 1}]
+        <b class="mono">${esc(item.kind)}</b> · ${esc(item.actor || "synchri")} ·
+        <span class="mono">${esc((item.at || "").slice(0, 19) || "undated")}</span>${item.context ? ` · <span class="muted">context</span>` : ""}</summary>
+        <div class="small" style="margin-top:.4rem;white-space:pre-wrap">${esc(item.excerpt)}</div>
+        <div class="small muted mono" style="margin-top:.35rem">${esc(item.ref)} · layer: ${esc(item.layer)}</div>
+      </details>`).join("");
+    const askHtml = !ask ? ""
+      : ask.report ? `<div style="margin-top:1rem">
+          ${ask.report.insufficient
+            ? `<div class="note warn small">The record cannot answer this: ${citeLink(ask.report.sections.SUMMARY || "")}</div>`
+            : sectionsHtml(ask.report)}
+          <div class="small muted" style="margin-top:.6rem">Synthesized by ${esc(ask.runtime || "an agent")} from the cited evidence only — everything below is the record itself.</div>
+        </div>`
+      : `<div class="note small" style="margin-top:1rem">No report — ${esc(ask.fallback_reason || "no synthesis was available")}. The evidence and timeline below are the record itself.</div>`;
+    const evidenceSection = ask && ask.evidence.length
+      ? `<h3 class="small muted" style="margin-top:1.15rem">EVIDENCE</h3><div class="stack" style="margin-top:.4rem;gap:.3rem">${evidenceHtml(ask.evidence)}</div>` : "";
+    const rowsHtml = events => events.map(entry => `<div class="small" style="margin-top:.35rem">
+      <span class="mono muted">${esc((entry.at || "").slice(5, 19) || "—")}</span>
+      <b class="mono">${esc(entry.kind.replaceAll("_", " "))}</b>
+      ${entry.actor ? `${esc(entry.actor)} — ` : ""}${esc(entry.summary)}</div>`).join("");
+    el.innerHTML = `
+      <div class="small muted">Ask why. Answers come only from this session's recorded ${defTerm("history", "history")} — reports cite exact evidence, and when the record cannot answer, they say so.</div>
+      <div class="row" style="margin-top:.7rem;flex-wrap:nowrap">
+        <input id="history-question" placeholder="Why did we…?" value="${esc(S.historyAsk?.session === S.session ? S.historyAsk.question : "")}">
+        <button class="primary" id="history-ask">Ask</button></div>
+      <div id="history-answer">${askHtml}${evidenceSection}</div>
+      <div class="between" style="margin-top:1.25rem"><h3 class="small muted">DELIBERATION TIMELINE</h3>
+        <select id="history-kind"><option value="all">all kinds</option>${t.kinds.map(kind =>
+          `<option value="${esc(kind)}">${esc(kind.replaceAll("_", " "))}</option>`).join("")}</select></div>
+      <div id="history-events">${rowsHtml(t.events) || `<div class="muted small" style="margin-top:.4rem">No deliberative events recorded yet.</div>`}</div>
+      <div class="small muted" style="margin-top:.9rem">Every entry indexes the durable record; the full forensic history is on the Raw tab.</div>`;
+    el.querySelector("#history-kind").onchange = event => {
+      const kind = event.target.value;
+      const filtered = kind === "all" ? t.events : t.events.filter(entry => entry.kind === kind);
+      el.querySelector("#history-events").innerHTML =
+        rowsHtml(filtered) || `<div class="muted small" style="margin-top:.4rem">No events of that kind.</div>`;
+    };
+    const askButton = el.querySelector("#history-ask");
+    const askBox = el.querySelector("#history-question");
+    const runAsk = guard(async () => {
+      const question = askBox.value.trim();
+      if (!question) return;
+      askButton.disabled = true; askButton.textContent = "Consulting the record…";
+      try {
+        const result = await api("history/ask", {session: S.session, question});
+        S.historyAsk = {session: S.session, question, result};
+        await paint("history", el);
+      } catch (error) {
+        askButton.disabled = false; askButton.textContent = "Ask";
+        throw error;
+      }
+    });
+    askButton.onclick = runAsk;
+    askBox.addEventListener("keydown", event => { if (event.key === "Enter") runAsk(); });
+    el.querySelectorAll("[data-cite]").forEach(button => button.onclick = () => {
+      const target = el.querySelector(`[data-evidence="${button.dataset.cite}"]`);
+      if (!target) return;
+      target.open = true;
+      target.scrollIntoView({behavior: "smooth", block: "center"});
+    });
   } else if (tab === "raw") {
     const r = await api("events" + q);
     el.innerHTML = `<pre style="max-height:30rem;overflow:auto">${esc(r.events.map(e =>

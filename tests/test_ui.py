@@ -1171,6 +1171,47 @@ def test_the_preflight_handles_mixed_teams():
     assert "Manual connection fallback" in source
 
 
+def test_the_history_tab_ships_progressive_disclosure():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # One provenance, four depths: report → cited evidence → timeline → raw.
+    assert '"memory","history","raw"' in source, "History sits between memory and raw"
+    assert 'api("history/timeline" + q)' in source
+    assert 'api("history/ask"' in source
+    assert "data-cite" in source and "data-evidence" in source, (
+        "citations are taps that open the exact evidence"
+    )
+    assert "Consulting the record…" in source
+    assert "No report —" in source, "the fallback is honest, not blank"
+    assert "The record cannot answer this:" in source
+    assert "DELIBERATION TIMELINE" in source
+    assert ".cite{" in source
+    assert "history: {" in source, "the tab's own term is defined"
+
+
+def test_history_endpoints_serve_over_http(ui, repo):
+    import urllib.parse
+
+    session_id = _active(ui, repo)
+    timeline = call(ui, f"/api/history/timeline?session={session_id}")
+    assert isinstance(timeline["events"], list) and isinstance(timeline["kinds"], list)
+
+    query = urllib.parse.quote("why does the AUTH-01 login gate exist?")
+    search = call(ui, f"/api/history/search?session={session_id}&q={query}")
+    assert search["engine"] in {"fts5", "like"}
+    assert any(item["ref"].startswith("gate:") for item in search["evidence"]), (
+        "the gate's own text answers a question about it"
+    )
+
+    ask = call(ui, "/api/history/ask",
+               {"session": session_id, "question": "why does AUTH-01 exist?"})
+    assert ask["evidence"], "the mechanical floor is always present"
+    assert ask["report"] is None and ask["fallback"] is True, (
+        "no runtime is connected in the test environment, so the fallback answers"
+    )
+
+
 def test_teaching_surfaces_ship_in_the_page():
     from pathlib import Path
 

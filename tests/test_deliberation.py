@@ -74,6 +74,24 @@ def test_the_timeline_indexes_the_planning_loop(manager, repo):
           "SYNCHRI-PLAN-SUBMIT: reordered per review")
     _turn(manager, record, "codex", "SYNCHRI-PLAN-REVIEW: approve|executable as ordered")
 
+    # The durable event sequence must preserve causality even when the clock's
+    # millisecond precision gives every planning record the same timestamp.
+    same_millisecond = "2026-01-02T03:04:05.678Z"
+    manager.conn.execute(
+        "UPDATE session_plan_revisions SET created_at = ? WHERE session_id = ?",
+        (same_millisecond, record.session_id),
+    )
+    manager.conn.execute(
+        "UPDATE session_plan_objections SET created_at = ?, updated_at = ? "
+        "WHERE session_id = ?",
+        (same_millisecond, same_millisecond, record.session_id),
+    )
+    manager.conn.execute(
+        "UPDATE events SET created_at = ? WHERE room_id = ? AND event_type IN "
+        "('session.plan_submitted', 'session.plan_ready')",
+        (same_millisecond, record.room_id),
+    )
+
     record = manager.get(record.session_id)
     events = deliberation.timeline(manager, record)
     kinds = [entry["kind"] for entry in events]
@@ -270,6 +288,22 @@ def test_global_search_spans_sessions(manager, repo):
     assert first.session_id in {item["session_id"] for item in caches["evidence"]}
 
 
+def test_global_search_keeps_same_local_ref_from_each_session(manager, repo):
+    first, _ = _activated(manager, repo)
+    second, _ = _activated(manager, repo)
+    body = PLAN_BODY + "\n- CACHE-03: preserve the shared nebula collision marker\n"
+    _turn(manager, first, "claude", _submission(body=body))
+    _turn(manager, second, "claude", _submission(body=body))
+
+    result = deliberation.search(manager, "shared nebula collision marker")
+    revisions = [
+        item for item in result["evidence"] if item["ref"] == "revision:1"
+    ]
+    assert {item["session_id"] for item in revisions} == {
+        first.session_id, second.session_id,
+    }, "local refs from separate sessions must not overwrite one another"
+
+
 def test_the_search_api_and_cli_round_trip(manager, repo, capsys):
     import argparse
 
@@ -370,6 +404,21 @@ def test_out_of_range_citations_are_refused(manager, repo):
         manager.broker, manager, record, "why bounded?",
         _retrieval(manager, record),
         runner=lambda prompt: _grounded_reply(prompt).replace("[E1]", "[E99]"),
+    )
+    assert outcome["report"] is None and "not grounded" in outcome["fallback_reason"]
+
+
+def test_out_of_range_citation_in_synthesis_is_refused(manager, repo):
+    from synchri.runner import historian
+
+    record, _ = _activated(manager, repo)
+    _turn(manager, record, "claude", _submission())
+    reply = _grounded_reply("THE EVIDENCE [E1]").replace(
+        "SYNTHESIS: none", "SYNTHESIS: reconstructed from missing evidence [E99]"
+    )
+    outcome = historian.report(
+        manager.broker, manager, record, "why bounded?",
+        _retrieval(manager, record), runner=lambda prompt: reply,
     )
     assert outcome["report"] is None and "not grounded" in outcome["fallback_reason"]
 

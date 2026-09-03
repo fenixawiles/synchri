@@ -153,9 +153,10 @@ def _parse(text: str | None, evidence_count: int) -> dict | None:
     if not sections.get("SUMMARY"):
         return None
     grounded = " ".join(sections.get(key, "") for key in _GROUNDED_SECTIONS)
-    cited = sorted({int(number) for number in _CITATION.findall(grounded)})
-    if not cited:
+    grounded_citations = {int(number) for number in _CITATION.findall(grounded)}
+    if not grounded_citations:
         return None
+    cited = sorted({int(number) for number in _CITATION.findall(body)})
     if any(number < 1 or number > evidence_count for number in cited):
         return None
     return {"insufficient": False, "sections": sections, "citations": cited}

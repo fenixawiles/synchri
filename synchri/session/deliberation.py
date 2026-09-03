@@ -97,10 +97,35 @@ def timeline(manager: "SessionManager", record: "SessionRecord", kinds=None) -> 
     Sorted by time (event seq as the tiebreak). ``kinds`` filters to a
     subset of :data:`KINDS`.
     """
-    entries: list[tuple[str, int, dict]] = []
+    entries: list[tuple[str, float, dict]] = []
     session_id = record.session_id
+    room_events = dao.list_events(manager.conn, record.room_id)
 
-    def add(entry: dict, seq: int = 0) -> None:
+    # Millisecond timestamps can collide across consecutive planning turns.
+    # Plan submissions are also present in the room's append-only event log,
+    # whose sequence is the durable ordering authority for those ties.
+    submission_seqs = {
+        int(event.payload["revision"]): float(event.seq or 0)
+        for event in room_events
+        if event.event_type == "session.plan_submitted"
+        and isinstance((event.payload or {}).get("revision"), int)
+    }
+
+    def revision_seq(number: int) -> float:
+        return submission_seqs.get(number, float(number * 2))
+
+    def objection_seq(raised_revision: int) -> float:
+        before = submission_seqs.get(raised_revision)
+        after = submission_seqs.get(raised_revision + 1)
+        if before is not None and after is not None:
+            return before + (after - before) / 2
+        if before is not None:
+            return before + 0.5
+        if after is not None:
+            return after - 0.5
+        return float(raised_revision * 2 + 1)
+
+    def add(entry: dict, seq: float = 0) -> None:
         entries.append((entry["at"], seq, entry))
 
     # -- plan revisions: the proposals themselves -----------------------
@@ -113,7 +138,7 @@ def timeline(manager: "SessionManager", record: "SessionRecord", kinds=None) -> 
             "proposal" if number == 1 else "revision",
             revision["created_at"], revision["author"], summary,
             LAYER_STRUCTURED, revision=number,
-        ))
+        ), revision_seq(number))
 
     # -- objections and their settlements -------------------------------
     for objection in planning_module.objections(manager, session_id):
@@ -123,7 +148,7 @@ def timeline(manager: "SessionManager", record: "SessionRecord", kinds=None) -> 
             f"{objection['objection_id']} [{objection['classification']}] "
             f"raised at revision {objection['raised_revision']}: {_clip(objection['text'])}",
             LAYER_STRUCTURED, objection_id=objection["objection_id"],
-        ))
+        ), objection_seq(objection["raised_revision"]))
         if objection["status"] != "open":
             settled = (
                 f"{objection['objection_id']} waived by the human"
@@ -137,10 +162,10 @@ def timeline(manager: "SessionManager", record: "SessionRecord", kinds=None) -> 
                 settled, LAYER_STRUCTURED,
                 objection_id=objection["objection_id"],
                 revision=objection.get("resolved_revision"),
-            ))
+            ), revision_seq(objection.get("resolved_revision") or 0) + 0.25)
 
     # -- the event log: milestones, gates, conflicts, tests -------------
-    for event in dao.list_events(manager.conn, record.room_id):
+    for event in room_events:
         payload = event.payload or {}
         event_type = event.event_type
         at = event.created_at
@@ -584,20 +609,25 @@ def search(
     )
     structured = sorted(hits, key=lambda hit: (-hit["structured"], hit.get("created_at") or ""))
     recency = sorted(hits, key=lambda hit: hit.get("created_at") or "", reverse=True)
-    fused: dict[str, float] = {}
+    def hit_key(hit: dict) -> tuple[str, str]:
+        return hit["session_id"], hit["ref"]
+
+    fused: dict[tuple[str, str], float] = {}
     for ranking in (lexical, structured, recency):
         for position, hit in enumerate(ranking):
-            fused[hit["ref"]] = fused.get(hit["ref"], 0.0) + 1.0 / (60 + position)
-    by_ref = {hit["ref"]: hit for hit in hits}
-    ranked = sorted(by_ref.values(), key=lambda hit: fused[hit["ref"]], reverse=True)
+            key = hit_key(hit)
+            fused[key] = fused.get(key, 0.0) + 1.0 / (60 + position)
+    by_ref = {hit_key(hit): hit for hit in hits}
+    ranked = sorted(by_ref.values(), key=lambda hit: fused[hit_key(hit)], reverse=True)
 
     evidence: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     used = 0
 
     def append(hit: dict, *, context: bool = False) -> None:
         nonlocal used
-        if hit["ref"] in seen:
+        key = hit_key(hit)
+        if key in seen:
             return
         excerpt = _excerpt(hit["body"], tokens)
         entry = {
@@ -612,7 +642,7 @@ def search(
         if context:
             entry["context"] = True
         evidence.append(entry)
-        seen.add(hit["ref"])
+        seen.add(key)
         used += len(excerpt)
 
     for hit in ranked:

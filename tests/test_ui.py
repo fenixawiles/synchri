@@ -1316,6 +1316,22 @@ def test_the_elevation_and_motion_system_ships():
     assert "prefers-reduced-motion" in source
 
 
+def test_the_inspector_slides_over_the_conversation():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # The inspector is an L2 panel over a scrim: the conversation stays
+    # visible and live beneath it, and the scrim itself closes it.
+    assert 'class="inspector-panel"' in source
+    assert "@keyframes inspector-in" in source
+    assert 'if (event.target === wrap) { S.tab = "conversation"; renderSession(); }' in source
+    # The header's gate count is a doorway to the Gates tab, and the rail
+    # groups its tools without reordering the DETAIL_TABS contract.
+    assert 'class="ghost chat-gates-btn"' in source
+    assert "const RAIL_GROUPS" in source
+    assert '"plan","gates"' in source
+
+
 def test_home_leads_with_workflows_and_keeps_sessions_compact():
     from pathlib import Path
 

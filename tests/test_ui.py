@@ -1291,6 +1291,31 @@ def test_every_theme_defines_the_complete_token_set():
         assert f'{{key: "{key}"' in source
 
 
+def test_the_elevation_and_motion_system_ships():
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # The elevation ladder is tokenized. The resting raise, the slide-over
+    # shadow, and the translucent header veil are per-theme color tokens (the
+    # token audit above spreads them across every palette); geometry and
+    # motion are universal html{} tokens so that audit stays about color.
+    root = re.search(r"\n:root\{(.*?)\n\}", source, re.S).group(1)
+    for token in ("--shadow-1:", "--shadow-2:", "--veil:"):
+        assert token in root, f"bare :root must define {token}"
+    assert "html{--radius-l:" in source
+    assert "--dur-2:" in source and "--ease-out:" in source
+    # One raised working sheet rides the environment; the composer is a real
+    # material object; surfaces rise rather than appear; the header is a veil
+    # messages pass beneath; reduced motion still disables everything.
+    assert '<div class="main"><div class="sheet"><div class="wrap" id="app">' in source
+    assert "@keyframes rise" in source
+    assert ".composer:focus-within" in source
+    assert "-webkit-backdrop-filter" in source
+    assert "background:var(--veil)" in source
+    assert "prefers-reduced-motion" in source
+
+
 def test_home_leads_with_workflows_and_keeps_sessions_compact():
     from pathlib import Path
 

@@ -570,3 +570,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS sessions_promoted_from
 CREATE UNIQUE INDEX IF NOT EXISTS session_promotions_coordination
     ON session_promotions(coordination_session_id)
     WHERE coordination_session_id IS NOT NULL;
+
+-- v8: deliberative-history retrieval bookkeeping. The search_index table
+-- itself is created at bootstrap by db._ensure_search_schema, because FTS5
+-- support must be probed on the running SQLite rather than assumed here.
+CREATE TABLE IF NOT EXISTS search_state (
+    room_id     TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    watermark   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (room_id, source)
+);

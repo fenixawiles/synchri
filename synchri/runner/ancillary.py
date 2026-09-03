@@ -366,13 +366,17 @@ class _UsageRecorder:
     never merged into an ordinary participant's totals.
     """
 
-    def __init__(self, workspace, *, session_id, room_id, participant, runtime, drop_id) -> None:
+    def __init__(
+        self, workspace, *, session_id, room_id, participant, runtime, drop_id,
+        origin_kind: str = "ancillary",
+    ) -> None:
         self.workspace = workspace
         self.session_id = session_id
         self.room_id = room_id
         self.participant = participant
         self.runtime = runtime
         self.drop_id = drop_id
+        self.origin_kind = origin_kind
         self._started = 0.0
 
     def begin(self) -> None:
@@ -402,7 +406,7 @@ class _UsageRecorder:
                         cached_input_tokens=usage.get("cached_input_tokens") or 0,
                         cost_usd=usage.get("cost_usd"),
                         duration_seconds=usage.get("duration_seconds") or duration,
-                        origin_kind="ancillary",
+                        origin_kind=self.origin_kind,
                         drop_id=self.drop_id,
                     )
             finally:

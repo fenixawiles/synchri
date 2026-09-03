@@ -49,33 +49,38 @@ up exactly where you were.
 
 ## What you see
 
-The interface is mono-forward — an instrument panel, not a marketing page.
-Data (paths, branches, statuses, countdowns, logs) renders in monospace; prose
-stays prose. By default it follows the OS light/dark preference; the header's
-**theme picker** offers ten explicit palettes spanning the spectrum — dark:
-Graphite (charcoal, emerald), Midnight (slate, blue), Ember (warm, coral red),
+The interface is editorial — Palatino prose on layered surfaces, with
+monospace reserved for data (paths, branches, statuses, countdowns, logs).
+The page is built on a small elevation ladder: the environment carries a
+single collapsible sidebar; the working area rides on it as one raised
+sheet; inspectable surfaces (the setup sheet, the session inspector) slide
+over that; menus, dialogs, and toasts float above everything. By default the
+palette follows the OS light/dark preference; the sidebar's **Theme** picker
+offers ten explicit palettes spanning the spectrum — dark: Graphite
+(charcoal, emerald), Midnight (slate, blue), Ember (warm, coral red),
 Copper (umber, burnt orange), Orchid (violet); light: Daylight (instrument
 green), Sage (warm paper, the original Synchri green), Solar (parchment,
-gold), Harbor (grey-blue), Iris (lavender, indigo) — stored in the browser,
-never on a server.
+gold), Harbor (grey-blue), Iris (lavender, indigo) — kept by Synchri
+itself, so every launch and every window agrees.
 
-**Home** — workflows first: your saved defaults (agent team, permission
-ceiling, pacing) as cards, each with a one-click **Run**, under a page-level
-**+ New workflow** action. Recent sessions follow as a compact list — status
-LED, repository, branch — capped at six with a show-all toggle, and each row's
-**⋯** menu can rename or (once finished) delete the session.
+**The workspace** — where you land. If a session is active, Synchri opens
+straight into its conversation; otherwise a calm blank workspace offers a
+brief composer ("What should the team build?"), one-click quick-starts for
+saved workflows, and a quiet **Now** strip for anything that needs you.
+The sidebar carries workflows (run, edit, rename, delete, and **+ New**)
+and recent sessions — status LED, capped at six with a show-all toggle,
+each row's **⋯** menu able to rename or (once finished) delete. **Agent
+connections** live in a dialog off the sidebar foot.
 
-**New session** — a numbered form (workflow, repository, **workspace**, brief,
-pacing) beside a sticky **launch plan** that summarizes what will run and
-carries the page's single call to action. Repositories are discovered, not
-typed: existing git checkouts under the usual code directories, plus your
-GitHub repositories once access is granted. The workspace step is mandatory
-and explicit: a new isolated worktree and every existing worktree are
-presented as cards with nothing preselected, and the session cannot be
-created until one is deliberately chosen. As you write the brief, a live
-preview shows which acceptance gates it will produce — explicit IDs like
-`AUTH-01`, bullets under an "Acceptance criteria" heading or plain line, or
-the single generic gate when nothing is detected.
+**New session** — typing a brief on the workspace (or pressing New
+session) raises a **setup sheet** that asks one question at a time:
+repository → workspace → brief (or "Help me make a plan") → team → Ready.
+Answered steps collapse to one-line summaries with an Edit affordance.
+Repositories are discovered, not typed: existing git checkouts under the
+usual code directories, plus your GitHub repositories once access is
+granted. The workspace step is mandatory and explicit: a new isolated
+worktree and every existing worktree are offered with nothing preselected,
+and the session cannot be created until one is deliberately chosen.
 
 Permissions are three-state toggles — **Allow / Ask / Deny** — with risk labels
 on anything high or destructive, and the description of what each one actually
@@ -83,13 +88,16 @@ permits next to it. Profile cards highlight the one currently in effect;
 fine-tuning any capability clears the highlight, because the result is no
 longer any named profile.
 
-**Preflight** — one checklist: each agent's connection state (not connected →
-reading agreement → ready) with its setup prompt a disclosure away, and an
-action bar whose single primary is **Start my agents** for tools Synchri can
-launch itself, or **Begin collaboration** once every agent has acknowledged the
-contract.
+**Preflight** — the session assembling inside its own shell: the session's
+name in the header, and one checklist where the conversation will be — each
+agent's connection state (not connected → reading agreement → ready) with
+its setup prompt a disclosure away, and an action bar whose single primary
+is **Start my agents** for tools Synchri can launch itself, or **Begin
+collaboration** once every agent has acknowledged the contract. Activation
+fills the same shell with the live room.
 
-**The session** — a fixed rail (status, timebox countdown, gate progress, team
+**The session** — the sidebar becomes the session rail (status, timebox
+countdown, gate progress, tools grouped under Work · Context · Record, team
 presence with each agent's live runtime state, controls) beside the
 conversation. Messages are written in a wrapping composer — Enter sends,
 Shift+Enter starts a new line — and while Claude Code or Codex works, a live
@@ -99,8 +107,9 @@ card per file it touches, updating as the edit happens. Runtimes without a
 machine-readable stream keep the cooperative activity note. An agent that
 crashes, times out, or stops responding is flagged with a banner and a
 one-click **Restart**; two consecutive hard failures drop it and raise an
-escalation instead of burning further turns. Detail tabs open as a full
-working surface over the chat:
+escalation instead of burning further turns. Detail tabs slide over the
+conversation as an inspector panel — the chat stays visible and live
+beneath it, and the scrim, Close, or Escape return to it:
 
 | Tab | Shows |
 |---|---|
@@ -142,6 +151,7 @@ clean and fully pushed, and remote branches are never touched.
 - **Drafts are durable, coordination is best-effort.** Unfinished setup drafts
   persist across restarts and sync across tabs via the stream, but two tabs
   editing the same draft simultaneously still race on last-write-wins.
-- **Theme choice is per browser profile.** It lives in `localStorage`, so the
-  native app window and a separate browser tab each remember their own pick;
-  with no pick, both follow the OS.
+- **Theme choice is per workspace, not per browser.** It is stored by Synchri
+  (the app's loopback port — and so its browser origin — changes every
+  launch, which rules out browser storage), so every window shows the same
+  pick; with no pick, all follow the OS.

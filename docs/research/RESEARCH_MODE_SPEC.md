@@ -2,11 +2,12 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review. **Nothing here is implemented.** No production code has been changed, and no experimental data has been collected. |
+| **Status** | Revision 2 (amended). Amendments PC-01 to PC-13 from `docs/research/PROVIDER_FEASIBILITY.md` §8 are applied; each is traced in `docs/research/SPEC_CHANGELOG.md` and marked *[PC-nn]* where it lands. PC-14 is an undecided option (§12.1); PC-15 is a separate production security issue outside this specification. No experimental data has been collected. |
 | **Baseline commit** | `1e6a3471f07c372fa4aaa1daee14cce87f0b8b50` (Synchri 0.5.3) |
 | **Primary input** | `docs/audits/source-audit-1e6a347.md` (cited below as "Audit §n", audit probes as "P*n*", audit test proposals as "T*n*") |
 | **Audience** | Study investigators, preregistration reviewers, implementers |
-| **Date** | 2026-10-22 |
+| **Date** | 2026-10-22 (revision 1); 2026-10-22 (revision 2) |
+| **Evidence inputs** | Source audit (above); provider feasibility investigation `docs/research/PROVIDER_FEASIBILITY.md` (cited as "Feasibility §n") |
 
 ---
 
@@ -48,18 +49,20 @@ both are stated.
 
 ### 0.4 Evidence vocabulary
 
-This specification keeps three kinds of evidence separate and never treats
-one as another:
+This specification keeps four kinds of evidence separate and never treats
+one as another *[PC-02]*:
 
 | Code | Evidence type | What it can establish | What it cannot establish |
 |---|---|---|---|
 | **I** | Implementation evidence: source code, configuration, prompt text | What the system is built to do | That it does so at runtime; anything about model behavior |
 | **A** | Automated test evidence: executable tests with scripted stand-in agents (as in `tests/test_runner.py:25` `write_agent`) | That orchestrator logic behaves as specified, deterministically | Anything about real provider CLIs or real models |
+| **H** | Harness evidence *[PC-02]*: the real, pinned provider CLI binary run against a recording **mock** provider API, with scripted replies (including forged tool calls and injected failures) | Client-enforced properties: the exact request the CLI sends, which tools it declares, whether it executes a forged tool call, what it persists, how it retries | Anything about model behavior or server-side behavior |
 | **L** | Live-provider evidence: tests that invoke real provider CLIs and models on the pilot host | That a specific CLI version or model behaves as required under the probes used, at the time of testing | That it always behaves so; behavior under unprobed inputs; behavior after provider-side changes |
 
 "Verified" in this document means the stated evidence types have passed. A
-property that needs **L** evidence is never called verified on **I** or
-**A** evidence alone.
+property that needs **L** evidence is never called verified on **I**, **A**,
+or **H** evidence alone. **H** evidence may verify client-enforced properties
+(Feasibility §2); it never verifies model or server behavior *[PC-02]*.
 
 ### 0.5 Requirement ID prefixes
 
@@ -169,20 +172,24 @@ existing prompts both push toward disagreement (adversarial doctrine,
 Audit M12) and away from it ("Do not manufacture objections",
 `modes.py:238-240`). Both are rejected for Research Mode. See §7.
 
-**D4. Two isolation tiers.** *Tier 1* (minimum for the pilot): provider-level
-tool disablement verified by live tests, a scrubbed environment, an empty
-working directory per invocation, a separate provider home per slot, and
-canary scanning. *Tier 2* (required before confirmatory data): a distinct
-OS user or container per slot, so the operating system denies access to
-run data and references regardless of what a model attempts.
+**D4. OS-level isolation from the pilot onward** *[PC-04]*. Every
+invocation runs in its own container (or, where containers are unavailable,
+as a distinct OS user), so the operating system denies access to run data,
+references, other slots, and host files regardless of what a model or CLI
+attempts. Provider-level tool disablement, a scrubbed environment, and an
+empty working directory remain required, as **defense in depth inside** that
+boundary. The former "Tier 1" (client-side controls only) is retired as a
+pilot option; "Tier 2" in the rest of this document means this decision.
 
 *Rationale.* Same-user file protection cannot stop an agent that has file or
-shell tools (P17, P18). Tier 1 relies on the tools being off, and that is
-only knowable from L evidence. Tier 2 makes isolation independent of
-provider behavior, but requires host setup that is not yet designed in
-detail (UNKNOWN-09). Whether Tier 1 is adequate for a pilot is a reviewer
-decision; this specification recommends it as the smallest defensible
-step (§11).
+shell tools (P17, P18). A vendor restriction can be weaker than its name:
+Codex's `--sandbox read-only` read a protected file outside the working
+directory and sent it to the API (Feasibility §4.1, finding 1, O-H).
+Container and OS-user isolation confined both CLIs identically, with every
+CLI-level protection switched off (Feasibility §4.6, O-OS), at the cost of a
+stock Docker daemon and one small image. The open question this decision
+previously left to reviewers (whether Tier 1 suffices for a pilot) is
+therefore resolved in favor of Tier 2.
 
 **D5. One store per run, outside `SYNCHRI_HOME`.** Each run writes to its
 own directory containing an append-only SQLite event log and a
@@ -193,6 +200,24 @@ the generation path never learns (ISO-04).
 other session and to cross-session search (`deliberation.py:560-566`).
 `delete_session` cascades deletes through room data (`manager.py:1656-1662`).
 A per-run store can be frozen, hashed, and archived as a unit.
+
+**D6. A trusted recording relay between every CLI and its provider**
+*[PC-01, PC-06]*. The relay is the participant's only network channel. It
+holds the dedicated provider credentials; it forwards each request to the
+provider; and it appends the exact request bytes, response bytes, status,
+timing, served model, and usage to the run store before and after
+forwarding. It enforces the run's request invariants (model, tool
+definitions, injected-context markers, request count) and refuses anything
+else, fail-closed. The CLI receives only a per-invocation relay token in
+place of a provider credential.
+
+*Rationale.* Both CLIs add content their output never shows (identity lines,
+environment context, skill lists, tool definitions), both retry internally,
+Codex reports no served model at all, and Claude's `init.model` reports only
+the requested one (Feasibility §4.2, §4.7, O-H). Both CLIs also expose their
+provider credential to tool subprocesses (Feasibility §4.5, O-H). Capturing
+at the network boundary, with the real credential held only there, is the
+only observed way to meet LOG-02, CFG-02, and ISO-06 together.
 
 ---
 
@@ -249,7 +274,7 @@ from reappearing.
 | F30 | Contract roster discloses each participant's runtime | P15 | No roster. Peers are anonymized letters. | PRO-09, ISO-09 |
 | F31 | Idea and spec rendered verbatim to all participants | P16 | Item text and references are split into separate files. Only item text is renderable. | ISO-04 |
 | F32 | Managed agents receive `SYNCHRI_HOME` and related variables | P17; `managed.py:954-961` | Environment allowlist. No Synchri variables. | ISO-01 |
-| F33 | Agent processes can read the Synchri database | P17 | Run store outside agent reach: by tool disablement (Tier 1), by the OS (Tier 2). | ISO-03, ISO-05 |
+| F33 | Agent processes can read the Synchri database | P17 | Run store outside agent reach: by the OS (container or OS user, D4), with tool disablement as defense in depth *[PC-04]*. | ISO-03, ISO-05 |
 | F34 | Human secret in the DB; any reader can post as the human; CLI `--as` loads any participant's secret | P18; `cli/session.py:145-148` | No broker and no credentials in the research path. | ISO-06 |
 | F35 | Cross-session search spans all sessions | `deliberation.py:560-566` | The research store is separate and not indexed. | ISO-05, D5 |
 | F36 | Contract header carries session ID, paths, timestamps | `contract.py:106-138` | No volatile or identifying content in prompts. | CFG-06 |
@@ -417,16 +442,21 @@ R = read, W = write (append), — = no access (must be enforced),
 | Orchestrator environment | R | — (allowlist, ISO-01) | — | ∅ | ∅ |
 | Network | Provider APIs (via CLI) | Provider API only; no web tools *(UNKNOWN-06)* | Same, plus optional egress rules | none needed | ∅ |
 
+*[PC-04]* The "Participant (Tier 1)" column now describes the client-side,
+defense-in-depth controls only; the pilot requires the Tier 2 column. *[PC-01]*
+Under D6 the participant's "Network" cell is narrowed further: the only
+reachable endpoint is the recording relay, which alone reaches provider APIs.
+
 ### 5.3 Requirements
 
 | ID | Requirement | Status | Basis and evidence today |
 |---|---|---|---|
-| **ISO-01** | Participant environment is built from an explicit allowlist (`PATH` pointing at the pinned CLI's directory, `HOME` or `CODEX_HOME`/`CLAUDE_CONFIG_DIR` set to the slot's provider home, locale, `TMPDIR` inside the scratch directory). No `SYNCHRI_*` variables. Variable names and value hashes are logged. | MODIFY | Today all managed agents receive `SYNCHRI_HOME/ROOM/PARTICIPANT/CLI` (`managed.py:954-961`; P17). Reuse: `AgentCommand.env` and `_merged_env` (`agent_command.py:477-480`) merge with `os.environ`. Research needs **replace** semantics, not merge. Exact provider config variables: UNKNOWN-04. |
-| **ISO-02** | A fresh, empty scratch directory per invocation, created with mode `0700`. Never shared across slots or rounds. Kept after the run for audit (it should stay empty under closed-book conditions; non-empty is flagged). | MODIFY | Today one worktree per session is every participant's working directory (P19). Reuse: `AgentCommand.cwd`. |
-| **ISO-03** | Closed-book: every provider tool (file, shell, web, MCP, sub-agents) is disabled through the provider's own flags, and stays disabled. Preflight and live tests must show no tool events in the raw stream under adversarial probing (LT-03, LT-11). | MODIFY + **UNKNOWN** | Claude: a hardened no-tools invocation already exists as the connection canary (`--permission-mode plan --safe-mode --strict-mcp-config --tools ""`, `modes.py:530-537`). That is I evidence only; it is untested against the real CLI (F39). Codex: the only maintained confinement is `--sandbox read-only` (`modes.py:566-573`), which still allows reads and commands. **No verified Codex no-tools mode is known (UNKNOWN-05).** Copilot: `--available-tools=` (`modes.py:608-615`); not a pilot runtime. |
+| **ISO-01** | Participant environment is built from an explicit allowlist (`PATH` pointing at the pinned CLI's directory, `HOME` or `CODEX_HOME`/`CLAUDE_CONFIG_DIR` set to the slot's provider home, locale, `TMPDIR` inside the scratch directory). No `SYNCHRI_*` variables. Variable names and value hashes are logged. *[PC-06]* The only credential-shaped value in the environment is the per-invocation relay token (ISO-06); no provider credential, host credential, or session token may appear, and the launcher refuses an environment that contains one. | MODIFY | *[PC-06]* Feasibility §4.5: Synchri's launcher passed 171 host variables, including cloud and session tokens; both CLIs pass their provider key to tool subprocesses (O-H). Today all managed agents receive `SYNCHRI_HOME/ROOM/PARTICIPANT/CLI` (`managed.py:954-961`; P17). Reuse: `AgentCommand.env` and `_merged_env` (`agent_command.py:477-480`) merge with `os.environ`. Research needs **replace** semantics, not merge. Exact provider config variables: UNKNOWN-04. |
+| **ISO-02** | A fresh, empty scratch directory per invocation, created with mode `0700`. Never shared across slots or rounds. Kept after the run for audit (it should stay empty under closed-book conditions; non-empty is flagged). *[PC-10]* Inside the container the working directory is the **neutral fixed path** `/work` (a fresh tmpfs per invocation), so any working-directory path a CLI injects is byte-identical across invocations; uniqueness comes from the container, never from the path. | MODIFY | *[PC-10]* Feasibility §4.4: both CLIs inject the working-directory path into model-visible context unless suppressed (O-H). Today one worktree per session is every participant's working directory (P19). Reuse: `AgentCommand.cwd`. |
+| **ISO-03** | Closed-book: every provider tool (file, shell, web, MCP, sub-agents) is disabled through the provider's own flags, and stays disabled. Preflight and live tests must show no tool events in the raw stream under adversarial probing (LT-03, LT-11). *[PC-05]* Pinned flag sets: **Claude** `--tools "" --disallowedTools "*" --strict-mcp-config` (prompt on stdin, because `--tools` is variadic); **Codex** feature disables `shell_tool`, `unified_exec`, `multi_agent`, `view_image`, `goals`, `apps`, `plugins`, `hooks`, `image_generation`, `browser_use`, `computer_use`, `tool_suggest`, `skill_search`, `sleep_tool`, plus `web_search="disabled"`. **Codex `--sandbox read-only` is never relied on for confinement** (it reads the whole filesystem). Codex's `request_user_input` cannot be removed and is inert in `exec` mode; it is recorded as a known residual tool definition and treated as a treatment constant (CFG-06), any call to it is logged as an isolation event, and the relay enforces a per-runtime tool-definition allowlist (Claude: none; Codex: `request_user_input` only). | MODIFY | Feasibility §4.1 (O-H): with these flags Claude's request declares no tools and Codex's declares only `request_user_input`; both CLIs refused forged calls to disabled tools; Codex's `read-only` sandbox leaked a canary. Copilot: `--available-tools=` (`modes.py:608-615`); not a pilot runtime. |
 | **ISO-04** | Item text and reference answers live in **separate files**. The manifest stores only the reference file's SHA-256, never its path. Generation code cannot import the reference loader (enforced by a module-boundary test, VT-18). References are read only by the evaluator, and only for trials in FINAL_SEALED or ABORTED_* states. | MODIFY | Today the idea and spec go to every model (P16), and no hidden field exists. |
-| **ISO-05** | The run store and reference store are unreachable by participant processes. **Tier 1:** stores live outside participants' scratch and provider homes; reachability is prevented only because tools are off (ISO-03), and is monitored by canaries (ISO-07). **Tier 2:** each slot runs as a distinct OS user (or container) with no read permission on either store; checked mechanically without any model (LT-10a). | MODIFY + **UNKNOWN** (Tier 2 host design, UNKNOWN-09) | Today the same OS user can read the whole database (P17). |
-| **ISO-06** | The research path holds no participant or human credentials. There is no broker, room, or invite. Participants cannot post anything except their own stdout. | MODIFY (by construction, D1) | Today the human secret sits in the DB and the CLI `--as` loads any participant's secret (P18; `cli/session.py:145-148`). |
+| **ISO-05** | The run store and reference store are unreachable by participant processes. *[PC-04]* Each invocation runs in a fresh container: digest-pinned image, read-only root filesystem, non-root UID, all capabilities dropped, `no-new-privileges`, process and memory limits, fresh tmpfs `/work` and home, **no network except the relay channel** (D6), and **no mount except** the pinned CLI binary (read-only), the launcher script (read-only), and the relay channel. A distinct OS user with owner-only stores is the permitted fallback where containers are unavailable. Checked mechanically without any model (LT-10a). (The former Tier 1 option is retired, D4.) | MODIFY + **UNKNOWN** (egress to real providers, macOS: UNKNOWN-09) | Today the same OS user can read the whole database (P17). |
+| **ISO-06** | The research path holds no participant or human credentials. There is no broker, room, or invite. Participants cannot post anything except their own stdout. *[PC-06]* Provider credentials exist **only inside the recording relay**: dedicated per study, spend-limited, and revocable, loaded from an owner-only file the relay is explicitly given, never from a provider CLI's own configuration directory or any session credential. The CLI holds a per-invocation relay token that is useless outside the relay and expires with the invocation; the relay strips any client-supplied authorization and injects the real credential upstream. | MODIFY (by construction, D1, D6) | Today the human secret sits in the DB and the CLI `--as` loads any participant's secret (P18; `cli/session.py:145-148`). |
 | **ISO-07** | Canary tokens (random, ≥ 128 bits, distinct per location) are planted in the reference store, the run store, the operator's environment, and the slot's provider home outside the auth files. Every captured stdout, stderr, and stream blob is scanned for every canary. A hit emits `isolation.violation_detected`, aborts the trial as `ABORTED_ISOLATION`, and halts the run. | MODIFY | No equivalent today. Canaries detect leaks that surface in output; they cannot detect silent reads. That limit is why Tier 2 exists. |
 | **ISO-08** | No web search or fetch tools. Network egress beyond the provider API is denied where the host allows it (Tier 2). | **UNKNOWN** (UNKNOWN-06) | Depends on provider flags; LT-11. |
 | **ISO-09** | No condition label, hypothesis text, runtime name, model name, vendor name, slot-to-model mapping, run ID, or replicate index appears in any rendered prompt. Enforced by a render-time denylist check that refuses to emit the prompt (VT-20). | MODIFY | Today the roster tags runtimes (P15) and the contract header has session IDs (`contract.py:106-138`). |
@@ -520,6 +550,14 @@ refused (VT-09). "Blob" means a SHA-256 reference into `research_blobs`.
 | `evaluation.scored` | Per response record | `trial_id`, `slot`, `round`, `response_sha256`, `outcome` (`correct`, `incorrect`, `abstain`, `invalid_format`, `missing`), `match_detail`, `scorer_version` |
 | `evaluation.completed` | Evaluator ends | `scored_count`, `excluded` (list with reasons), `chain_head` |
 | `run.archived` | Export | `export_path`, `export_sha256`, `chain_head` |
+| `relay.started` *[PC-01]* | Relay begins serving a run | `relay_version`, `listen` (channel description, no secrets), `providers` (provider → upstream base URL), `credential_fingerprints` (provider → SHA-256 of the credential, never the value) |
+| `relay.grant_issued` *[PC-01]* | Orchestrator authorizes one invocation | `grant_id`, `invocation_id`, `provider`, `model`, `allowed_tools`, `max_requests`, `policy_sha256`, `token_sha256` (the token itself is never stored), `expires_at` |
+| `relay.request_received` *[PC-01]* | Before any forwarding decision | `grant_id`, `request_index`, `method`, `path`, `headers` (authorization redacted), `request` (blob: exact bytes as received), `request_sha256`, `content_encoding`, `model`, `tool_names`, `decision` (`forward` or `reject`) |
+| `relay.request_rejected` *[PC-01]* | Policy refusal | `grant_id`, `request_index`, `reasons` (list of violation codes), `status_returned` |
+| `relay.upstream_response` *[PC-01]* | After the upstream response completes | `grant_id`, `request_index`, `status`, `headers` (redacted), `response` (blob: exact bytes), `response_sha256`, `served_model` (or null), `usage` (provider's usage block verbatim, or null), `duration_ms`, `truncated` |
+| `relay.upstream_error` *[PC-01]* | Network or TLS failure reaching the provider | `grant_id`, `request_index`, `error_kind`, `detail` |
+| `relay.halted` *[PC-01]* | The relay stops serving (store failure, operator stop) | `reason`, `detail` |
+| `invocation.isolation` *[PC-04, PC-13]* | Before spawn, with `invocation.prepared` | `runtime_kind` (`container` or `os_user`), `image_ref` (digest-pinned), `container_argv` (environment values hashed), `mounts` (target, source fingerprint, read-only), `network` (mode and relay channel), `limits` (UID, memory, PIDs, timeout), `cli_binary_sha256`, `cli_version` |
 
 ### 6.3 Reconstruction procedure (`synchri research verify`)
 
@@ -575,10 +613,10 @@ Mode, so there is nothing to bypass.
 | **PRO-05** | Visibility is declared per condition: `none` (self-revision), `peers_full` (peers' full previous response), and optionally `peers_answer_only`. Peer text is rendered verbatim within a fixed delimiter. | Programmatic (VT-05, VT-21). | MODIFY |
 | **PRO-06** | Every slot is invoked every round. No pass, skip, or "done" action exists. A model's text has no effect on scheduling. | Programmatic: the scheduler ignores content (VT-08). | MODIFY |
 | **PRO-07** | Only the orchestrator terminates a trial: round K reached, retries exhausted, budget, isolation violation, or operator. Every termination is an event. | Programmatic (VT-15). | MODIFY |
-| **PRO-08** | Responses carry a fixed answer block (§7.4). Parse failures are recorded, not repaired. The default is **no re-ask**, because a repair prompt would be an unequal treatment. The raw text is kept and, in later rounds, shown to peers as produced. | Programmatic (VT-10, VT-14). The format-compliance rate is a pilot measurement (L). | MODIFY |
+| **PRO-08** | Responses carry a fixed answer block (§7.4). Parse failures are recorded, not repaired. The default is **no re-ask**, because a repair prompt would be an unequal treatment. The raw text is kept and, in later rounds, shown to peers as produced. | Programmatic (VT-10, VT-14). The format-compliance rate is a pilot measurement (L). *[PC-12]* Invocation failure is determined from the process exit code, the CLI's `is_error` flag where present, and the relay's recorded upstream status, **never** from Claude's `result.subtype` alone (it read `success` on a failed run, Feasibility §4.7, O-H). | MODIFY |
 | **PRO-09** | Peers are labeled with letters assigned randomly per trial ("Participant A/B"). No model, vendor, or runtime names. Peer text is passed **verbatim**: self-identification by a model ("As an AI made by …") is not redacted by default, because redaction would alter the treatment. It is detected and reported instead (UNKNOWN-10). | Programmatic labeling (VT-07). Self-identification rate: L (pilot measurement). | MODIFY + UNKNOWN |
 | **PRO-10** | Where more than one peer is shown, the order of peer blocks is seeded and logged. | Programmatic (VT-07). | MODIFY |
-| **PRO-11** | Each invocation is a fresh provider session: no `--resume`, no continuation, no shared conversation. Continuity across rounds comes only from what the prompt contains. | Programmatic: no resume path (the pattern already exists for planning, `managed.py:877-881`). Live evidence that the provider keeps no user-level memory across invocations: LT-05, LT-06. | MODIFY + UNKNOWN (UNKNOWN-07) |
+| **PRO-11** | Each invocation is a fresh provider session: no `--resume`, no continuation, no shared conversation. Continuity across rounds comes only from what the prompt contains. | Programmatic: no resume path (the pattern already exists for planning, `managed.py:877-881`). *[PC-11]* Persistence is switched off (`--no-session-persistence`; Codex `--ephemeral`), and the provider home and `CODEX_HOME` are fresh, initially empty tmpfs directories per invocation, discarded afterwards (Codex writes state databases even with `--ephemeral`, Feasibility §4.4). Live evidence that the provider keeps no user-level memory across invocations: LT-05, LT-06. | MODIFY + UNKNOWN (UNKNOWN-07) |
 | **PRO-12** | Disagreement is computed after each `round.sealed` as `derived.disagreement`, from normalized answers, with a versioned metric. It is never shown to participants, never used to change scheduling, and never used to end a trial, unless a preregistered condition explicitly declares a "disagreement disclosure" manipulation (not part of the pilot). | Programmatic (VT-16). | MODIFY |
 
 ### 7.3 Draft neutral templates (for review; not final)
@@ -673,13 +711,13 @@ not call.
 | ID | Requirement | Status | Basis and evidence today |
 |---|---|---|---|
 | **CFG-01** | A manifest (JSON) declares everything that defines the run: slots (runtime, exact CLI version, model ID, every flag passed), conditions, K, replicates, item file hash, reference file hash, template versions, parser and scorer versions, seed, block structure, budgets, retry policy, timeout, and isolation tier. Freezing hashes it (`run.manifest_frozen`). A frozen manifest is immutable; any change means a new manifest and a new run. Freeze refuses a dirty Synchri working tree unless `--allow-dirty` is given, in which case the diff is stored as a blob. | MODIFY | No equivalent. The planning digest pattern (`planning.py:1037-1040`) is a precedent for content-hashed identity (I). |
-| **CFG-02** | The model is selected explicitly per slot with the provider's model flag. Preflight and every invocation compare `model_reported` with `model_requested`. On mismatch, the trial aborts as infra. Where a provider does not report its model, `model_attested = false` is recorded and the run refuses to start unless the manifest sets `allow_unattested_model: true` for that slot, which is a visible methodological limitation. | MODIFY + **UNKNOWN** | Claude reports a model in its stream `init` event (P12, `stream_events.py:172-180`). The Codex parser never captures one (P11), and **whether Codex's JSON stream reports a model is unknown (UNKNOWN-02)**. Flag names and behavior at the pinned versions are unknown until live-tested (UNKNOWN-03). Server-side model updates behind an unchanged ID cannot be detected by Synchri (UNKNOWN-08). |
-| **CFG-03** | The exact CLI version is pinned. The executable path and its SHA-256 are recorded at preflight and re-checked before each trial; a change halts the run. | MODIFY | Reuse: version probing `doctor._probe_version` (`doctor.py:120-153`) and executable resolution `modes.resolve_runtime_executable` (`modes.py:743-757`), both I evidence. Version parsing is covered by existing doctor tests (A, `tests/test_doctor.py:149,392`); executable resolution by `tests/test_mac_app.py:74-88`. Executable hashing is new. |
+| **CFG-02** | The model is selected explicitly per slot with the provider's model flag, by **full model ID, never an alias** (aliases resolve inside the CLI and change across versions). *[PC-07]* Two values are recorded and kept distinct: the **requested model** (the argv flag; Claude's `init.model` reports only this) and the **served model** (the `model` field of each provider response, captured by the relay, D6). Attestation compares them per request. On mismatch, the trial aborts as infra. Where a provider response carries no model, `model_attested = false` is recorded and the run refuses to start unless the manifest sets `allow_unattested_model: true` for that slot, which is a visible methodological limitation. | MODIFY + **UNKNOWN** (UNKNOWN-08) | *[PC-07]* Feasibility §4.2 (O-H): Claude's `init.model` equals the requested model and the server-reported value appears only in `assistant.message.model`; Synchri's existing parser (`stream_events.py:172-180`) therefore records only the requested model. Codex's `--json` stream has no model field (UNKNOWN-02 resolved, negative), so the relay is required. Server-side model updates behind an unchanged ID cannot be detected by Synchri (UNKNOWN-08). |
+| **CFG-03** | The exact CLI version is pinned. The executable path and its SHA-256 are recorded at preflight and re-checked before each trial; a change halts the run. *[PC-13]* The pinned binary is mounted **read-only** into the container from its pinned path; the version string and SHA-256 must both match the manifest. CLI self-update and other non-essential traffic is disabled (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; Codex update checks have no network path except the relay, which refuses non-model endpoints). *[PC-03]* Every pinned version must pass the provider conformance tests (VT-28 to VT-33) before use. | MODIFY | Reuse: version probing `doctor._probe_version` (`doctor.py:120-153`) and executable resolution `modes.resolve_runtime_executable` (`modes.py:743-757`), both I evidence. Version parsing is covered by existing doctor tests (A, `tests/test_doctor.py:149,392`); executable resolution by `tests/test_mac_app.py:74-88`. Executable hashing is new. |
 | **CFG-04** | Every inference parameter passed to the CLI is recorded in the manifest and in each `invocation.prepared` argv. Parameters the CLI does not expose (temperature, top-p, seed, maximum output tokens) are recorded explicitly as `provider_default`. **No claim of sampling determinism is made.** Replicates (O3) are the planned treatment of nondeterminism. | MODIFY + **UNKNOWN** | Today no parameters are passed or recorded (Audit §6.2). Which parameters each CLI exposes is UNKNOWN-03. |
 | **CFG-05** | Reasoning and thinking settings (e.g. effort levels) are pinned per slot where a flag exists; otherwise recorded as `provider_default`. Thinking content that appears in the raw stream is stored as part of the stream blob, never rendered to peers. | MODIFY + **UNKNOWN** (UNKNOWN-03) | The Claude stream exposes thinking blocks (`stream_events.py:195-198`), I evidence only. |
-| **CFG-06** | Prompt templates are files `synchri/research/prompts/<id>@<version>.txt`. Their SHA-256 values are recorded in the manifest. A template is never edited in place; a change is a new version. Rendering is deterministic: no timestamps, IDs, paths, or environment-dependent text (unlike the contract header, `contract.py:106-138`). Golden-file tests pin rendering (VT-21). | MODIFY | No equivalent today. |
+| **CFG-06** | Prompt templates are files `synchri/research/prompts/<id>@<version>.txt`. Their SHA-256 values are recorded in the manifest. A template is never edited in place; a change is a new version. Rendering is deterministic: no timestamps, IDs, paths, or environment-dependent text (unlike the contract header, `contract.py:106-138`). Golden-file tests pin rendering (VT-21). *[PC-08]* Text a CLI adds that cannot be removed (Claude: the billing-header block and "You are a Claude agent, built on Anthropic's Claude Agent SDK."; Codex: the `request_user_input` tool definition) is recorded per invocation from the relay's request capture and treated as a **fixed treatment constant**, compared across invocations. Claude slots run with `--bare --system-prompt-file`, which requires **API-key authentication** (subscription or OAuth login always injects working-directory, date, and model-identity context). Codex slots run with `include_environment_context=false`, `include_permissions_instructions=false`, `include_apps_instructions=false`, `include_collaboration_mode_instructions=false`, `model_instructions_file`, `project_doc_max_bytes=0`, and the bundled skills disabled. The relay refuses any request carrying a known injected-context marker. | MODIFY | *[PC-08]* Feasibility §4.3, §4.4 (O-H). |
 | **CFG-07** | A single seeded `random.Random(seed)` generates the full schedule: blocked trial order, slot invocation order, letter assignment, and peer order. The schedule is materialized and logged before the first invocation. | MODIFY | No equivalent. |
-| **CFG-08** | Each slot's provider home contains only what the CLI needs to authenticate. User-level instruction files (`CLAUDE.md`, `AGENTS.md`, provider `config.toml`, settings with hooks or MCP servers) are absent. Preflight inventories the home (names and hashes) and fails on unexpected files. | MODIFY + **UNKNOWN** | Claude's `--safe-mode --strict-mcp-config` disables user hooks, plugins, and MCP (`modes.py:506-514`), I evidence only. Whether credentials can be isolated per home on each platform (keychain storage on macOS) is UNKNOWN-04. |
+| **CFG-08** | Each slot's provider home contains only what the CLI needs to authenticate. User-level instruction files (`CLAUDE.md`, `AGENTS.md`, provider `config.toml`, settings with hooks or MCP servers) are absent. Preflight inventories the home (names and hashes) and fails on unexpected files. *[PC-11]* With relay authentication (D6) neither CLI needs credentials in its home, so the home and `CODEX_HOME` are **empty tmpfs directories created per invocation** (Codex loads `$CODEX_HOME/AGENTS.md` even with `--ignore-user-config`, so only an empty `CODEX_HOME` excludes it). Their final contents may be archived as evidence. | MODIFY + **UNKNOWN** | Claude's `--safe-mode --strict-mcp-config` disables user hooks, plugins, and MCP (`modes.py:506-514`), I evidence only. Whether credentials can be isolated per home on each platform (keychain storage on macOS) is UNKNOWN-04. |
 
 ### 8.2 Inference-budget accounting
 
@@ -689,7 +727,7 @@ not call.
 | **BUD-02** | Preregistered limits: per-invocation timeout; per-trial maximum invocations (slots × (K+1) × (1 + max_retries)); per-run maximum invocations, tokens, cost, and wall clock. | MODIFY | Pattern: planning budgets (`planning.py:67-69,669-693`), A evidence `tests/test_planning.py:384,412`. Timeout reuse: `AgentCommand.timeout` (A, `tests/test_runner.py:176,269`). |
 | **BUD-03** | Run-budget exhaustion stops scheduling **new blocks**. Trials in progress complete unless their own trial budget is exhausted. A trial is never truncated mid-round to save budget. All of this emits `budget.exhausted` and `run.halted`. | MODIFY | — |
 | **BUD-04** | Compute matching: `self_revision` uses the same K and the same per-model invocation count as the communication conditions. The analysis plan reports consumption per condition. Cross-architecture token counts are **not** treated as comparable units (different tokenizers); invocation count and character counts are the primary matching measures (UNKNOWN-13). | MODIFY (design) | — |
-| **BUD-05** | Retries apply to infrastructure failures only (spawn failure, nonzero exit, timeout, classified failures via `recovery.classify_failure`, `recovery.py:67`). A retry resends the **byte-identical** prompt with `attempt + 1`, and each attempt is logged and charged. There is no retry for format failures (PRO-08). Authentication failures and provider refusals halt the run rather than retrying. | SUPPORTED (classification, I+A: `tests/test_recovery.py`) + MODIFY (retry loop) | — |
+| **BUD-05** | Retries apply to infrastructure failures only (spawn failure, nonzero exit, timeout, classified failures via `recovery.classify_failure`, `recovery.py:67`). A retry resends the **byte-identical** prompt with `attempt + 1`, and each attempt is logged and charged. There is no retry for format failures (PRO-08). Authentication failures and provider refusals halt the run rather than retrying. *[PC-09]* CLI-internal retries are **disabled** (`CLAUDE_CODE_MAX_RETRIES=0`; Codex `model_providers.<id>.request_max_retries=0` and `stream_max_retries=0`), so the orchestrator owns the retry policy and every attempt is a separate, logged invocation. The relay enforces it: a grant permits a fixed number of upstream requests (one, for closed-book invocations) and refuses the next. | SUPPORTED (classification, I+A: `tests/test_recovery.py`) + MODIFY (retry loop) | *[PC-09]* Feasibility §4.7 (O-H): Codex retried a failing request 29 times without reporting it; both CLIs honored the retry controls above. |
 | **BUD-06** | Blocked randomization: each block contains one trial of every condition for one item and replicate, in seeded order, so a halt at a block boundary leaves conditions balanced. | MODIFY | — |
 
 ### 8.3 Logging requirements (referenced from §6)
@@ -701,11 +739,12 @@ not call.
 | **LOG-03** | Fail closed: if any event or blob write fails, the current invocation's result is discarded and the trial aborts as `infra`. If the log itself cannot be written, the run halts. No `except Exception: pass` anywhere in the research write path. | MODIFY | Production swallows errors (P14). |
 | **LOG-04** | Per-invocation identity: resolved argv, executable path and hash, CLI version, model requested and reported, provider session ID. | MODIFY | Reuse: `resolve_runtime_command` (`modes.py:760-826`) for argv pinning (I; A via `tests/test_mac_app.py`). |
 | **LOG-05** | Visibility provenance: each `invocation.prepared` lists the hashes of every response record rendered into its prompt. | MODIFY | — |
-| **LOG-06** | Every termination reason (trial and run) is an event. | MODIFY | F10. |
+| **LOG-06** | Every termination reason (trial and run) is an event. *[PC-12]* Failure classification follows PRO-08 (exit code, `is_error`, relay status), never `result.subtype` alone. | MODIFY | F10. |
 | **LOG-07** | Every operator action is an event with the operator's name and reason. | MODIFY | — |
 | **LOG-08** | `synchri research verify` implements §6.3 and exits nonzero on any discrepancy. | MODIFY | — |
 | **LOG-09** | There is no delete command. `synchri research export` writes canonical JSONL events plus blobs, with a SHA-256 manifest, and records `run.archived`. | MODIFY | F27. |
 | **LOG-10** | Timestamps use `ids.utc_now()` (`ids.py:55-57`, millisecond UTC). Ordering authority is `seq`, not wall time. | SUPPORTED (I) | — |
+| **LOG-11** *[PC-01]* | Every provider request and response is captured **byte for byte** at the recording relay (D6), with status code, timing, served model, and the provider's usage block, as `relay.*` events (§6.2). The request is recorded **before** it is forwarded; a request that cannot be recorded is not forwarded. The relay's record is the primary record of what the model received and returned; CLI stdout, stderr, and stream remain a secondary record (LOG-02). Served model (CFG-02) and usage (BUD-01) come from the relay record. | MODIFY | Feasibility §4.2, §4.7 (O-H). |
 
 ### 8.4 Evaluation requirements
 
@@ -776,6 +815,20 @@ or host changes.
 | VT-26 | End-to-end run of all four condition types with scripted agents. `synchri research verify` passes. A deliberately corrupted copy fails verification. | LOG-08 and all | A | — |
 | VT-27 | Existing suite unchanged: `pytest -q` passes at the same count plus the new research tests | PLT-01 | A | 749 passing at baseline |
 
+*[PC-03]* **Provider conformance tests.** Run against the real, pinned CLI
+binary, inside the container, through the relay, with a mock upstream
+provider (evidence class H). They run in preflight for every pinned CLI
+version (CFG-03), and in CI where the binary and a container runtime exist.
+
+| VT | Property | Requirement | Evidence required |
+|---|---|---|---|
+| VT-28 | Request shape: the request declares exactly the runtime's allowed tool definitions; the requested model equals the manifest's; no injected-context marker (working-directory path, date block, environment context, skills list) appears | ISO-03, CFG-02, CFG-06 | H |
+| VT-29 | Forged tool call: the mock answers with a call to a disabled tool that would read a canary; the CLI refuses, and the canary appears in no recorded request | ISO-03 | H |
+| VT-30 | Hidden retries: the mock fails the first request; with CLI retries disabled the relay records exactly one upstream request for the grant, and the invocation is classified failed | BUD-05, PRO-08 | H |
+| VT-31 | Persistence: after the invocation, the fresh home and `CODEX_HOME` contain no file holding the prompt's canary | PRO-11, CFG-08 | H |
+| VT-32 | Relay invariants: a request with a disallowed model, a disallowed tool definition, an injected-context marker, an unknown path, a bad or expired token, or beyond the grant's request limit is refused and recorded, and never forwarded | LOG-11, ISO-06 | A |
+| VT-33 | Credential isolation: the provider credential appears in no container argument, environment variable, mount, or recorded event; the upstream receives the real credential and never the relay token | ISO-06 | A + H |
+
 ### 9.3 Live-provider tests (opt-in; per pinned runtime and model)
 
 | LT | Property | Requirement | Method | Pass criterion | Today |
@@ -820,14 +873,15 @@ green, per `CLAUDE.md`. No step collects study data.
 | 1 | `synchri/research/store.py` and `schema.sql`: event log, blobs, hash chain, triggers, canonical JSON, required-field validation, fail-closed writes | 0 | VT-09, VT-12 |
 | 2 | `manifest.py`, `items.py` (item text only), `references.py` (separate module, evaluator-only), freeze command | 1 | VT-02, VT-18 |
 | 3 | `prompts/` plus `render.py`: versioned templates, deterministic renderer, visibility-rule input selection, denylist | 2 | VT-03, VT-06, VT-07, VT-20, VT-21 |
-| 4 | `invoke.py`: wraps `AgentCommand` (`agent_command.py:41-237`) with allowlisted env (replace semantics), fresh scratch cwd, per-slot provider home, raw-stream tee into blobs, canary scan, usage and model extraction via existing parsers (`stream_events.py:164-466`), retry loop on `recovery.classify_failure` | 1, 3 | VT-10, VT-11, VT-13, VT-17, VT-19, VT-22, VT-24 |
+| 1a | *[PC-01, PC-06]* `relay.py` and `credentials.py`: recording relay with provider-specific forwarding, per-invocation grants and tokens, request invariants, fail-closed recording; credentials loaded only into the relay | 1 | VT-32, VT-33 |
+| 4 | `invoke.py` *[PC-04]*: per-invocation container (`container.py`) with allowlisted env (replace semantics), fresh tmpfs `/work` and home, relay channel as the only network, read-only pinned CLI mount, raw-stream capture into blobs, canary scan, usage and model extraction via existing parsers (`stream_events.py:164-466`) cross-checked against the relay record, retry loop on `recovery.classify_failure` | 1, 1a, 3 | VT-10, VT-11, VT-13, VT-17, VT-19, VT-22, VT-24, VT-28 to VT-31 |
 | 5 | `answer.py`: answer-block parser | 1 | VT-14 |
 | 6 | `protocol.py`: run, trial, and invocation state machines; seeded blocked schedule; budgets; derived disagreement | 3, 4, 5 | VT-04, VT-05, VT-08, VT-15, VT-16, VT-23 |
 | 7 | `preflight.py`: version and executable pinning (reusing `doctor._probe_version`, `modes.resolve_runtime_executable`), model attestation, provider-home inventory, canary planting, no-tools check | 4 | VT-13; enables LT-01, LT-02, LT-03 |
 | 8 | `evaluate.py`: deterministic scorer, blinded export | 2, 6 | VT-25 |
 | 9 | `verify.py` and `export`: reconstruction per §6.3, archive | 1 to 8 | VT-21, VT-26 |
 | 10 | CLI: `synchri research {freeze, preflight, run, evaluate, verify, export, halt}`, the only change to existing files (registration in `synchri/cli/main.py`) | 6 to 9 | VT-26, VT-27 |
-| 11 | Live test suite (`-m live`), evidence artifacts, Tier 2 host setup if chosen | 7, 10 | LT-01 to LT-12 |
+| 11 | Live test suite (`-m live`), evidence artifacts, container host setup (D4) with relay egress to the real providers | 7, 10 | LT-01 to LT-12 |
 | 12 | Live end-to-end smoke on synthetic items; documentation of results and of every remaining UNKNOWN | 11 | LT-12, AC-01 to AC-14 |
 
 **Explicitly deferred** (not needed for a pilot): UI, macOS desktop support,
@@ -851,7 +905,7 @@ them.
 | AC-01 | All VT-01 to VT-27 pass in the default suite on the pilot commit | A |
 | AC-02 | The existing suite passes with no change in behavior: same baseline tests, all passing | A |
 | AC-03 | LT-01, LT-02, LT-03, LT-04, LT-05, LT-06, LT-07, LT-08, LT-09, and LT-11 pass for every pinned runtime and model in the pilot manifest, on the pilot host, at the pinned CLI versions. Results are stored as evidence artifacts. | L |
-| AC-04 | If the pilot uses Tier 2, LT-10a and LT-10b pass. If it uses Tier 1, reviewers have accepted the Tier 1 residual risk in writing: silent reads are undetectable if tool disablement fails. | L, or a recorded decision |
+| AC-04 | *[PC-04]* LT-10a and LT-10b pass on the pilot host (container isolation, D4). There is no Tier 1 alternative. | O-OS + L |
 | AC-05 | Every slot either has `model_attested = true` (LT-02), or reviewers have accepted unattested models for that slot in writing, with the limitation stated in the preregistration | L, or a recorded decision |
 | AC-06 | Prompt templates are reviewed for neutrality by at least one investigator who did not write them; the review is recorded; template hashes are frozen | Human review (recorded) |
 | AC-07 | The manifest is frozen and its hash, plus the item-file and reference-file hashes, are recorded in the pilot preregistration before the pilot starts | I (hash records) |
@@ -862,6 +916,7 @@ them.
 | AC-12 | The reference file has never been placed inside any participant-reachable path (stated by the operator, checked by inventory of the scratch dirs and provider homes) | I + L |
 | AC-13 | No `except Exception: pass` (or equivalent) in `synchri/research/` write paths, confirmed by review plus VT-12 | I + A |
 | AC-14 | No production behavior change: a diff review confirms changes outside `synchri/research/` are limited to CLI registration and docs | I |
+| AC-15 *[PC-03]* | VT-28 to VT-33 pass for every pinned CLI version in the pilot manifest, inside the pilot container image | H + A |
 
 ### 11.2 Not acceptance criteria
 
@@ -891,19 +946,25 @@ to be resolved or carried forward as a stated limitation.
 | ID | Unknown | Affects | Evidence that resolves it |
 |---|---|---|---|
 | UNKNOWN-01 | Which Codex CLI version will be pinned, and whether it is installable on the pilot host (absent from the audit host) | CFG-03 | Installation plus LT-01 |
-| UNKNOWN-02 | Whether `codex exec --json` reports the serving model anywhere in its stream | CFG-02, LOG-04 | LT-02 on raw stream blobs |
-| UNKNOWN-03 | Exact flags for model selection, reasoning effort, and any sampling parameters at the pinned versions of each CLI, and whether sampling parameters are exposed at all | CFG-02, CFG-04, CFG-05 | CLI help output at pinned versions plus LT-02 |
-| UNKNOWN-04 | How to give each slot an isolated provider home with valid credentials: environment variables honored by each CLI; keychain-stored credentials on macOS | ISO-01, CFG-08 | LT-06 plus setup documentation |
-| UNKNOWN-05 | Whether Codex can run with **all** tools disabled. If not, Codex slots require Tier 2 even for the pilot. | ISO-03 | LT-03 |
+| UNKNOWN-02 | Whether `codex exec --json` reports the serving model anywhere in its stream | CFG-02, LOG-04 | LT-02 on raw stream blobs. *Status (Feasibility §9): resolved, negative; relay required (PC-07).* |
+| UNKNOWN-03 | Exact flags for model selection, reasoning effort, and any sampling parameters at the pinned versions of each CLI, and whether sampling parameters are exposed at all | CFG-02, CFG-04, CFG-05 | CLI help output at pinned versions plus LT-02. *Status: resolved for Claude 2.1.309 and Codex 0.163.0 (Feasibility §4.3); sampling is not exposed by either.* |
+| UNKNOWN-04 | How to give each slot an isolated provider home with valid credentials: environment variables honored by each CLI; keychain-stored credentials on macOS | ISO-01, CFG-08 | LT-06 plus setup documentation. *Status: partly resolved; with relay authentication neither CLI needs credentials in its home (PC-06, PC-11).* |
+| UNKNOWN-05 | Whether Codex can run with **all** tools disabled. If not, Codex slots require Tier 2 even for the pilot. | ISO-03 | LT-03. *Status: largely resolved; every executable tool can be removed, `request_user_input` remains inert (PC-05).* |
 | UNKNOWN-06 | Whether web search or fetch can occur with the chosen flags (both CLIs) | ISO-08 | LT-11 |
 | UNKNOWN-07 | Whether either provider keeps user-level memory across non-resumed invocations (server-side or local) | PRO-11 | LT-05, LT-06 |
 | UNKNOWN-08 | Provider-side model changes behind an unchanged model ID | CFG-02 | Not detectable by Synchri. Mitigated by start and end canary-item runs (§9.4); stated as a limitation. |
-| UNKNOWN-09 | The Tier 2 host design (OS users versus containers), and how each CLI authenticates under it | ISO-05, PLT-03 | Host setup plus LT-10a, LT-10b |
+| UNKNOWN-09 | The Tier 2 host design (OS users versus containers), and how each CLI authenticates under it | ISO-05, PLT-03 | Host setup plus LT-10a, LT-10b. *Status: container and OS-user designs demonstrated on Linux (Feasibility §4.6); egress to real providers and macOS remain open.* |
 | UNKNOWN-10 | How often models self-identify in text that peers will see, and whether to redact (redaction changes the treatment) | PRO-09 | Pilot measurement (§9.4); preregistration decision |
 | UNKNOWN-11 | Whether participants should be told that peers are other AI systems | §7.3 | Investigator decision; record it in the preregistration |
 | UNKNOWN-12 | Whether any convergence-based early stop is wanted. Pilot default: none. | PRO-07, BUD-04 | Investigator decision |
 | UNKNOWN-13 | How to compare compute across architectures with different tokenizers | BUD-04 | Analysis-plan decision; the instrument records invocations, characters, tokens, and cost regardless |
-| UNKNOWN-14 | Whether stream schemas of the pinned CLIs still match the parsers (`stream_events.py`) | LOG-02, BUD-01 | LT-07, LT-08; the raw stream is kept regardless |
+| UNKNOWN-14 | Whether stream schemas of the pinned CLIs still match the parsers (`stream_events.py`) | LOG-02, BUD-01 | LT-07, LT-08; the raw stream is kept regardless. *Status: observed for both pinned versions (Feasibility §4.2).* |
+
+### 12.1 Open options (undecided)
+
+| ID | Option | Status |
+|---|---|---|
+| OPTION-01 *[PC-14]* | If the preregistration requires fixed sampling parameters (temperature, top-p, seed), add a direct-API adapter alongside the CLI adapters. Neither pinned CLI exposes sampling controls (Feasibility §4.3, B4). | **Undecided.** Not adopted, not rejected. Adopting it changes D1 and is a separate decision. |
 
 ---
 

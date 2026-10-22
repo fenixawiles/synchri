@@ -1,0 +1,95 @@
+{
+  "checks": [
+    {
+      "details": {
+        "cli_added_constants": {
+          "system_blocks_other_than_ours": [
+            "x-anthropic-billing-header: cc_version=2.1.309.c71; cc_entrypoint=sdk-cli;",
+            "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+          ],
+          "tool_definitions": []
+        },
+        "failure_reasons": [],
+        "final_text": "MOCK-REPLY-OK",
+        "host_paths_in_request": [],
+        "injected_markers": [],
+        "outcome_ok": true,
+        "requested_model": "claude-sonnet-5-5",
+        "requests": 1,
+        "served_model": [
+          "mock-served-model"
+        ],
+        "temperature_sent": false,
+        "tool_names": [],
+        "top_p_sent": false
+      },
+      "name": "request shape",
+      "passed": true,
+      "vt": "VT-28"
+    },
+    {
+      "details": {
+        "execution_evidence_found": false,
+        "forged_tool": "Bash",
+        "refusal_evidence": [
+          "<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here.</tool_use_error>"
+        ],
+        "requests": 2
+      },
+      "name": "forged tool call refused",
+      "passed": true,
+      "vt": "VT-29"
+    },
+    {
+      "details": {
+        "classified_failed": true,
+        "failure_reasons": [
+          "exit_code:1",
+          "cli_is_error",
+          "upstream_error_status"
+        ],
+        "requests_seen_by_relay": 1,
+        "returncode": 1
+      },
+      "name": "no hidden retries",
+      "passed": true,
+      "vt": "VT-30"
+    },
+    {
+      "details": {
+        "failure_reasons": [],
+        "files_after_run": [
+          "/home/slot/.claude.json",
+          "/home/slot/system-prompt.txt",
+          "/home/slot/.claude/backups/.claude.json.backup.1792713001105"
+        ],
+        "inventory_reported": true,
+        "outcome_ok": true,
+        "probe_hits": {}
+      },
+      "name": "no persistence of the prompt",
+      "passed": true,
+      "vt": "VT-31"
+    },
+    {
+      "details": {
+        "credential_in_container_argv": false,
+        "credential_in_launcher_files": false,
+        "credential_in_run_store": false,
+        "grants_recorded_by_hash_only": 4,
+        "token_in_launcher_or_argv": false,
+        "upstream_received_relay_credential_on_every_request": true
+      },
+      "name": "credential isolation",
+      "passed": true,
+      "vt": "VT-33"
+    }
+  ],
+  "cli_sha256": "4d704a8aecbe038affa3000f498ae17c1b4f753add8facb8764120affc99b658",
+  "cli_version": "2.1.309",
+  "image": "sha256:cb90c7aaff1f93cbceb52ba18de6543b16c9833716cd1c20ba0ccf4a2c8801fa",
+  "passed": true,
+  "run_dir": "/srv/research-docker/runs/claude-final2",
+  "runtime": "claude_code",
+  "store_verified": true
+}

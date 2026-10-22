@@ -1,0 +1,149 @@
+{
+  "checks": [
+    {
+      "details": {
+        "cli_added_constants": {
+          "developer_inputs": [],
+          "tool_definitions": [
+            "request_user_input"
+          ]
+        },
+        "failure_reasons": [],
+        "final_text": "MOCK-REPLY-OK",
+        "host_paths_in_request": [],
+        "injected_markers": [],
+        "outcome_ok": true,
+        "requested_model": "gpt-5-codex-research-test",
+        "requests": 1,
+        "served_model": [
+          "mock-served-model"
+        ],
+        "temperature_sent": false,
+        "tool_names": [
+          "request_user_input"
+        ],
+        "top_p_sent": false
+      },
+      "name": "request shape",
+      "passed": true,
+      "vt": "VT-28"
+    },
+    {
+      "details": {
+        "execution_evidence_found": false,
+        "forged_tool": "exec_command",
+        "refusal_evidence": [
+          "unsupported call: exec_command"
+        ],
+        "requests": 2
+      },
+      "name": "forged tool call refused",
+      "passed": true,
+      "vt": "VT-29"
+    },
+    {
+      "details": {
+        "classified_failed": true,
+        "failure_reasons": [
+          "exit_code:1",
+          "cli_is_error",
+          "upstream_error_status"
+        ],
+        "requests_seen_by_relay": 1,
+        "returncode": 1
+      },
+      "name": "no hidden retries",
+      "passed": true,
+      "vt": "VT-30"
+    },
+    {
+      "details": {
+        "failure_reasons": [],
+        "files_after_run": [
+          "/home/slot/instructions.txt",
+          "/home/slot/codexhome/installation_id",
+          "/home/slot/codexhome/queue_1.sqlite",
+          "/home/slot/codexhome/memories_1.sqlite",
+          "/home/slot/codexhome/goals_1.sqlite",
+          "/home/slot/codexhome/logs_2.sqlite",
+          "/home/slot/codexhome/state_5.sqlite",
+          "/home/slot/codexhome/skills/.system/.codex-system-skills.marker",
+          "/home/slot/codexhome/skills/.system/skill-installer/SKILL.md",
+          "/home/slot/codexhome/skills/.system/skill-installer/LICENSE.txt",
+          "/home/slot/codexhome/skills/.system/skill-installer/scripts/list-skills.py",
+          "/home/slot/codexhome/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+          "/home/slot/codexhome/skills/.system/skill-installer/scripts/github_utils.py",
+          "/home/slot/codexhome/skills/.system/skill-installer/assets/skill-installer.png",
+          "/home/slot/codexhome/skills/.system/skill-installer/assets/skill-installer-small.svg",
+          "/home/slot/codexhome/skills/.system/skill-installer/agents/openai.yaml",
+          "/home/slot/codexhome/skills/.system/skill-creator/license.txt",
+          "/home/slot/codexhome/skills/.system/skill-creator/SKILL.md",
+          "/home/slot/codexhome/skills/.system/skill-creator/scripts/quick_validate.py",
+          "/home/slot/codexhome/skills/.system/skill-creator/scripts/init_skill.py",
+          "/home/slot/codexhome/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+          "/home/slot/codexhome/skills/.system/skill-creator/references/openai_yaml.md",
+          "/home/slot/codexhome/skills/.system/skill-creator/assets/skill-creator.png",
+          "/home/slot/codexhome/skills/.system/skill-creator/assets/skill-creator-small.svg",
+          "/home/slot/codexhome/skills/.system/skill-creator/agents/openai.yaml",
+          "/home/slot/codexhome/skills/.system/review-agent/SKILL.md",
+          "/home/slot/codexhome/skills/.system/review-agent/agents/openai.yaml",
+          "/home/slot/codexhome/skills/.system/openai-docs/SKILL.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/LICENSE.txt",
+          "/home/slot/codexhome/skills/.system/openai-docs/scripts/resolve-latest-model-info.cjs",
+          "/home/slot/codexhome/skills/.system/openai-docs/scripts/resolve-latest-model-info",
+          "/home/slot/codexhome/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/upgrading-to-gpt-6-astra.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/upgrade-guide.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/prompting-guide.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/official-docs.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/model-selection.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/model-migration.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/mcp-diagnostics.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/latest-model.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/references/codex-self-knowledge.md",
+          "/home/slot/codexhome/skills/.system/openai-docs/assets/openai.png",
+          "/home/slot/codexhome/skills/.system/openai-docs/assets/openai-small.svg",
+          "/home/slot/codexhome/skills/.system/openai-docs/agents/openai.yaml",
+          "/home/slot/codexhome/skills/.system/imagegen/SKILL.md",
+          "/home/slot/codexhome/skills/.system/imagegen/LICENSE.txt",
+          "/home/slot/codexhome/skills/.system/imagegen/scripts/remove_chroma_key.py",
+          "/home/slot/codexhome/skills/.system/imagegen/scripts/image_gen.py",
+          "/home/slot/codexhome/skills/.system/imagegen/references/sample-prompts.md",
+          "/home/slot/codexhome/skills/.system/imagegen/references/prompting.md",
+          "/home/slot/codexhome/skills/.system/imagegen/references/image-api.md",
+          "/home/slot/codexhome/skills/.system/imagegen/references/codex-network.md",
+          "/home/slot/codexhome/skills/.system/imagegen/references/cli.md",
+          "/home/slot/codexhome/skills/.system/imagegen/assets/imagegen.png",
+          "/home/slot/codexhome/skills/.system/imagegen/assets/imagegen-small.svg",
+          "/home/slot/codexhome/skills/.system/imagegen/agents/openai.yaml"
+        ],
+        "inventory_reported": true,
+        "outcome_ok": true,
+        "probe_hits": {}
+      },
+      "name": "no persistence of the prompt",
+      "passed": true,
+      "vt": "VT-31"
+    },
+    {
+      "details": {
+        "credential_in_container_argv": false,
+        "credential_in_launcher_files": false,
+        "credential_in_run_store": false,
+        "grants_recorded_by_hash_only": 4,
+        "token_in_launcher_or_argv": false,
+        "upstream_received_relay_credential_on_every_request": true
+      },
+      "name": "credential isolation",
+      "passed": true,
+      "vt": "VT-33"
+    }
+  ],
+  "cli_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "cli_version": "0.163.0",
+  "image": "sha256:cb90c7aaff1f93cbceb52ba18de6543b16c9833716cd1c20ba0ccf4a2c8801fa",
+  "passed": true,
+  "run_dir": "/srv/research-docker/runs/codex-final2",
+  "runtime": "codex",
+  "store_verified": true
+}

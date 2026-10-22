@@ -35,6 +35,7 @@ from ..runner.conductor import (
     STOP_UNMANAGED_SPEAKER,
 )
 from ..session.modes import runtime_catalog
+from ..research import cli as research_cli
 from . import render, session, session_cli
 
 #: ``wait`` exit codes, so a shell loop can branch without parsing output.
@@ -105,6 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # -- session startup ------------------------------------------------
     session_cli.add_parsers(sub, command)
+
+    # -- research mode (isolated: never opens SYNCHRI_HOME) --------------
+    research_cli.add_parser(command)
 
     # -- lifecycle ------------------------------------------------------
     command("workspace", "Initialize the local workspace and show its state.")
@@ -425,6 +429,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.command:
         parser.print_help()
         return 0
+
+    if args.command == "research":
+        # Research Mode must not create or open production state (spec D5,
+        # PRO-01), so it is dispatched before any Broker exists.
+        return research_cli.run(args)
 
     handler: Callable[[argparse.Namespace, Broker], int] | None = HANDLERS.get(args.command)
     if handler is None:  # pragma: no cover - argparse rejects unknown commands

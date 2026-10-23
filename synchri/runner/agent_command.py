@@ -206,6 +206,7 @@ class AgentCommand:
         stderr = stderr_buffer.text()
         tool_events = None
         provider_session_id = None
+        provider_error = provider_error_kind = None
         if parser is not None and getattr(parser, "saw_stream", False):
             # The stream was real JSONL: hand downstream code the agent's
             # reconstructed reply, not the event soup. When the stream never
@@ -219,21 +220,24 @@ class AgentCommand:
                 stdout = final
             tool_events = getattr(parser, "tool_events", None)
             provider_session_id = getattr(parser, "provider_session_id", None)
+            provider_error = getattr(parser, "provider_error", None)
+            provider_error_kind = getattr(parser, "provider_error_kind", None)
+        errors = {"provider_error": provider_error, "provider_error_kind": provider_error_kind}
         if outcome == "cancelled":
             return AgentResult(
                 self.name, stdout, stderr, process.returncode,
                 cancelled=True, tool_events=tool_events,
-                provider_session_id=provider_session_id,
+                provider_session_id=provider_session_id, **errors,
             )
         if outcome == "timed_out":
             return AgentResult(
                 self.name, stdout, stderr or f"timed out after {self.timeout:g}s",
                 process.returncode, timed_out=True, tool_events=tool_events,
-                provider_session_id=provider_session_id,
+                provider_session_id=provider_session_id, **errors,
             )
         return AgentResult(
             self.name, stdout, stderr, process.returncode,
-            tool_events=tool_events, provider_session_id=provider_session_id,
+            tool_events=tool_events, provider_session_id=provider_session_id, **errors,
         )
 
 
@@ -254,6 +258,10 @@ class AgentResult:
     #: stored durably per participant so recovery can resume instead of
     #: relaunching cold.
     provider_session_id: str | None = None
+    #: The CLI's own error message and category from its stream, when it
+    #: reported one there rather than on stderr (see ``BaseStreamParser``).
+    provider_error: str | None = None
+    provider_error_kind: str | None = None
 
     @property
     def ok(self) -> bool:

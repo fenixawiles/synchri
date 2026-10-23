@@ -75,6 +75,8 @@ _AUTH_FAILURE_MARKERS = (
     "authentication",
     "invalid api key",
     "credential",
+    "failed to authenticate",
+    "oauth session expired",
 )
 
 
@@ -328,12 +330,22 @@ def stored_connections(conn) -> dict[str, dict]:
     rows = conn.execute("SELECT * FROM runtime_connections").fetchall()
     result = {}
     for row in rows:
+        try:
+            checks = json.loads(row["checks"] or "[]")
+        except ValueError:
+            checks = []
         result[row["runtime"]] = {
             "state": row["state"],
             "resume": row["resume"],
             "version": row["version"],
             "tested_at": row["updated_at"],
             "detail": row["detail"],
+            # Lets the overview say "signed out" instead of a generic failure.
+            "sign_in_failed": any(
+                isinstance(check, dict) and check.get("key") == "auth"
+                and check.get("state") == FAIL
+                for check in checks
+            ),
         }
     return result
 
@@ -567,12 +579,18 @@ def run_connection_test(
                 _check("launch", FAIL, f"unresponsive — no reply within {invoke_timeout:g}s")
             )
         elif result.returncode != 0:
+            # Prefer the CLI's own words. Claude reports an expired sign-in
+            # only in its stream, leaving stderr empty.
+            reported = (getattr(result, "provider_error", None) or "").strip()
             stderr_tail = (result.stderr or "").strip()[-300:]
-            if _looks_like_auth_failure(result.stderr or ""):
+            message = (reported[:300] or stderr_tail
+                       or "the CLI gave no error message; run it in Terminal to see why")
+            auth_kind = "auth" in (getattr(result, "provider_error_kind", None) or "").lower()
+            if auth_kind or _looks_like_auth_failure(f"{result.stderr or ''}\n{reported}"):
                 checks.append(_check("launch", PASS, "the CLI started"))
-                checks.append(_check("auth", FAIL, f"sign-in problem: {stderr_tail}"))
+                checks.append(_check("auth", FAIL, f"sign-in problem: {message}"))
             else:
-                checks.append(_check("launch", FAIL, f"exit {result.returncode}: {stderr_tail}"))
+                checks.append(_check("launch", FAIL, f"exit {result.returncode}: {message}"))
         else:
             checks.append(_check("launch", PASS, "unattended launch works"))
             if replied:

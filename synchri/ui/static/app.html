@@ -433,6 +433,12 @@ details.menu>div>button:hover{background:var(--panel2)}
 .attn-row b{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .attn-row .side-meta{font:11px var(--mono);color:var(--faint)}
 .attn-row button{margin-left:auto;flex:none}
+.attn-row .attn-main{min-width:0;flex:1;display:grid;gap:.15rem}
+.attn-row .attn-main b{font-size:13.5px}
+.attn-row .attn-main .side-meta{line-height:1.5}
+.attn-row .pill{flex:none;min-width:8.5rem}
+.attn-row .attn-actions{flex:none;display:flex;gap:.35rem;align-items:center}
+.attn-note{font-size:12px;color:var(--dim);margin:-.2rem 0 .5rem;max-width:44rem}
 .wf-grid{display:grid;gap:.2rem;margin-top:.5rem}
 .wf-row{display:flex;align-items:baseline;gap:1rem;padding:.45rem 0;min-width:0}
 .wf-main b{font-size:15px}
@@ -455,6 +461,8 @@ details.menu>div>button:hover{background:var(--panel2)}
 .conn-row .conn-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:12px;color:var(--faint)}
 .conn-row button{margin-left:auto;flex:none}
+.conn-row .pill{flex:none;min-width:6.5rem}
+.conn-row .conn-note.multiline{white-space:normal;line-height:1.5}
 
 /* new session: progressive questions — answered steps collapse to summaries,
    the current one is expanded, upcoming ones are titles only */
@@ -1164,8 +1172,8 @@ function renderSideContext() {
     box.append($(`<div class="side-label">Workflows</div>`));
     const runs = $(`<div class="side-list"></div>`);
     for (const workflow of workflows.slice(0, 6)) {
-      const chain = (workflow.agents || []).map(agent => agent.name).join(" → ");
-      const row = $(`<button class="side-item" title="Run ${esc(workflow.name)}${chain ? ` · ${esc(chain)}` : ""}"><b>${esc(workflow.name)}</b><span class="side-meta">run</span></button>`);
+      const team = teamLine(workflow.agents);
+      const row = $(`<button class="side-item" title="Start a session from ${esc(workflow.name)}${team ? ` · ${esc(team)}` : ""}"><b>${esc(workflow.name)}</b></button>`);
       row.onclick = guard(() => quickStart(workflow.name));
       runs.append(row);
     }
@@ -1183,7 +1191,8 @@ function renderSideContext() {
     const done = ["complete","timed_out","stopped","failed"].includes(s.status);
     const led = s.status === "active" ? "live" : (done ? "" : "warn");
     const open = s.session_id === S.session;
-    const row = $(`<div class="side-row"><button class="side-item${open ? " on" : ""}" title="${esc(s.name)} · ${esc(s.repository.name)} · ${esc(s.status.replace("_", " "))}"><i class="led ${led}"></i><b>${esc(s.name)}</b><span class="side-meta">${esc(String(s.created_at || "").slice(5, 10))}</span></button>
+    const [, statusLabel, shortStatus] = statusWord(s.status);
+    const row = $(`<div class="side-row"><button class="side-item${open ? " on" : ""}" title="${esc(sessionTitle(s))} · ${esc(sessionLine(s))} · ${esc(statusLabel)}"><i class="led ${led}"></i><b>${esc(sessionTitle(s))}</b><span class="side-meta">${esc(shortStatus || shortDate(s.created_at))}</span></button>
       <details class="menu workflow-menu"><summary aria-label="Session options">⋯</summary><div>
         <button data-open>Open</button>
         <button data-new>New session in this repo</button>
@@ -1394,9 +1403,78 @@ async function checkForUpdate({manual=false, silent=false}={}) {
   }
 }
 
+/* ------------------------------------------------------ plain-language labels
+   One vocabulary for every overview row: a session is named by what it is
+   (its own name, else its brief), described by repository, team, and age, and
+   given its status as a word, never as a colour alone. */
+const ROLE_VERBS = {
+  primary_builder:"builds", adversarial_reviewer:"reviews", secondary_implementer:"implements",
+  verifier:"verifies", auditor:"audits", planner:"plans", plan_reviewer:"reviews the plan",
+};
+function teamLine(agents) {
+  return (agents || []).map(agent => ROLE_VERBS[agent.role]
+    ? `${agent.name} ${ROLE_VERBS[agent.role]}` : agent.name).join(" · ");
+}
+function parseTime(value) {
+  const time = Date.parse(value || "");
+  return Number.isNaN(time) ? null : time;
+}
+function shortDate(value) {
+  const time = parseTime(value);
+  if (time === null) return "";
+  const date = new Date(time);
+  const options = {month:"short", day:"numeric"};
+  if (date.getFullYear() !== new Date().getFullYear()) options.year = "numeric";
+  return date.toLocaleDateString(undefined, options);
+}
+function timeAgo(value) {
+  const time = parseTime(value);
+  if (time === null) return "";
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 14) return `${days} days ago`;
+  return `on ${shortDate(value)}`;
+}
+function sessionTitle(s) {
+  const generic = !s.name || s.name === `${s.repository?.name} session`;
+  if (!generic) return s.name;
+  const brief = String(s.spec?.text || "").split("\n")
+    .map(line => line.replace(/^#+\s*/, "").trim()).find(Boolean);
+  return brief ? brief.slice(0, 90) : "Untitled session";
+}
+function sessionLine(s, reason = "") {
+  // The reason a row is shown comes first, so a narrow window never hides it.
+  return [reason, `started ${shortDate(s.created_at)}`, teamLine(s.participants), s.repository?.name]
+    .filter(Boolean).join(" · ");
+}
+const SESSION_STATUS = {
+  configuring:["dim", "Being set up", "setup"],
+  awaiting_ack:["warn", "Waiting for agents", "waiting"],
+  active:["ok", "Working", "working"],
+  paused:["warn", "Paused", "paused"],
+  complete:["ok", "Complete", ""],
+  timed_out:["dim", "Time limit reached", ""],
+  stopped:["dim", "Stopped", ""],
+  failed:["bad", "Failed", ""],
+};
+function statusWord(status) {
+  return SESSION_STATUS[status] || ["dim", String(status || "").replaceAll("_", " "), ""];
+}
+/* A setup nobody touched for a day is unfinished business, not "now". */
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+function isStale(s) {
+  const time = parseTime(s.updated_at || s.created_at);
+  return time !== null && Date.now() - time > STALE_AFTER_MS;
+}
+
 /* ------------------------------------------------------------------ home */
 /* Only states a person can act on belong in the attention strip. */
-const NEEDS_YOU_STATES = ["awaiting_join", "awaiting_ack", "paused"];
+const NEEDS_YOU_STATES = ["awaiting_ack", "paused"];
 
 async function home() {
   stopClock();
@@ -1432,41 +1510,56 @@ async function home() {
     return;
   }
   const page = $(`<div class="home-page"></div>`);
-  const needsYou = list.filter(s => NEEDS_YOU_STATES.includes(s.status));
   const inProgress = list.filter(s => s.status === "active");
-  if (needsYou.length || inProgress.length) {
+  const needsYou = list.filter(s => NEEDS_YOU_STATES.includes(s.status));
+  const now = [...inProgress, ...needsYou.filter(s => !isStale(s))];
+  const unfinished = needsYou.filter(isStale);
+  const sessionRow = (s, {stoppable}) => {
+    const [tone, label] = statusWord(s.status);
+    const waiting = s.status === "awaiting_ack";
+    const why = waiting ? "agents haven't accepted the session contract yet"
+      : s.status === "paused" ? `paused ${timeAgo(s.updated_at)}`
+      : "agents are working";
+    const row = $(`<div class="attn-row"><span class="pill ${tone}">${esc(label)}</span>
+      <div class="attn-main"><b>${esc(sessionTitle(s))}</b>
+        <span class="side-meta">${esc(sessionLine(s, why))}</span></div>
+      <div class="attn-actions">${stoppable ? `<button class="ghost" data-stop>Stop</button>` : ""}
+        <button data-go>${waiting ? "Continue setup" : "Open"}</button></div></div>`);
+    row.querySelector("[data-go]").onclick = guard(() =>
+      waiting ? openLaunch(s.session_id) : openSession(s.session_id));
+    row.querySelector("[data-stop]")?.addEventListener("click", guard(async () => {
+      if (!confirm(`Stop “${sessionTitle(s)}”? No agent is working in it. Its worktree and files stay on disk, and you can delete the session afterwards from Recent sessions.`)) return;
+      await api("control", {session: s.session_id, action: "stop", reason: "stopped from the overview"});
+      confirmNotice(`Stopped “${sessionTitle(s)}”.`);
+      await home();
+    }));
+    return row;
+  };
+  if (now.length) {
     page.append($(`<div class="kicker" style="margin-bottom:.55rem">Now</div>`));
     const strip = $(`<div class="attn"></div>`);
-    for (const s of needsYou) {
-      const paused = s.status === "paused";
-      const row = $(`<div class="attn-row"><i class="led warn"></i><b>${esc(s.name)}</b>
-        <span class="side-meta">${esc(s.repository.name)} · ${paused ? "paused" : "waiting on setup"}</span>
-        <button data-go>${paused ? "Open" : "Finish setup"}</button></div>`);
-      row.querySelector("[data-go]").onclick = guard(() =>
-        paused ? openSession(s.session_id) : openLaunch(s.session_id));
-      strip.append(row);
-    }
-    for (const s of inProgress) {
-      const row = $(`<div class="attn-row"><i class="led live"></i><b>${esc(s.name)}</b>
-        <span class="side-meta">${esc(s.repository.name)} · agents working</span>
-        <button data-go>Open</button></div>`);
-      row.querySelector("[data-go]").onclick = guard(() => openSession(s.session_id));
-      strip.append(row);
-    }
+    for (const s of now) strip.append(sessionRow(s, {stoppable:false}));
+    page.append(strip);
+  }
+  if (unfinished.length) {
+    page.append($(`<div class="kicker" style="margin-bottom:.55rem">Unfinished</div>`));
+    page.append($(`<div class="attn-note">Sessions you started but haven't touched for over a day. Continue them, or stop the ones you no longer need.</div>`));
+    const strip = $(`<div class="attn"></div>`);
+    for (const s of unfinished) strip.append(sessionRow(s, {stoppable:true}));
     page.append(strip);
   }
   page.append($(`<div class="page-head"><div><h1>Start a session</h1>
-    <div class="sub">Run a saved workflow, or start fresh from the sidebar — Synchri asks only what it needs, then launches the team in an isolated worktree.</div></div>
+    <div class="sub">A workflow is a saved team and its settings. Starting one creates a session: one run of that team on a repository, in its own isolated worktree. New session in the sidebar starts one with the recommended team.</div></div>
     <button class="primary" id="new-workflow">+ New workflow</button></div>`));
   page.querySelector("#new-workflow").onclick = () => configureWorkflow();
   if (workflows.length) {
     const rows = $(`<div class="wf-grid"></div>`);
     for (const workflow of workflows) {
-      const agents = workflow.agents || [];
-      const chain = agents.map(agent => agent.name).join(" → ") || "no agents yet";
-      const row = $(`<div class="wf-row"><button class="wf-main" data-run-main title="Run ${esc(workflow.name)}"><b>${esc(workflow.name)}</b>
-        <div class="workflow-chain">${esc(chain)}${workflow.deadline_duration ? ` · ${esc(workflow.deadline_duration)}` : ""}</div></button>
-        <div class="wf-actions"><button data-run>Run</button><details class="menu workflow-menu"><summary aria-label="Workflow options">⋯</summary><div>
+      const team = teamLine(workflow.agents) || "no agents yet";
+      const limit = workflow.deadline_duration ? ` · time limit ${workflow.deadline_duration}` : "";
+      const row = $(`<div class="wf-row"><button class="wf-main" data-run-main title="Start a session from ${esc(workflow.name)}"><b>${esc(workflow.name)}</b>
+        <div class="workflow-chain">${esc(team)}${esc(limit)}</div></button>
+        <div class="wf-actions"><button data-run>Start</button><details class="menu workflow-menu"><summary aria-label="Workflow options">⋯</summary><div>
           <button data-edit>Edit workflow</button><button data-rename>Rename</button><button class="danger" data-delete>Delete workflow</button>
         </div></details></div></div>`);
       row.querySelector("[data-run]").onclick = guard(() => quickStart(workflow.name));
@@ -1505,26 +1598,41 @@ function renderAgentConnections(page) {
     const canTest = runtime.connection_test_available;
     const testing = test?.state === "testing" || test?.alive;
     const failed = stored?.state === "failed" || test?.state === "failed";
-    const dot = stored?.state === "connected" ? "ok" : testing ? "warn" : failed ? "bad" : "";
+    const connected = stored?.state === "connected";
+    const signedOut = failed && stored?.sign_in_failed;
     const toolPermissions = runtime.tool_permissions || {};
     const toolSummary = toolPermissions.state === "pass" ? "saved tool permissions found"
       : toolPermissions.state === "fail" ? "tool permissions still need setup"
       : "CLI tool permissions still apply";
-    const summary = stored?.state === "connected"
-      ? `Connection verified${stored.version ? ` · v${stored.version}` : ""} · ${toolSummary}`
-      : testing ? (test.detail || "Protected connection test in progress — no action needed.")
+    const tested = stored?.tested_at ? `tested ${timeAgo(stored.tested_at)}` : "";
+    // A verified connection is a past result: sign-ins expire, so the row
+    // says when it was proven and always offers a fresh test.
+    const [tone, word] = testing ? ["warn", "Testing"]
+      : connected ? ["ok", "Verified"]
+      : signedOut ? ["bad", "Signed out"]
+      : failed ? ["bad", "Failed"]
+      : !runtime.installed ? ["dim", "Not found"]
+      : !canTest ? ["dim", "Unavailable"]
+      : ["dim", "Not tested"];
+    const summary = testing ? (test.detail || "Protected connection test in progress — no action needed.")
+      : connected ? [tested.replace(/^t/, "T"), stored.version ? `v${stored.version}` : "",
+          "sign-in worked then", toolSummary].filter(Boolean).join(" · ")
+      : signedOut ? `Sign-in failed${tested ? ` when ${tested}` : ""}. Open the CLI in Terminal, sign in, then test again.`
       : failed ? (stored?.detail || test?.detail || "The last connection test failed.")
       : !runtime.installed ? runtime.detail
       : !canTest ? "Installed, but this Synchri version cannot safely verify it."
       : "One step remains: run the protected connection test.";
-    const action = stored?.state === "connected" ? "Review setup"
-      : testing ? "View progress"
+    const action = testing ? "View progress"
+      : connected ? "Test again"
+      : signedOut ? "Fix sign-in"
       : failed ? "Fix connection"
-      : !canTest ? "Why unavailable?" : "Finish setup";
-    const row = $(`<div class="conn-row"><i class="led ${dot}"></i><b>${esc(runtime.label)}</b>
-      <span class="conn-note">${esc(summary || "")}</span>
+      : !runtime.installed ? "How to install"
+      : !canTest ? "Why unavailable?" : "Test connection";
+    const row = $(`<div class="conn-row"><span class="pill ${tone}">${esc(word)}</span><b>${esc(runtime.label)}</b>
+      <span class="conn-note multiline">${esc(summary || "")}</span>
       <button class="ghost" data-connect>${action}</button></div>`);
-    row.querySelector("[data-connect]").onclick = () => showConnectDialog(runtime.key);
+    row.querySelector("[data-connect]").onclick = () =>
+      showConnectDialog(runtime.key, {autostart: connected});
     box.append(row);
   }
   page.append(box);
@@ -1540,7 +1648,7 @@ function connectionDisplayState(connection, test) {
   return "not_connected";
 }
 
-async function showConnectDialog(runtimeKey) {
+async function showConnectDialog(runtimeKey, {autostart = false} = {}) {
   document.getElementById("connect-dialog")?.remove();
   const dialog = $(`<div class="dialog stack" id="connect-dialog" role="dialog" aria-modal="true">
     <button class="detail-close" aria-label="Close">×</button>
@@ -1604,13 +1712,16 @@ async function showConnectDialog(runtimeKey) {
     renderTestChecks(currentTest?.result?.checks || currentConnection?.checks);
 
     if (state === "connected") {
+      const when = currentConnection.tested_at ? ` ${timeAgo(currentConnection.tested_at)}` : "";
       dialog.querySelector("#connect-explanation").textContent =
-        "Synchri verified installation, sign-in, prompt delivery, and structured output. The protected canary intentionally used no tools.";
+        `Synchri verified installation, sign-in, prompt delivery, and structured output${when}. The protected canary intentionally used no tools.`;
       const permissions = entry.tool_permissions || {};
       dialog.querySelector("#connect-next").textContent =
-        permissions.instructions || "Connection is ready. Your CLI's own tool permissions still control what the agent may read, edit, or run during orchestration.";
-      button.disabled = true;
-      button.textContent = "Connection verified";
+        "Sign-ins expire, so this result can go stale: if an agent fails to start, test again. "
+        + (permissions.instructions || "Your CLI's own tool permissions still control what the agent may read, edit, or run during orchestration.");
+      // A verified connection stays re-testable: the proof is from the past.
+      button.disabled = false;
+      button.textContent = "Test again";
     } else if (state === "testing") {
       dialog.querySelector("#connect-explanation").textContent =
         "Synchri is running the protected canary now. The state will finish as Connected or Failed.";
@@ -1681,6 +1792,7 @@ async function showConnectDialog(runtimeKey) {
     };
     await poll();
   });
+  if (autostart && !button.disabled) button.click();
 }
 
 function showDeleteSessionDialog(s) {

@@ -21,7 +21,9 @@ from synchri.broker import Broker, Credential
 from synchri.errors import SynchriError
 from synchri.models.envelope import MessageDraft
 from synchri.session.manager import SessionManager
+from synchri.session.deadline import Deadline
 from synchri.session.modes import ParticipantPlan
+from synchri.session.spec import ProductSpec
 from synchri.ui.server import SynchriUIServer, create_server
 
 SPEC = "Build it.\n\n## Acceptance\n- AUTH-01 login works"
@@ -223,9 +225,50 @@ def test_connection_ui_distinguishes_readiness_from_connected_state():
     assert "Nothing you can do locally will verify this connection" in source
     assert "A previously verified part of this connection changed" in source
     assert source.count("renderAgentConnections(") == 3  # definition + first-run and regular homes
-    assert 'button.textContent = "Connection verified"' in source
+    # A verified connection is a past proof (sign-ins expire), so it stays
+    # re-testable instead of locking its button.
+    assert 'button.textContent = "Test again"' in source
+    assert 'button.textContent = "Connection verified"' not in source
     assert 'if (S.view === "home") await home();' in source
     assert "Re-run connection test" not in source
+
+
+def test_overview_names_states_in_words_and_never_by_colour_alone():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "synchri" / "ui" / "static" / "app.html").read_text()
+    # One status vocabulary for every session row.
+    for word in ("Waiting for agents", "Working", "Paused", "Complete", "Stopped", "Failed"):
+        assert f'"{word}"' in source
+    # The retired, ambiguous labels are gone from the overview.
+    for retired in ("waiting on setup", "agents working", '"Review setup"', ">run</span>",
+                    "Run a saved workflow, or start fresh"):
+        assert retired not in source
+    # Sessions are named by what they are, workflows by who does what.
+    assert "function sessionTitle(s)" in source and "function teamLine(agents)" in source
+    assert 'primary_builder:"builds"' in source and 'adversarial_reviewer:"reviews"' in source
+    # Old setups leave "Now" and can be stopped from the overview.
+    assert ">Unfinished<" in source and "STALE_AFTER_MS" in source
+    # Connection rows say when they were proven and name a sign-in failure.
+    assert '"sign-in worked then"' in source and '"Signed out"' in source
+    assert '"Fix sign-in"' in source
+
+
+def test_a_stale_setup_can_be_stopped_from_the_overview(ui, repo):
+    manager = SessionManager(ui["broker"])
+    record = manager.create(
+        name="proj session", mode="long_horizon", repo_root=str(repo),
+        participants=[ParticipantPlan("claude", "claude_code", "primary_builder"),
+                      ParticipantPlan("codex", "codex", "adversarial_reviewer")],
+        spec=ProductSpec(text=SPEC), deadline=Deadline.from_duration("10 hours"),
+    )
+    manager.issue_contract(record.session_id)
+    assert manager.get(record.session_id).status == "awaiting_ack"
+    call(ui, "/api/control", {"session": record.session_id, "action": "stop",
+                              "reason": "stopped from the overview"})
+    stopped = manager.get(record.session_id)
+    assert stopped.status == "stopped"
+    assert stopped.ended_reason == "stopped from the overview"
 
 
 def test_theme_persists_across_ephemeral_loopback_origins(ui):

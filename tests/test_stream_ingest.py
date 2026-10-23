@@ -411,3 +411,24 @@ def test_usage_totals_aggregate_per_participant(broker):
 
     assert dao.usage_for_session(conn, "s2")[0]["participant"] == "codex"
     assert dao.usage_for_session(conn, "missing") == []
+
+
+def test_parsers_keep_the_error_a_cli_reported_only_in_its_stream():
+    claude = parser_for("claude")
+    for line in (
+        {"type": "system", "subtype": "init", "model": "m"},
+        {"type": "assistant", "error": "authentication_failed", "is_api_error_message": True,
+         "message": {"content": [{"type": "text", "text": "Failed to authenticate: expired"}]}},
+        {"type": "result", "is_error": True, "result": "Failed to authenticate: expired"},
+    ):
+        claude.feed(json.dumps(line))
+    assert claude.provider_error == "Failed to authenticate: expired"
+    assert claude.provider_error_kind == "authentication_failed"
+
+    ordinary = parser_for("claude")
+    ordinary.feed(json.dumps({"type": "result", "result": "All done."}))
+    assert ordinary.provider_error is None, "a normal result is not an error"
+
+    codex = parser_for("codex")
+    codex.feed(json.dumps({"type": "turn.failed", "error": {"message": "401 Unauthorized"}}))
+    assert codex.provider_error == "401 Unauthorized"

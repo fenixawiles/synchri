@@ -48,6 +48,19 @@ if mode == "auth-fail":
 if mode == "boom":
     sys.stderr.write("kaboom\\n")
     raise SystemExit(3)
+if mode in ("stream-auth-fail", "stream-error"):
+    # Claude Code 2.1.247 with an expired sign-in: the error is only in the
+    # stream (a synthetic assistant message plus an is_error result); stderr
+    # stays empty and the exit code is 1.
+    text = ("Failed to authenticate: OAuth session expired and could not be refreshed"
+            if mode == "stream-auth-fail" else "API Error: 500 upstream exploded")
+    print(json.dumps({"type": "system", "subtype": "init", "model": "fake"}))
+    print(json.dumps({"type": "assistant", "message": {"model": "<synthetic>",
+          "content": [{"type": "text", "text": text}]},
+          "error": "authentication_failed" if mode == "stream-auth-fail" else "server_error",
+          "is_api_error_message": True}))
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": text}))
+    raise SystemExit(1)
 
 sid = os.environ.get("FAKE_CLI_SESSION_ID", "sess-fake")
 
@@ -320,6 +333,47 @@ def test_a_sign_in_problem_is_classified_as_auth_not_launch(
     checks = checks_by_key(outcome["checks"])
     assert checks["auth"]["state"] == doctor.FAIL
     assert "sign-in" in checks["auth"]["detail"]
+
+
+def test_a_sign_in_error_reported_only_in_the_stream_is_named_as_such(
+    broker, fake_cli, auth_file, monkeypatch
+):
+    """Claude reports an expired sign-in in its stream with empty stderr; the
+    test result must say so, never a bare "exit 1"."""
+    monkeypatch.setenv("FAKE_CLI_MODE", "stream-auth-fail")
+    outcome = doctor.run_connection_test(
+        broker.conn, "fake", definition=make_definition(fake_cli, auth_file)
+    )
+    assert outcome["state"] == "failed"
+    checks = checks_by_key(outcome["checks"])
+    assert checks["launch"]["state"] == doctor.PASS
+    assert checks["auth"]["state"] == doctor.FAIL
+    assert "OAuth session expired" in checks["auth"]["detail"]
+    assert "exit 1" not in outcome["detail"]
+
+
+def test_the_stored_summary_says_when_the_last_test_failed_on_sign_in(
+    broker, fake_cli, auth_file, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLI_MODE", "stream-auth-fail")
+    definition = make_definition(fake_cli, auth_file)
+    doctor.run_connection_test(broker.conn, "fake", definition=definition)
+    assert doctor.stored_connections(broker.conn)["fake"]["sign_in_failed"] is True
+    monkeypatch.setenv("FAKE_CLI_MODE", "boom")
+    doctor.run_connection_test(broker.conn, "fake", definition=definition)
+    assert doctor.stored_connections(broker.conn)["fake"]["sign_in_failed"] is False
+
+
+def test_any_stream_reported_error_replaces_the_bare_exit_code(
+    broker, fake_cli, auth_file, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLI_MODE", "stream-error")
+    outcome = doctor.run_connection_test(
+        broker.conn, "fake", definition=make_definition(fake_cli, auth_file)
+    )
+    launch = checks_by_key(outcome["checks"])["launch"]
+    assert launch["state"] == doctor.FAIL
+    assert launch["detail"] == "exit 1: API Error: 500 upstream exploded"
 
 
 def test_the_canary_only_runs_under_the_adapters_enforced_command(

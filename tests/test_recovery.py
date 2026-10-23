@@ -34,6 +34,26 @@ def test_classification_reads_the_invocation_honestly():
     assert recovery.classify_failure(_result(cancelled=True)) == recovery.NORMAL_STOP
 
 
+def test_errors_the_cli_reported_only_in_its_stream_are_classified():
+    expired = AgentResult(
+        "x", "", "", 1,
+        provider_error="Failed to authenticate: OAuth session expired and could not be refreshed",
+        provider_error_kind="authentication_failed",
+    )
+    assert recovery.classify_failure(expired) == recovery.AUTH_FAILURE
+    assert "OAuth session expired" in recovery.failure_detail(recovery.AUTH_FAILURE, expired)
+    untyped = AgentResult("x", "", "", 1, provider_error="Not logged in · Please run /login")
+    assert recovery.classify_failure(untyped) == recovery.AUTH_FAILURE
+    limited = AgentResult("x", "", "", 1, provider_error="slow down", provider_error_kind="rate_limit")
+    assert recovery.classify_failure(limited) == recovery.PROVIDER_REFUSAL
+    crashed = AgentResult("x", "", "", 1, provider_error="API Error: 500")
+    assert recovery.classify_failure(crashed) == recovery.CRASH
+    assert recovery.failure_detail(recovery.CRASH, crashed) == (
+        "the last turn exited with code 1: API Error: 500"
+    )
+    assert recovery.failure_detail(recovery.CRASH, _result()) == "the last turn exited with code 1"
+
+
 def test_an_auth_failure_breaks_immediately_not_after_two_strikes(broker, tmp_path):
     """Retrying an expired sign-in only burns invocations."""
     room = make_room(broker, "claude", "codex")

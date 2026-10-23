@@ -49,6 +49,8 @@ _AUTH_MARKERS = (
     "invalid api key",
     "credential",
     "token expired",
+    "failed to authenticate",
+    "oauth session expired",
 )
 
 _REFUSAL_MARKERS = (
@@ -72,18 +74,31 @@ def classify_failure(result) -> str:
         return UNRESPONSIVE
     if result.returncode == 0:
         return NORMAL_STOP
-    stderr = (result.stderr or "").lower()
-    if any(marker in stderr for marker in _AUTH_MARKERS):
+    # The CLI's structured error category wins; otherwise read both stderr
+    # and the error the CLI reported in its stream (Claude reports an
+    # expired sign-in only there).
+    error_kind = (getattr(result, "provider_error_kind", None) or "").lower()
+    if "auth" in error_kind:
         return AUTH_FAILURE
-    if any(marker in stderr for marker in _REFUSAL_MARKERS):
+    if any(marker in error_kind for marker in ("rate_limit", "overloaded", "billing", "quota")):
+        return PROVIDER_REFUSAL
+    text = "\n".join(
+        [(result.stderr or ""), (getattr(result, "provider_error", None) or "")]
+    ).lower()
+    if any(marker in text for marker in _AUTH_MARKERS):
+        return AUTH_FAILURE
+    if any(marker in text for marker in _REFUSAL_MARKERS):
         return PROVIDER_REFUSAL
     return CRASH
 
 
 def failure_detail(kind: str, result) -> str:
+    reported = (getattr(result, "provider_error", None) or "").strip()
     if kind == CRASH:
-        return f"the last turn exited with code {result.returncode}"
-    return FAILURE_DETAILS.get(kind, "the last turn failed")
+        base = f"the last turn exited with code {result.returncode}"
+    else:
+        base = FAILURE_DETAILS.get(kind, "the last turn failed")
+    return f"{base}: {reported[:300]}" if reported else base
 
 
 class CompositeCancel:

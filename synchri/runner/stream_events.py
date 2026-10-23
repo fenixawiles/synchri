@@ -128,6 +128,13 @@ class BaseStreamParser:
         #: True once at least one JSON object line was seen — the caller only
         #: trusts the parser's reconstruction when the CLI really streamed.
         self.saw_stream = False
+        #: The CLI's own fatal error message, when its stream reported one
+        #: (an expired sign-in, a refused request). Some CLIs write it only to
+        #: the stream, never to stderr, so without it a failure reads as a
+        #: bare exit code. ``provider_error_kind`` is the CLI's machine-readable
+        #: error category when it gives one (Claude: ``authentication_failed``).
+        self.provider_error: str | None = None
+        self.provider_error_kind: str | None = None
         self._final: str | None = None
         self._texts: list[str] = []
 
@@ -188,6 +195,16 @@ class ClaudeStreamParser(BaseStreamParser):
             return
         if kind == "assistant":
             message = data.get("message") if isinstance(data.get("message"), dict) else {}
+            if isinstance(data.get("error"), str) and data.get("error"):
+                # A synthetic assistant message carrying the API failure.
+                self.provider_error_kind = data["error"]
+                text = " ".join(
+                    str(block.get("text") or "")
+                    for block in message.get("content") or []
+                    if isinstance(block, dict) and block.get("type") == "text"
+                ).strip()
+                if text:
+                    self.provider_error = text
             for block in message.get("content") or []:
                 if not isinstance(block, dict):
                     continue
@@ -224,6 +241,8 @@ class ClaudeStreamParser(BaseStreamParser):
             text = data.get("result")
             if isinstance(text, str) and text.strip():
                 self._final = text
+                if data.get("is_error") and not self.provider_error:
+                    self.provider_error = text.strip()
             usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
             duration_ms = data.get("duration_ms")
             self.usage = {
@@ -305,11 +324,15 @@ class CodexStreamParser(BaseStreamParser):
             return
         if kind == "turn.failed":
             error = data.get("error") if isinstance(data.get("error"), dict) else {}
+            if str(error.get("message") or "").strip():
+                self.provider_error = str(error["message"]).strip()
             yield LiveEvent(
                 "error", title="Turn failed", detail=_clip(str(error.get("message") or ""), DETAIL_LIMIT)
             )
             return
         if kind == "error":
+            if str(data.get("message") or "").strip():
+                self.provider_error = str(data["message"]).strip()
             yield LiveEvent(
                 "error", title="Error", detail=_clip(str(data.get("message") or ""), DETAIL_LIMIT)
             )
@@ -431,6 +454,8 @@ class CodexStreamParser(BaseStreamParser):
         elif "compact" in kind:
             yield LiveEvent("compaction", title="Context compacted")
         elif kind == "error":
+            if str(msg.get("message") or "").strip():
+                self.provider_error = str(msg["message"]).strip()
             yield LiveEvent(
                 "error", title="Error", detail=_clip(str(msg.get("message") or ""), DETAIL_LIMIT)
             )
